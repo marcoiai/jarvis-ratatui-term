@@ -95,10 +95,6 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        //if self.input2.len() < 10 {
-            self.counter = self.counter + 1;
-            self.input = self.counter.to_string();
-        //}
     }
 
     fn on_key(&mut self, key: KeyEvent) {
@@ -116,14 +112,14 @@ impl App {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
             KeyCode::Enter => {
-                let question = self.input.clone();
-                self.input.clear();
+                let question: String = self.input.clone();
+                //self.input.clear();
                 self.is_loading = true;
 
                 let answer_clone = self.answer.clone();
                 tokio::spawn(async move {
-                    let output_result = if question.starts_with("!") {
-                        let cmd = question.trim_start_matches("!").trim();
+                    let output_result: String = if question.starts_with("!") {
+                        let cmd: &str = question.trim_start_matches("!").trim();
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
                         if parts.is_empty() {
                             "Comando vazio.".to_string()
@@ -161,21 +157,21 @@ impl App {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
+    let mut stdout: io::Stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let backend: CrosstermBackend<io::Stdout> = CrosstermBackend::new(stdout);
+    let mut terminal: Terminal<CrosstermBackend<io::Stdout>> = Terminal::new(backend)?;
 
-    let default_panic = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    let default_panic: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static> = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info: &std::panic::PanicHookInfo<'_>| {
         disable_raw_mode().unwrap();
         execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture).unwrap();
         default_panic(info);
     }));
 
-    let app = Arc::new(Mutex::new(App::new()));
+    let app: Arc<Mutex<App>> = Arc::new(Mutex::new(App::new()));
 
-    let res = run_app(&mut terminal, app.clone()).await;
+    let res: Result<(), Box<dyn Error + 'static>> = run_app(&mut terminal, app.clone()).await;
 
     disable_raw_mode()?;
     execute!(
@@ -198,7 +194,7 @@ async fn run_app<B: Backend>(
 ) -> Result<(), Box<dyn Error>> {
     loop {
         terminal.draw(|f| {
-            let app = app_mutex.lock().unwrap();
+            let app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
             let chunks: std::rc::Rc<[ratatui::prelude::Rect]> = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(2)
@@ -233,9 +229,10 @@ async fn run_app<B: Backend>(
 
             //let create_block = |title: &'static str| Block::bordered().title("TESTE");
 
-            let title = Block::new()
+            let title: Block<'_> = Block::new()
                 .title_alignment(Alignment::Center)
-                .title("💁🏻💁🏻💁🏻💁🏻💁🏻💁🏻  Welcome sir. Use ▲ ▼ to scroll. \t Press ESC to exite.\t For terminal commands, tipo !command, for regular interaction with JARVIS, just type what you want to know. ".to_string());
+                .style(Style::default().fg(Color::White))
+                .title("💁🏻  Welcome sir. Use ▲ ▼ to scroll. \t Press ESC to exite.\t For terminal commands, tipo !command, for regular interaction with JARVIS, just type what you want to know. ".to_string());
             f.render_widget(title, chunks[3]);
         })?;
 
@@ -245,14 +242,14 @@ async fn run_app<B: Backend>(
                     KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => return Ok(()),
                     _ => {
-                        let mut app = app_mutex.lock().unwrap();
+                        let mut app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
                         app.on_key(key);
                     }
                 }
             }
         }
 
-        let mut app = app_mutex.lock().unwrap();
+        let mut app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
         //let counter:i32 = 0;
         app.on_tick();
     }
