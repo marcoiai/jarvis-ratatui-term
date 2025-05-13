@@ -1,7 +1,6 @@
 #[allow(unused_imports)]
 use std::process::Command;
 
-use serde::{Deserialize, Serialize};
 use serde_derive::Deserialize;
 use serde_json;
 
@@ -45,9 +44,9 @@ use crossterm::{
 
 use ratatui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    text::{Text, ToText},
+    text::Text,
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
 };
@@ -75,26 +74,29 @@ async fn get_answer(question: String) -> String {
 #[derive(Clone, Debug)]
 struct App {
     input: String,
-    input2: String,
     answer: Arc<Mutex<String>>,
     scroll_offset: usize,
     is_loading: bool,
-    counter:i32,
+    input2: String,
 }
 
 impl App {
     fn new() -> App {
         App {
             input: String::new(),
-            input2: String::new(),
             answer: Arc::new(Mutex::new(String::new())),
             scroll_offset: 0,
             is_loading: false,
-            counter: 0,
+            input2: String::new(),
         }
     }
 
     fn on_tick(&mut self) {
+        //let input: &'static str = concat!(self.input.to_string(), " . ");
+        let mut input2_clone = self.input2.clone();
+        input2_clone += ".";
+        
+        self.input2 = input2_clone;
     }
 
     fn on_key(&mut self, key: KeyEvent) {
@@ -113,7 +115,7 @@ impl App {
             }
             KeyCode::Enter => {
                 let question: String = self.input.clone();
-                //self.input.clear();
+                self.input.clear();
                 self.is_loading = true;
 
                 let answer_clone = self.answer.clone();
@@ -122,7 +124,7 @@ impl App {
                         let cmd: &str = question.trim_start_matches("!").trim();
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
                         if parts.is_empty() {
-                            "Comando vazio.".to_string()
+                            "Empty Command.".to_string()
                         } else {
                             let output = Command::new(parts[0])
                                 .args(&parts[1..])
@@ -201,16 +203,15 @@ async fn run_app<B: Backend>(
                 .constraints(
                     [
                         Constraint::Length(3),
-                        Constraint::Min(3),
-                        Constraint::Length(4),
-                        Constraint::Length(2),
+                        Constraint::Min(4),
+                        Constraint::Length(5),
                     ]
                     .as_ref(),
                 )
                 .split(f.area());
 
             let input: Paragraph<'_> = Paragraph::new(Text::from(app.input.as_str()))
-                .block(Block::default().title("Ask JARVIS").borders(Borders::ALL))
+                .block(Block::default().title("❓❓ Ask JARVIS - 💁🏻  Welcome sir. Use ▲ ▼ to scroll.").borders(Borders::ALL))
                 .style(Style::default().fg(Color::Yellow));
             f.render_widget(input, chunks[0]);
 
@@ -222,18 +223,11 @@ async fn run_app<B: Backend>(
 
             f.render_widget(answer_paragraph, chunks[1]);
 
-            let input2: Paragraph<'_> = Paragraph::new(Text::from(""))
-                .block(Block::default().title("JARVIS").borders(Borders::ALL))
-                .style(Style::default().fg(Color::Yellow));
+            let input2 = Paragraph::new(Text::from("Press ESC to exit.\nFor terminal commands, type !command. E.g.: !ls -la.\nFor regular interaction with JARVIS, just TYPE WHAT YOU WANT TO KNOW. "))
+                .block(Block::default().title("🤖🛠️🕹️").borders(Borders::ALL))
+                .style(Style::default().fg(Color::White));
+                //.title("💁🏻  Welcome sir. Use ▲ ▼ to scroll. \t Press ESC to exite.\t For terminal commands, tipo !command, for regular interaction with JARVIS, just type what you want to know. ");
             f.render_widget(input2, chunks[2]);
-
-            //let create_block = |title: &'static str| Block::bordered().title("TESTE");
-
-            let title: Block<'_> = Block::new()
-                .title_alignment(Alignment::Center)
-                .style(Style::default().fg(Color::White))
-                .title("💁🏻  Welcome sir. Use ▲ ▼ to scroll. \t Press ESC to exite.\t For terminal commands, tipo !command, for regular interaction with JARVIS, just type what you want to know. ".to_string());
-            f.render_widget(title, chunks[3]);
         })?;
 
         if event::poll(Duration::from_millis(100))? {
@@ -250,7 +244,7 @@ async fn run_app<B: Backend>(
         }
 
         let mut app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
-        //let counter:i32 = 0;
+
         app.on_tick();
     }
 }
