@@ -34,6 +34,7 @@ use std::{
     io,
     sync::{Arc, Mutex},
     time::Duration,
+    collections::HashMap,
 };
 
 use crossterm::{
@@ -51,9 +52,22 @@ use ratatui::{
     Terminal,
 };
 
+fn get_vars() -> HashMap<std::string::String, std::string::String> {
+    let mut vars: HashMap<String, String> = HashMap::<String, String>::new();
+    
+    for (key, value) in std::env::vars() {
+        vars.insert(key, value);
+    }
+
+    return vars;
+}
+
 async fn get_answer(question: String) -> String {
+    let vars = get_vars();
+    let api_key = &vars["API_KEY"];
+
     let output = Command::new("./post.sh")
-        .arg(&question)
+        .args([&question, api_key])
         .output()
         .expect("Error loading CURL result.");
 
@@ -77,7 +91,6 @@ struct App {
     answer: Arc<Mutex<String>>,
     scroll_offset: usize,
     is_loading: bool,
-    input2: String,
 }
 
 impl App {
@@ -87,16 +100,13 @@ impl App {
             answer: Arc::new(Mutex::new(String::new())),
             scroll_offset: 0,
             is_loading: false,
-            input2: String::new(),
         }
     }
 
     fn on_tick(&mut self) {
-        //let input: &'static str = concat!(self.input.to_string(), " . ");
-        let mut input2_clone = self.input2.clone();
-        input2_clone += ".";
         
-        self.input2 = input2_clone;
+        // Loading concept
+        // self.input2 += ".";
     }
 
     fn on_key(&mut self, key: KeyEvent) {
@@ -145,7 +155,7 @@ impl App {
                     };
 
                     let mut answer = answer_clone.lock().unwrap();
-                    *answer = output_result;
+                    *answer = "\n\n".to_owned() + &output_result;
                 });
 
                 self.scroll_offset = 0;
@@ -211,23 +221,24 @@ async fn run_app<B: Backend>(
                 .split(f.area());
 
             let input: Paragraph<'_> = Paragraph::new(Text::from(app.input.as_str()))
-                .block(Block::default().title("❓❓ Ask JARVIS - 💁🏻  Welcome sir. Use ▲ ▼ to scroll.").borders(Borders::ALL))
+                .block(Block::default().title("💁🏻  Welcome sir, I'm JARVIS your terminal assistant.Use ▲ ▼ to scroll.").borders(Borders::ALL))
                 .style(Style::default().fg(Color::Yellow));
             f.render_widget(input, chunks[0]);
 
             let answer_text = app.answer.lock().unwrap().clone();
             let answer_paragraph = Paragraph::new(Text::from(answer_text))
-            .block(Block::default().title("Answer (you may not like it! LOL").borders(Borders::ALL))
+            .block(Block::default().title("Answer").borders(Borders::ALL))
+                .style(Style::default().bg(Color::White))
                 .scroll((app.scroll_offset as u16, 0))
                 .wrap(Wrap { trim: false });
 
             f.render_widget(answer_paragraph, chunks[1]);
 
-            let input2 = Paragraph::new(Text::from("Press ESC to exit.\nFor terminal commands, type !command. E.g.: !ls -la.\nFor regular interaction with JARVIS, just TYPE WHAT YOU WANT TO KNOW. "))
-                .block(Block::default().title("🤖🛠️🕹️").borders(Borders::ALL))
+            let input3 = Paragraph::new(Text::from("Press ESC to exit.\nFor reasoning, just type what you want to know, and I'll do my best.\nFor terminal commands, type !command (!ls for example)."))
+                .block(Block::default().title("⚠️").borders(Borders::ALL))
                 .style(Style::default().fg(Color::White));
-                //.title("💁🏻  Welcome sir. Use ▲ ▼ to scroll. \t Press ESC to exite.\t For terminal commands, tipo !command, for regular interaction with JARVIS, just type what you want to know. ");
-            f.render_widget(input2, chunks[2]);
+
+            f.render_widget(input3, chunks[2]);
         })?;
 
         if event::poll(Duration::from_millis(100))? {
