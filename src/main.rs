@@ -155,7 +155,7 @@ impl App {
                     };
 
                     let mut answer = answer_clone.lock().unwrap();
-                    *answer = "\n\n".to_owned() + &output_result;
+                    *answer += &("\n".to_owned() + &output_result);
                 });
 
                 self.scroll_offset = 0;
@@ -214,7 +214,7 @@ async fn run_app<B: Backend>(
                     [
                         Constraint::Length(3),
                         Constraint::Min(4),
-                        Constraint::Length(5),
+                        Constraint::Length(6),
                     ]
                     .as_ref(),
                 )
@@ -228,13 +228,13 @@ async fn run_app<B: Backend>(
             let answer_text = app.answer.lock().unwrap().clone();
             let answer_paragraph = Paragraph::new(Text::from(answer_text))
             .block(Block::default().title("Answer").borders(Borders::ALL))
-                .style(Style::default().bg(Color::White))
+                .style(Style::default().bg(Color::White).fg(Color::Red))
                 .scroll((app.scroll_offset as u16, 0))
                 .wrap(Wrap { trim: false });
 
             f.render_widget(answer_paragraph, chunks[1]);
 
-            let input3 = Paragraph::new(Text::from("Press ESC to exit.\nFor reasoning, just type what you want to know, and I'll do my best.\nFor terminal commands, type !command (!ls for example)."))
+            let input3 = Paragraph::new(Text::from("Press ESC to exit.\nFor reasoning, just type what you want to know, and I'll do my best.\nFor terminal commands, type !command (!ls for example).\nRust does not handle Fonts natively, so you just need to adjust your terminal fonts if you need it!"))
                 .block(Block::default().title("⚠️").borders(Borders::ALL))
                 .style(Style::default().fg(Color::White));
 
