@@ -1,3 +1,4 @@
+mod file_tools;
 use std::{
     env,
     error::Error,
@@ -18,6 +19,8 @@ use ratatui::{
     Terminal,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::path::PathBuf;
 use tokio::{process::Command, sync::mpsc};
 
 #[derive(Clone, Serialize)]
@@ -33,15 +36,17 @@ struct OllamaReply {
 
 #[derive(Deserialize)]
 struct MessageReply {
+    #[serde(default)]
     content: String,
+    #[serde(default)]
+    tool_calls: Vec<ToolCall>,
 }
 
-#[derive(Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<Message>,
-    stream: bool,
-}
+#[derive(Deserialize)]
+struct ToolCall { function: ToolFunction }
+
+#[derive(Deserialize)]
+struct ToolFunction { name: String, arguments: Value }
 
 enum ResultMessage {
     Chat(Result<String, String>),
@@ -56,6 +61,7 @@ struct App {
     busy: bool,
     model: String,
     ollama_url: String,
+    workspace: PathBuf,
 }
 
 impl App {
@@ -89,6 +95,7 @@ impl App {
             }],
             scroll: 0,
             busy: false,
+            workspace: env::var("DUDE_WORKSPACE").ok().and_then(|p| std::fs::canonicalize(p).ok()).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "granite-code:latest".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
@@ -135,8 +142,9 @@ impl App {
             let messages = self.history.clone();
             let model = self.model.clone();
             let url = self.ollama_url.clone();
+            let workspace = self.workspace.clone();
             tokio::spawn(async move {
-                let result = ask_ollama(&client, &url, &model, messages).await;
+                let result = ask_ollama(&client, &url, &model, messages, workspace).await;
                 let _ = tx.send(ResultMessage::Chat(result));
             });
         }
@@ -167,20 +175,50 @@ async fn ask_ollama(
     host: &str,
     model: &str,
     messages: Vec<Message>,
+    workspace: PathBuf,
 ) -> Result<String, String> {
-    let response = client
-        .post(format!("{host}/api/chat"))
-        .json(&ChatRequest { model: model.into(), messages, stream: false })
-        .send()
-        .await
-        .map_err(|e| format!("Cannot reach Ollama: {e}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("Ollama HTTP {status}: {body}"));
+    let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
+        json!({"role": m.role, "content": m.content})
+    }).collect();
+    for _ in 0..8 {
+        let response = client
+            .post(format!("{host}/api/chat"))
+            .json(&json!({
+                "model": model,
+                "messages": conversation,
+                "stream": false,
+                "tools": file_tools::definitions(),
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Cannot reach Ollama: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Ollama HTTP {status}: {body}"));
+        }
+        let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
+        if reply.message.tool_calls.is_empty() {
+            return Ok(reply.message.content);
+        }
+        let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
+            json!({"type":"function","function":{
+                "name": call.function.name,
+                "arguments": call.function.arguments
+            }})
+        }).collect();
+        conversation.push(json!({"role":"assistant","content":reply.message.content,"tool_calls": calls}));
+        for call in reply.message.tool_calls {
+            let root = workspace.clone();
+            let name = call.function.name;
+            let args = call.function.arguments;
+            let output = tokio::task::spawn_blocking(move || {
+                file_tools::execute(&root, &name, &args).unwrap_or_else(|e| format!("Tool error: {e}"))
+            }).await.map_err(|e| e.to_string())?;
+            conversation.push(json!({"role":"tool","content":output}));
+        }
     }
-    let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
-    Ok(reply.message.content)
+    Err("Too many tool calls in one request (limit 8 rounds).".into())
 }
 
 async fn run_command(command: String) -> Result<String, String> {
