@@ -1,261 +1,261 @@
-#[allow(unused_imports)]
-use std::process::Command;
-
-use serde_derive::Deserialize;
-use serde_json;
-
-#[derive(Debug, Deserialize)]
-struct MyText {
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Part {
-    parts: Vec<MyText>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Content {
-    content: Part,
-}
-
-#[derive(Debug, Deserialize)]
-struct Candidates {
-    content: Content,
-}
-
-#[derive(Debug, Deserialize)]
-struct Cand {
-    candidates: Candidates,
-}
-
 use std::{
+    env,
     error::Error,
-    io,
-    sync::{Arc, Mutex},
+    io::{self, Stdout},
     time::Duration,
-    collections::HashMap,
 };
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
+    backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    text::Text,
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
 };
+use serde::{Deserialize, Serialize};
+use tokio::{process::Command, sync::mpsc};
 
-fn get_vars() -> HashMap<std::string::String, std::string::String> {
-    let mut vars: HashMap<String, String> = HashMap::<String, String>::new();
-    
-    for (key, value) in std::env::vars() {
-        vars.insert(key, value);
-    }
-
-    return vars;
+#[derive(Clone, Serialize)]
+struct Message {
+    role: String,
+    content: String,
 }
 
-async fn get_answer(question: String) -> String {
-    let vars = get_vars();
-    let api_key = &vars["API_KEY"];
-
-    let output = Command::new("./post.sh")
-        .args([&question, api_key])
-        .output()
-        .expect("Error loading CURL result.");
-
-    if output.status.success() {
-        let out: std::borrow::Cow<'_, str> = String::from_utf8_lossy(&output.stdout);
-        let v: Cand = serde_json::from_str(&out).expect("Error creating object using serde!");
-
-        return v.candidates.content.content.parts[0].text
-            .replace(r"**", "")
-            .replace("* ", "\n📝");
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("Error executing curl: {}", stderr);
-        return "Erro ao obter resposta da API.".to_string();
-    }
+#[derive(Deserialize)]
+struct OllamaReply {
+    message: MessageReply,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Deserialize)]
+struct MessageReply {
+    content: String,
+}
+
+#[derive(Serialize)]
+struct ChatRequest {
+    model: String,
+    messages: Vec<Message>,
+    stream: bool,
+}
+
+enum ResultMessage {
+    Chat(Result<String, String>),
+    Shell(Result<String, String>),
+}
+
 struct App {
     input: String,
-    answer: Arc<Mutex<String>>,
-    scroll_offset: usize,
-    is_loading: bool,
+    output: String,
+    history: Vec<Message>,
+    scroll: u16,
+    busy: bool,
+    model: String,
+    ollama_url: String,
 }
 
 impl App {
-    fn new() -> App {
-        App {
+    fn new() -> Self {
+        Self {
             input: String::new(),
-            answer: Arc::new(Mutex::new(String::new())),
-            scroll_offset: 0,
-            is_loading: false,
+            output: String::from("Welcome to Jarvis! Type a question or !command.\n"),
+            history: Vec::new(),
+            scroll: 0,
+            busy: false,
+            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "granite-code:latest".into()),
+            ollama_url: env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
+                .trim_end_matches('/')
+                .to_string(),
         }
     }
 
-    fn on_tick(&mut self) {
-        
-        // Loading concept
-        // self.input2 += ".";
-    }
+    fn submit(&mut self, tx: mpsc::UnboundedSender<ResultMessage>, client: reqwest::Client) {
+        if self.busy {
+            return;
+        }
+        let input = self.input.trim().to_string();
+        if input.is_empty() {
+            return;
+        }
+        self.input.clear();
+        self.output.push_str(&format!("\n> {input}\n"));
+        self.scroll = u16::MAX;
 
-    fn on_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char(c) => {
-                self.input.push(c);
+        if let Some(model) = input.strip_prefix("/model ") {
+            if !model.trim().is_empty() {
+                self.model = model.trim().to_string();
+                self.output.push_str(&format!("Model set to {}\n", self.model));
             }
-            KeyCode::Backspace => {
-                self.input.pop();
-            }
-            KeyCode::Down => {
-                self.scroll_offset = self.scroll_offset.saturating_add(1);
-            }
-            KeyCode::Up => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
-            }
-            KeyCode::Enter => {
-                let question: String = self.input.clone();
-                self.input.clear();
-                self.is_loading = true;
+            return;
+        }
+        if input == "/clear" {
+            self.history.clear();
+            self.output.clear();
+            self.scroll = 0;
+            return;
+        }
 
-                let answer_clone = self.answer.clone();
-                tokio::spawn(async move {
-                    let output_result: String = if question.starts_with("!") {
-                        let cmd: &str = question.trim_start_matches("!").trim();
-                        let parts: Vec<&str> = cmd.split_whitespace().collect();
-                        if parts.is_empty() {
-                            "Empty Command.".to_string()
-                        } else {
-                            let output = Command::new(parts[0])
-                                .args(&parts[1..])
-                                .output();
-
-                            match output {
-                                Ok(out) if out.status.success() => {
-                                    String::from_utf8_lossy(&out.stdout).to_string()
-                                }
-                                Ok(out) => {
-                                    format!("Erro: {}", String::from_utf8_lossy(&out.stderr))
-                                }
-                                Err(e) => format!("Falha ao executar: {}", e),
-                            }
-                        }
-                    } else {
-                        get_answer(question).await
-                    };
-
-                    let mut answer = answer_clone.lock().unwrap();
-                    *answer += &("\n".to_owned() + &output_result);
-                });
-
-                self.scroll_offset = 0;
-                self.is_loading = false;
-            }
-            _ => {}
+        self.busy = true;
+        if let Some(command) = input.strip_prefix('!') {
+            let command = command.trim().to_owned();
+            tokio::spawn(async move {
+                let result = run_command(command).await;
+                let _ = tx.send(ResultMessage::Shell(result));
+            });
+        } else {
+            self.history.push(Message { role: "user".into(), content: input });
+            let messages = self.history.clone();
+            let model = self.model.clone();
+            let url = self.ollama_url.clone();
+            tokio::spawn(async move {
+                let result = ask_ollama(&client, &url, &model, messages).await;
+                let _ = tx.send(ResultMessage::Chat(result));
+            });
         }
     }
+
+    fn complete(&mut self, result: ResultMessage) {
+        self.busy = false;
+        match result {
+            ResultMessage::Chat(Ok(text)) => {
+                self.history.push(Message { role: "assistant".into(), content: text.clone() });
+                self.output.push_str(&format!("{text}\n"));
+            }
+            ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
+            ResultMessage::Chat(Err(error)) | ResultMessage::Shell(Err(error)) => {
+                self.output.push_str(&format!("Error: {error}\n"));
+                // Retry should not include an unanswered question in context.
+                if self.history.last().is_some_and(|m| m.role == "user") {
+                    self.history.pop();
+                }
+            }
+        }
+        self.scroll = u16::MAX;
+    }
+}
+
+async fn ask_ollama(
+    client: &reqwest::Client,
+    host: &str,
+    model: &str,
+    messages: Vec<Message>,
+) -> Result<String, String> {
+    let response = client
+        .post(format!("{host}/api/chat"))
+        .json(&ChatRequest { model: model.into(), messages, stream: false })
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach Ollama: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Ollama HTTP {status}: {body}"));
+    }
+    let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
+    Ok(reply.message.content)
+}
+
+async fn run_command(command: String) -> Result<String, String> {
+    // Intentional: execute a program and arguments, never through a shell.
+    let mut words = command.split_whitespace();
+    let program = words.next().ok_or("Empty command")?;
+    let output = Command::new(program)
+        .args(words)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = format!("{stdout}{stderr}");
+    if output.status.success() {
+        Ok(text)
+    } else {
+        Err(format!("Exit status {}\n{text}", output.status))
+    }
+}
+
+fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &App) -> io::Result<()> {
+    terminal.draw(|frame| {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+            .split(frame.area());
+
+        let input = Paragraph::new(app.input.as_str())
+            .block(Block::default().title("Jarvis - input").borders(Borders::ALL))
+            .style(Style::default().fg(Color::Yellow));
+        frame.render_widget(input, chunks[0]);
+
+        let output = Paragraph::new(app.output.as_str())
+            .block(Block::default().title(if app.busy { "Answer (working...)" } else { "Answer" }).borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        // u16::MAX means 'bottom'; Paragraph clamps it automatically.
+        frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
+
+        let footer = format!(
+            "Ollama: {} | Model: {} | /model NAME | /clear | !ls | ESC exits",
+            app.ollama_url, app.model
+        );
+        frame.render_widget(
+            Paragraph::new(footer)
+                .block(Block::default().title("Help").borders(Borders::ALL)),
+            chunks[2],
+        );
+    })?;
+    Ok(())
+}
+
+async fn run(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+) -> Result<(), Box<dyn Error>> {
+    let mut app = App::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()?;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    loop {
+        while let Ok(result) = rx.try_recv() {
+            app.complete(result);
+        }
+        draw(terminal, &app)?;
+        if event::poll(Duration::from_millis(80))? {
+            if let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
+                if kind != KeyEventKind::Press {
+                    continue;
+                }
+                match code {
+                    KeyCode::Esc => break,
+                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Enter => app.submit(tx.clone(), client.clone()),
+                    KeyCode::Backspace => { app.input.pop(); }
+                    KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
+                    KeyCode::Down => app.scroll = app.scroll.saturating_add(1),
+                    KeyCode::Char(c) => app.input.push(c),
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
-    let mut stdout: io::Stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend: CrosstermBackend<io::Stdout> = CrosstermBackend::new(stdout);
-    let mut terminal: Terminal<CrosstermBackend<io::Stdout>> = Terminal::new(backend)?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    let default_panic: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static> = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info: &std::panic::PanicHookInfo<'_>| {
-        disable_raw_mode().unwrap();
-        execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture).unwrap();
-        default_panic(info);
-    }));
-
-    let app: Arc<Mutex<App>> = Arc::new(Mutex::new(App::new()));
-
-    let res: Result<(), Box<dyn Error + 'static>> = run_app(&mut terminal, app.clone()).await;
-
+    let result = run(&mut terminal).await;
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{:?}", err);
-    }
-
-    Ok(())
-}
-
-async fn run_app<B: Backend>(
-    terminal: &mut Terminal<B>,
-    app_mutex: Arc<Mutex<App>>,
-) -> Result<(), Box<dyn Error>> {
-    loop {
-        terminal.draw(|f| {
-            let app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
-            let chunks: std::rc::Rc<[ratatui::prelude::Rect]> = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(2)
-                .constraints(
-                    [
-                        Constraint::Length(3),
-                        Constraint::Min(4),
-                        Constraint::Length(6),
-                    ]
-                    .as_ref(),
-                )
-                .split(f.area());
-
-            let input: Paragraph<'_> = Paragraph::new(Text::from(app.input.as_str()))
-                .block(Block::default().title("💁🏻  Welcome sir, I'm JARVIS your terminal assistant.Use ▲ ▼ to scroll.").borders(Borders::ALL))
-                .style(Style::default().fg(Color::Yellow));
-            f.render_widget(input, chunks[0]);
-
-            let answer_text = app.answer.lock().unwrap().clone();
-            let answer_paragraph = Paragraph::new(Text::from(answer_text))
-            .block(Block::default().title("Answer").borders(Borders::ALL))
-                .style(Style::default().bg(Color::White).fg(Color::Red))
-                .scroll((app.scroll_offset as u16, 0))
-                .wrap(Wrap { trim: false });
-
-            f.render_widget(answer_paragraph, chunks[1]);
-
-            let input3 = Paragraph::new(Text::from("Press ESC to exit.\nFor reasoning, just type what you want to know, and I'll do my best.\nFor terminal commands, type !command (!ls for example).\nRust does not handle Fonts natively, so you just need to adjust your terminal fonts if you need it!"))
-                .block(Block::default().title("⚠️").borders(Borders::ALL))
-                .style(Style::default().fg(Color::White));
-
-            f.render_widget(input3, chunks[2]);
-        })?;
-
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => return Ok(()),
-                    _ => {
-                        let mut app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
-                        app.on_key(key);
-                    }
-                }
-            }
-        }
-
-        let mut app: std::sync::MutexGuard<'_, App> = app_mutex.lock().unwrap();
-
-        app.on_tick();
-    }
+    result
 }
