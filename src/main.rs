@@ -285,10 +285,10 @@ async fn run(
                 let names: Vec<&str> = models.iter().filter_map(|m| m.get("name").and_then(Value::as_str)).collect();
                 if !names.contains(&app.model.as_str()) {
                     if let Some(name) = names.first() {
-                        app.output.push_str(&format!("Configured model '{}' unavailable. Selected installed model '{}'.\\n", app.model, name).replace("\\\\n", "\\n"));
+                        app.output.push_str(&format!("Configured model '{}' unavailable. Selected installed model '{}'.\n", app.model, name));
                         app.model = (*name).to_string();
                     } else {
-                        app.output.push_str("No Ollama models installed. Run: ollama list\\n");
+                        app.output.push_str("No Ollama models installed. Run: ollama list\n");
                     }
                 }
             }
