@@ -62,8 +62,31 @@ impl App {
     fn new() -> Self {
         Self {
             input: String::new(),
-            output: String::from("DUDE — Demented Unified Development Entity. Type a question or !command.\n"),
-            history: Vec::new(),
+            output: String::from(concat!(
+                "D.U.D.E. — Demented Unified Development Entity\n",
+                "Enova Engineering Assistant | Local AI Mode\n\n",
+                "DUDE initialized successfully.\n",
+                "Sanity checks: FAILED.\n",
+                "NOVVS diagnostics: STANDBY.\n",
+                "Coffee dependency: CRITICAL.\n",
+                "Ready to deploy questionable decisions (with your approval).\n\n",
+                "Hey dude! What are we building today?\n",
+                "Type a question, !command, /model NAME or /clear.\n"
+            )),
+            history: vec![Message {
+                role: "system".into(),
+                content: concat!(
+                    "You are DUDE (Demented Unified Development Entity), a local AI-powered ",
+                    "development companion. You assist with coding, Linux, Rust, diagnostics, ",
+                    "and (when provided context) the Enova/NOVVS ecosystem. ",
+                    "Your personality is friendly, witty, slightly demented, and engineering-focused. ",
+                    "Use playful references to coffee, sanity checks, and deployments sparingly. ",
+                    "Always prioritize technically accurate advice, clear uncertainty, security, ",
+                    "and practical steps. Never claim to have executed a command, inspected a file, ",
+                    "or changed a system unless that actually happened. ",
+                    "Do not invent NOVVS project details that are not in the conversation."
+                ).into(),
+            }],
             scroll: 0,
             busy: false,
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "granite-code:latest".into()),
@@ -94,7 +117,7 @@ impl App {
             return;
         }
         if input == "/clear" {
-            self.history.clear();
+            self.history.truncate(1);
             self.output.clear();
             self.scroll = 0;
             return;
