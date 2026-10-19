@@ -62,7 +62,7 @@ impl App {
     fn new() -> Self {
         Self {
             input: String::new(),
-            output: String::from("Welcome to Jarvis! Type a question or !command.\n"),
+            output: String::from("DUDE — Demented Unified Development Entity. Type a question or !command.\n"),
             history: Vec::new(),
             scroll: 0,
             busy: false,
@@ -188,7 +188,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &App) -> io::Res
             .split(frame.area());
 
         let input = Paragraph::new(app.input.as_str())
-            .block(Block::default().title("Jarvis - input").borders(Borders::ALL))
+            .block(Block::default().title("DUDE - input").borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
         frame.render_widget(input, chunks[0]);
 
