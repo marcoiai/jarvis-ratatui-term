@@ -26,7 +26,7 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 - Up/Down scroll, ESC or Ctrl+C exits.
 
 No API key is necessary. The Rust application communicates using HTTP JSON with `/api/chat` and `stream: false`.
-This branch replaces the original Gemini shell script. Older scripts were left in the repository as historical artifacts, **not** used by the application. They may include exposed credentials: revoke those credentials and clean history separately before using or distributing them.
+This branch replaces the original Gemini shell script. The obsolete Gemini shell scripts and tracked key-export script were removed from this branch. **Revoke the previously exposed credential** and clean Git history separately if required; deleting files does not erase older commits.
 
 ## Notes
 
