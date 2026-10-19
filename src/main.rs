@@ -278,6 +278,22 @@ async fn run(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
+    // Select an installed model if the configured default is not available.
+    if let Ok(response) = client.get(format!("{}/api/tags", app.ollama_url)).send().await {
+        if let Ok(catalog) = response.json::<Value>().await {
+            if let Some(models) = catalog.get("models").and_then(Value::as_array) {
+                let names: Vec<&str> = models.iter().filter_map(|m| m.get("name").and_then(Value::as_str)).collect();
+                if !names.contains(&app.model.as_str()) {
+                    if let Some(name) = names.first() {
+                        app.output.push_str(&format!("Configured model '{}' unavailable. Selected installed model '{}'.\\n", app.model, name).replace("\\\\n", "\\n"));
+                        app.model = (*name).to_string();
+                    } else {
+                        app.output.push_str("No Ollama models installed. Run: ollama list\\n");
+                    }
+                }
+            }
+        }
+    }
     let (tx, mut rx) = mpsc::unbounded_channel();
     loop {
         while let Ok(result) = rx.try_recv() {
