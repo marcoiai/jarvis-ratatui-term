@@ -6,13 +6,13 @@ An AI-powered development companion for the terminal, built with Rust, Ratatui a
 
 - Rust toolchain (edition 2024)
 - Ollama running at `http://127.0.0.1:11434`
-- A downloaded model (for example `ollama pull granite-code`)
+- Ollama running (DUDE downloads `qwen3:4b` automatically when missing)
 
 ## Run
 
 ```sh
 ollama serve  # only if Ollama is not already running
-OLLAMA_MODEL=granite-code:latest cargo run --bin dude
+OLLAMA_MODEL=qwen3:4b cargo run --bin dude
 ```
 
 If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
@@ -25,7 +25,7 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 - `/clear` clears conversation and screen.
 - Up/Down scroll, ESC or Ctrl+C exits.
 
-The DUDE attempts to select an installed Ollama model at startup if the configured default is missing. Check `ollama list` if needed.
+DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
 
 ## AI file tools (read-only)
 
