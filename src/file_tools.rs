@@ -15,6 +15,13 @@ pub fn definitions() -> Vec<Value> {
 fn resolve(root: &Path, relative: &str) -> Result<PathBuf,String> {
     let p = Path::new(relative);
     if p.is_absolute() { return Err("Absolute paths are disabled".into()); }
+    if p.components().any(|c| {
+        let v = c.as_os_str().to_string_lossy();
+        v == ".env" || v.starts_with(".env.") || v == ".git" || v == ".ssh" ||
+        v == ".aws" || v == ".config" || v == "id_rsa" || v == "id_ed25519"
+    }) {
+        return Err("Sensitive paths are blocked from AI tools".into());
+    }
     let target = root.join(p).canonicalize().map_err(|e| e.to_string())?;
     if !target.starts_with(root) { return Err("Path outside workspace denied".into()); }
     Ok(target)
@@ -29,7 +36,12 @@ fn scan(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     entries.sort();
     for entry in entries {
         if files.len() >= MAX_ENTRIES { break; }
-        if entry.file_name().is_some_and(|n| n == ".git" || n == "target" || n == "node_modules" || n == ".env") { continue; }
+        if entry.file_name().is_some_and(|n| {
+            let v = n.to_string_lossy();
+            v == ".git" || v == "target" || v == "node_modules" || v == ".env" ||
+            v.starts_with(".env.") || v == ".ssh" || v == ".aws" || v == ".config" ||
+            v == "id_rsa" || v == "id_ed25519"
+        }) { continue; }
         // Never recurse into symlinks or leave the workspace.
         if fs::symlink_metadata(&entry).map_err(|e| e.to_string())?.file_type().is_symlink() { continue; }
         if entry.is_dir() { scan(&entry, files)?; }
