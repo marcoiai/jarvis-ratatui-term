@@ -1,6 +1,6 @@
-# Jarvis — Rust terminal with local Ollama
+# DUDE — Demented Unified Development Entity
 
-An interactive terminal assistant built with Rust, Ratatui and the local Ollama HTTP API.
+An AI-powered development companion for the terminal, built with Rust, Ratatui and local Ollama. Originally developed as Jarvis. DUDE can serve as both a personal coding assistant and (with future integrations) an Enova/NOVVS engineering assistant.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ An interactive terminal assistant built with Rust, Ratatui and the local Ollama 
 
 ```sh
 ollama serve  # only if Ollama is not already running
-OLLAMA_MODEL=granite-code:latest cargo run
+OLLAMA_MODEL=granite-code:latest cargo run --bin dude
 ```
 
 If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
