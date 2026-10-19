@@ -1,11 +1,35 @@
-# jarvis
-Your smart Rust terminal with A.I. assistant.
+# Jarvis — Rust terminal with local Ollama
 
-Just git clone, cargo update, cargo run
+An interactive terminal assistant built with Rust, Ratatui and the local Ollama HTTP API.
 
-It has 2 options:
-- prefix any shell command with (!) and it will execute shell terminal Command
-- Just type some question or anything and it will reach it's LLM
-- You have to: export API_KEY="BIza3yBtoy2mFW-4AI6$3JPDNm-H1eijd5p$euEZ8" and Jarvis will automagically load it (in CAPS)
+## Requirements
 
-It's was just a concept to learn A.I. integration and learn Rust too, but I really got into it!
+- Rust toolchain (edition 2024)
+- Ollama running at `http://127.0.0.1:11434`
+- A downloaded model (for example `ollama pull granite-code`)
+
+## Run
+
+```sh
+ollama serve  # only if Ollama is not already running
+OLLAMA_MODEL=granite-code:latest cargo run
+```
+
+If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
+
+## Commands
+
+- Ask a normal question to chat with Ollama. Successful exchanges remain in context.
+- `!ls -la` executes a local program directly (no shell interpretation: pipes, globbing and redirects are unsupported).
+- `/model granite-code:latest` changes the model during the session.
+- `/clear` clears conversation and screen.
+- Up/Down scroll, ESC or Ctrl+C exits.
+
+No API key is necessary. The Rust application communicates using HTTP JSON with `/api/chat` and `stream: false`.
+This branch replaces the original Gemini shell script. Older scripts were left in the repository as historical artifacts, **not** used by the application. They may include exposed credentials: revoke those credentials and clean history separately before using or distributing them.
+
+## Notes
+
+- One active request at a time; the UI stays interactive.
+- For safety, `!` runs programs without `sh -c` or `bash -c`. It is still arbitrary command execution by the local user.
+- No built-in credential storage.
