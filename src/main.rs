@@ -49,6 +49,7 @@ struct ToolCall { function: ToolFunction }
 struct ToolFunction { name: String, arguments: Value }
 
 enum ResultMessage {
+    ModelReady(Result<String, String>),
     Chat(Result<String, String>),
     Shell(Result<String, String>),
 }
@@ -59,6 +60,7 @@ struct App {
     history: Vec<Message>,
     scroll: u16,
     busy: bool,
+    model_ready: bool,
     model: String,
     ollama_url: String,
     workspace: PathBuf,
@@ -95,8 +97,9 @@ impl App {
             }],
             scroll: 0,
             busy: false,
+            model_ready: false,
             workspace: env::var("DUDE_WORKSPACE").ok().and_then(|p| std::fs::canonicalize(p).ok()).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
-            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "granite-code:latest".into()),
+            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
                 .trim_end_matches('/')
@@ -105,7 +108,7 @@ impl App {
     }
 
     fn submit(&mut self, tx: mpsc::UnboundedSender<ResultMessage>, client: reqwest::Client) {
-        if self.busy {
+        if self.busy || !self.model_ready {
             return;
         }
         let input = self.input.trim().to_string();
@@ -153,6 +156,14 @@ impl App {
     fn complete(&mut self, result: ResultMessage) {
         self.busy = false;
         match result {
+            ResultMessage::ModelReady(Ok(model)) => {
+                self.model = model.clone();
+                self.model_ready = true;
+                self.output.push_str(&format!("Model ready: {model}\n"));
+            }
+            ResultMessage::ModelReady(Err(error)) => {
+                self.output.push_str(&format!("Model initialization failed: {error}\n"));
+            }
             ResultMessage::Chat(Ok(text)) => {
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
                 self.output.push_str(&format!("{text}\n"));
@@ -221,6 +232,40 @@ async fn ask_ollama(
     Err("Too many tool calls in one request (limit 8 rounds).".into())
 }
 
+async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> Result<String, String> {
+    let response = client.get(format!("{host}/api/tags")).send().await
+        .map_err(|e| format!("Ollama unreachable: {e}. Start Ollama first."))?;
+    if !response.status().is_success() {
+        return Err(format!("Ollama model list returned HTTP {}", response.status()));
+    }
+    let catalog: Value = response.json().await.map_err(|e| e.to_string())?;
+    let installed: Vec<String> = catalog.get("models")
+        .and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+
+    if installed.iter().any(|name| name == preferred || name == &format!("{preferred}:latest")) {
+        return Ok(preferred.to_string());
+    }
+
+    // Long downloads need a separate timeout from regular chat requests.
+    let pull_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .build().map_err(|e| e.to_string())?;
+    let pulled = pull_client.post(format!("{host}/api/pull"))
+        .json(&json!({"name": preferred, "stream": false}))
+        .send().await.map_err(|e| format!("Could not download {preferred}: {e}"));
+    match pulled {
+        Ok(response) if response.status().is_success() => Ok(preferred.to_string()),
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            installed.first().cloned().ok_or_else(|| format!("Model pull failed (HTTP {status}): {body}"))
+        }
+        Err(error) => installed.first().cloned().ok_or(error),
+    }
+}
+
 async fn run_command(command: String) -> Result<String, String> {
     // Intentional: execute a program and arguments, never through a shell.
     let mut words = command.split_whitespace();
@@ -278,23 +323,21 @@ async fn run(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
-    // Select an installed model if the configured default is not available.
-    if let Ok(response) = client.get(format!("{}/api/tags", app.ollama_url)).send().await {
-        if let Ok(catalog) = response.json::<Value>().await {
-            if let Some(models) = catalog.get("models").and_then(Value::as_array) {
-                let names: Vec<&str> = models.iter().filter_map(|m| m.get("name").and_then(Value::as_str)).collect();
-                if !names.contains(&app.model.as_str()) {
-                    if let Some(name) = names.first() {
-                        app.output.push_str(&format!("Configured model '{}' unavailable. Selected installed model '{}'.\n", app.model, name));
-                        app.model = (*name).to_string();
-                    } else {
-                        app.output.push_str("No Ollama models installed. Run: ollama list\n");
-                    }
-                }
-            }
-        }
-    }
     let (tx, mut rx) = mpsc::unbounded_channel();
+    app.output.push_str(&format!(
+        "Checking Ollama for {} (downloading if missing)...\n", app.model
+    ));
+    let tx_init = tx.clone();
+    let host = app.ollama_url.clone();
+    let model = app.model.clone();
+    tokio::spawn(async move {
+        let result = ensure_model(&client, &host, &model).await;
+        let _ = tx_init.send(ResultMessage::ModelReady(result));
+    });
+    // The UI stays responsive while a missing model downloads.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()?;
     loop {
         while let Ok(result) = rx.try_recv() {
             app.complete(result);
