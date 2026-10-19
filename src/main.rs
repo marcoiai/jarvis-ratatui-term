@@ -107,7 +107,7 @@ impl App {
         }
         self.input.clear();
         self.output.push_str(&format!("\n> {input}\n"));
-        self.scroll = u16::MAX;
+        self.scroll = self.output.lines().count().saturating_sub(1).min(10_000) as u16;
 
         if let Some(model) = input.strip_prefix("/model ") {
             if !model.trim().is_empty() {
@@ -158,7 +158,7 @@ impl App {
                 }
             }
         }
-        self.scroll = u16::MAX;
+        self.scroll = self.output.lines().count().saturating_sub(1).min(10_000) as u16;
     }
 }
 
@@ -218,7 +218,6 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &App) -> io::Res
         let output = Paragraph::new(app.output.as_str())
             .block(Block::default().title(if app.busy { "Answer (working...)" } else { "Answer" }).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
-        // u16::MAX means 'bottom'; Paragraph clamps it automatically.
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
 
         let footer = format!(
