@@ -45,3 +45,4 @@
 - Pensamento enviado como texto puro, sem delimitadores, não pode ser separado de resposta final com segurança sem alterar o protocolo/modelo.
 - Validar no Mac: `cargo fmt --check`, `cargo check`, `cargo test` e reexecutar análise Solo com Qwen.
 - Próximo passo: exigir pelo menos uma observação do tipo `read_file` e validar conclusões contra referências (uma lista de arquivos não basta).
+\n## 2026-10-20 — Comando para sair\n\n- Adicionados `/exit`, `/quit` e `/sair` no tratamento de Enter da TUI; o loop termina e a rotina existente em `main()` restaura o terminal.\n- Mantidos Esc e Ctrl+C. A atualização também documenta os comandos em `/help` e no README.\n- Validar localmente com `cargo check` e `cargo test`; não executados no Mac pelo conector.\n
