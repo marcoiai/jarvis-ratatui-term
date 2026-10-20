@@ -44,7 +44,7 @@ impl Metrics {
         let steps=stages.iter().map(|s|format!("{}({}): {}ms{}",s.name,s.provider,s.elapsed_ms,if s.success{""}else{" ERROR"})).collect::<Vec<_>>().join(", ");
         let input:u64=usage.iter().map(|u|u.input).sum();
         let output:u64=usage.iter().map(|u|u.output).sum();
-        Ok(format!("DUDE metrics: {mode}, total {elapsed_ms}ms, tool executions {}, cache hits {}, evidence items {}; {}. Reported tokens: input {input}, output {output} ({} measured API responses).",record.tool_executions,record.evidence_cache_hits,record.evidence_items,steps,usage.len()))
+        Ok(format!("DUDE metrics: {mode}, total {elapsed_ms}ms, tool executions {}, cache hits {}, evidence items {}; {}. Reported tokens: input {input}, output {output} ({} measured API responses).\nCoverage: {}",record.tool_executions,record.evidence_cache_hits,record.evidence_items,steps,usage.len(),record.coverage))
     }
 }
 pub fn recent(workspace:&Path)->String{
