@@ -33,8 +33,8 @@ pub fn tool_rounds() -> usize { setting("DUDE_TOOL_ROUNDS", 8, 1, 32) }
 
 /// Reject unsupported whole-project summaries rather than presenting guesses as inspected facts.
 /// An evidence item proves only a successful tool observation, not correctness of conclusions.
-pub fn require_evidence_for_overview(observations: usize) -> Result<(), String> {
-    if observations == 0 {
+pub fn require_evidence_for_overview(source_reads: usize) -> Result<(), String> {
+    if source_reads == 0 {
         return Err("Análise não concluída: nenhum arquivo foi lido com sucesso. Confira /workspace e as permissões de leitura. Nenhuma conclusão sobre o projeto foi validada.".into());
     }
     Ok(())
