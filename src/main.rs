@@ -559,8 +559,18 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let mut messages = messages;
     if allow_tools {
         let root = workspace.clone();
-        let overview = tokio::task::spawn_blocking(move || investigation::overview(&root))
-            .await.map_err(|e| e.to_string())?;
+        let question = messages.iter().rev().find(|m|m.role == "user")
+            .map(|m|m.content.clone()).unwrap_or_default();
+        let bootstrap = investigation::needs_baseline(&question);
+        let cache = evidence.clone();
+        let overview = tokio::task::spawn_blocking(move || {
+            let mut overview = investigation::overview(&root);
+            if bootstrap {
+                overview.push_str("\n");
+                overview.push_str(&investigation::baseline(&root, &cache));
+            }
+            overview
+        }).await.map_err(|e| e.to_string())?;
         messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
         messages.push(Message { role: "user".into(), content: overview });
     }
