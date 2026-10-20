@@ -12,9 +12,14 @@ fn git(root:&Path,args:&[&str])->Option<String>{
     Some(String::from_utf8_lossy(&result.stdout).trim().chars().take(120).collect())
 }
 fn exists(root:&Path, relative:&str)->bool {root.join(relative).exists()}
-// Nerd Fonts require a Nerd Font-enabled terminal. Set DUDE_ICON_STYLE=unicode for emoji fallback.
-fn icon(nerd:&'static str, unicode:&'static str)->&'static str {
-    if env::var("DUDE_ICON_STYLE").ok().as_deref()==Some("unicode"){unicode}else{nerd}
+// Terminal font detection is not portable; users can select the symbols explicitly.
+// DUDE_ICON_STYLE=nerd (default), unicode (emoji), or ascii.
+fn icon(nerd:&'static str, unicode:&'static str, ascii:&'static str)->&'static str {
+    match env::var("DUDE_ICON_STYLE").ok().as_deref(){
+        Some("unicode")=>unicode,
+        Some("ascii")=>ascii,
+        _=>nerd,
+    }
 }
 impl Environment {
     pub fn detect(root:&Path)->Self{
@@ -22,7 +27,7 @@ impl Environment {
         let mut git_status=String::new();
         if let Some(branch)=git(root,&["symbolic-ref","--quiet","--short","HEAD"])
             .or_else(||git(root,&["rev-parse","--short","HEAD"]).map(|v|format!("@{v}"))) {
-            git_status=format!("{} {branch}",icon("","🌿"));
+            git_status=format!("{} {branch}",icon("","🌿","git:"));
             if let Some(changes)=git(root,&["status","--porcelain","--untracked-files=normal"]) {
                 if !changes.is_empty(){git_status.push_str(" ●");}
             }
@@ -30,25 +35,25 @@ impl Environment {
         let venv=env::var("VIRTUAL_ENV").ok().filter(|v|!v.is_empty());
         let conda=env::var("CONDA_DEFAULT_ENV").ok().filter(|v|!v.is_empty());
         if let Some(name)=venv.as_ref().and_then(|v|Path::new(v).file_name()).map(|v|v.to_string_lossy().to_string()) {
-            tags.push(format!("{} {name} active",icon("","🐍")));
+            tags.push(format!("{} {name} active",icon("","🐍","py:")));
         }else if let Some(name)=conda {
-            tags.push(format!("{} {name} conda",icon("","🐍")));
+            tags.push(format!("{} {name} conda",icon("","🐍","py:")));
         } else if exists(root,".venv") || exists(root,"venv") {
-            tags.push(format!("{} venv available",icon("","🐍")));
+            tags.push(format!("{} venv available",icon("","🐍","py:")));
         }
-        if exists(root,"Cargo.toml"){tags.push(format!("{} Rust",icon("","🦀")));}
-        if exists(root,"pom.xml") || exists(root,"build.gradle") || exists(root,"build.gradle.kts"){tags.push(format!("{} Java",icon("","☕")));}
+        if exists(root,"Cargo.toml"){tags.push(format!("{} Rust",icon("","🦀","rs:")));}
+        if exists(root,"pom.xml") || exists(root,"build.gradle") || exists(root,"build.gradle.kts"){tags.push(format!("{} Java",icon("","☕","java:")));}
         if exists(root,"composer.json"){
             let framework=if exists(root,"artisan"){" Laravel"}else if exists(root,"bin/console"){" Symfony"}else{""};
-            tags.push(format!("{} PHP{framework}",icon("","🐘")));
+            tags.push(format!("{} PHP{framework}",icon("","🐘","php:")));
         }
-        if exists(root,"package.json"){tags.push(format!("{} Node",icon("","📦")));}
-        if exists(root,"compose.yaml")||exists(root,"compose.yml")||exists(root,"docker-compose.yml")||exists(root,"Dockerfile"){tags.push(format!("{} Docker",icon("","🐳")));}
+        if exists(root,"package.json"){tags.push(format!("{} Node",icon("","📦","node:")));}
+        if exists(root,"compose.yaml")||exists(root,"compose.yml")||exists(root,"docker-compose.yml")||exists(root,"Dockerfile"){tags.push(format!("{} Docker",icon("","🐳","docker:")));}
         Self{git:git_status,tags,root:root.to_path_buf()}
     }
     pub fn status(&self)->String{
         let dir=self.root.file_name().map(|v|v.to_string_lossy().into_owned()).unwrap_or_else(||self.root.display().to_string());
-        let mut parts=vec![format!("{} {dir}",icon("","📁"))];
+        let mut parts=vec![format!("{} {dir}",icon("","📁","dir:"))];
         if !self.git.is_empty(){parts.push(self.git.clone());}
         parts.extend(self.tags.clone());
         parts.join("  |  ")
