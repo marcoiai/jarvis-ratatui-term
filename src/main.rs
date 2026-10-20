@@ -1,3 +1,4 @@
+mod cloud;
 mod roles;
 mod memory;
 mod file_tools;
@@ -71,6 +72,8 @@ struct App {
     ollama_url: String,
     provider: String,
     groq_model: String,
+    gemini_model: String,
+    cloud_allowed: bool,
     workspace: PathBuf,
     memory: Option<memory::Memory>,
     last_question: Option<String>,
@@ -124,7 +127,9 @@ impl App {
             last_question: None,
             roles,
             provider: "ollama".into(),
-            groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".into()),
+            groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
+            gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into()),
+            cloud_allowed: false,
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
@@ -176,6 +181,7 @@ impl App {
                             }
                             self.memory = Some(store);
                             self.roles = roles::Roles::load(&self.workspace).unwrap_or_default();
+                            self.cloud_allowed = false;
                             self.last_question = None;
                             self.output.push_str(&format!(
                                 "Workspace switched to {}. Project memory reloaded.\n",
@@ -190,9 +196,23 @@ impl App {
             }
             return;
         }
+        if input == "/cloud" {
+            self.output.push_str(if self.cloud_allowed { "Cloud permission: ALLOWED for this session.\n" } else { "Cloud permission: DENIED. Use /cloud allow to authorize remote providers for this session.\n" });
+            return;
+        }
+        if input == "/cloud allow" {
+            self.cloud_allowed = true;
+            self.output.push_str("Cloud access enabled for this workspace session. Selected cloud roles may receive chat, memory and read-only tool results.\n");
+            return;
+        }
+        if input == "/cloud deny" {
+            self.cloud_allowed = false;
+            self.output.push_str("Cloud access disabled.\n");
+            return;
+        }
         if input == "/roles" {
             self.output.push_str(&self.roles.summary());
-            self.output.push_str("Solo: one selected role. Symphony: three-role workflow (pending adapter completion).\n");
+            self.output.push_str("Solo: one selected role. Symphony: investigator -> architect -> reviewer -> one answer.\n");
             return;
         }
         if let Some(spec) = input.strip_prefix("/role ") {
@@ -215,9 +235,6 @@ impl App {
                 self.roles = updated;
             }));
             self.output.push_str(&format!("Mode configuration: {result:?}\n"));
-            if self.roles.mode == "symphony" {
-                self.output.push_str("Symphony execution is not enabled yet; no automatic cloud calls will occur.\n");
-            }
             return;
         }
         if let Some(role) = input.strip_prefix("/solo ") {
@@ -277,7 +294,7 @@ impl App {
             self.output.push_str(&format!("Checkpoint: {:?}\n",result));
             return;
         }
-        if !self.model_ready && self.roles.mode == "solo" && self.roles.selected_provider() == "ollama" {
+        if !self.model_ready && ((self.roles.mode == "solo" && self.roles.selected_provider() == "ollama") || (self.roles.mode == "symphony" && [&self.roles.investigator,&self.roles.architect,&self.roles.reviewer].iter().any(|p|p.as_str()=="ollama"))) {
             self.output.push_str("Local model not ready. You can still use memory commands.\n");
             return;
         }
@@ -297,10 +314,6 @@ impl App {
             return;
         }
 
-        if self.roles.mode == "symphony" && !input.starts_with('!') {
-            self.output.push_str("Symphony is configured but not executable yet. Complete Gemini/Groq tool adapters and cloud consent gates first. Use /mode solo for now.\n");
-            return;
-        }
         self.busy = true;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
@@ -318,32 +331,46 @@ impl App {
             self.last_question = Some(input.clone());
             self.history.push(Message { role: "user".into(), content: input });
             let messages = self.history.clone();
-            let selected = self.roles.selected_provider().to_string();
-            let provider = selected;
-            let model = if provider == "groq" { self.groq_model.clone() } else { self.model.clone() };
+            let roles = self.roles.clone();
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
-            if !matches!(provider.as_str(), "ollama" | "groq") {
+            let ollama_model = self.model.clone();
+            let groq_model = self.groq_model.clone();
+            let gemini_model = self.gemini_model.clone();
+            let participants: Vec<&str> = if roles.mode == "symphony" {
+                vec![&roles.investigator, &roles.architect, &roles.reviewer]
+            } else {
+                vec![roles.selected_provider()]
+            };
+            if participants.iter().any(|p| **p != "ollama") && !self.cloud_allowed {
                 self.busy = false;
                 self.started_at = None;
                 self.history.pop();
                 self.last_question = None;
-                self.output.push_str(&format!("Provider '{}' is configured but its chat adapter is not ready. Change the role to ollama or groq.\n",provider));
+                self.output.push_str("Cloud access not approved. Type /cloud allow before using remote roles.\n");
                 return;
             }
-            if provider == "groq" && env::var("GROQ_API_KEY").is_err() {
+            let missing = participants.iter().find_map(|p| match **p {
+                "groq" if env::var("GROQ_API_KEY").is_err() => Some("GROQ_API_KEY"),
+                "gemini" if env::var("GEMINI_API_KEY").is_err() && env::var("GOOGLE_API_KEY").is_err() => Some("GEMINI_API_KEY or GOOGLE_API_KEY"),
+                "openai" => Some("OpenAI adapter (not yet enabled)"),
+                _ => None
+            });
+            if let Some(missing) = missing {
                 self.busy = false;
                 self.started_at = None;
                 self.history.pop();
                 self.last_question = None;
-                self.output.push_str("Missing GROQ_API_KEY. Cloud request blocked.\n");
+                self.output.push_str(&format!("Provider unavailable: {missing}. No requests sent.\n"));
                 return;
             }
             tokio::spawn(async move {
-                let result = if provider == "groq" {
-                    ask_groq(&client, &model, messages).await
+                let result = if roles.mode == "symphony" {
+                    run_symphony(&client, &roles, messages, workspace, &url,
+                        &ollama_model, &groq_model, &gemini_model).await
                 } else {
-                    ask_ollama(&client, &url, &model, messages, workspace).await
+                    query_provider(&client, roles.selected_provider(), messages, workspace,
+                        &url, &ollama_model, &groq_model, &gemini_model).await
                 };
                 let _ = tx.send(ResultMessage::Chat(result));
             });
@@ -383,6 +410,49 @@ impl App {
         }
         self.follow_output = true;
     }
+}
+
+async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
+    workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
+    gemini_model: &str) -> Result<String,String> {
+    match provider {
+        "ollama" => ask_ollama(client, host, local_model, messages, workspace).await,
+        "groq" => cloud::groq(client, groq_model, messages, workspace).await,
+        "gemini" => cloud::gemini(client, gemini_model, messages, workspace).await,
+        other => Err(format!("Unsupported provider: {other}")),
+    }
+}
+
+async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
+    messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
+    groq_model: &str, gemini_model: &str) -> Result<String,String> {
+    let steps = [
+        ("Investigator", roles.investigator.as_str(),
+            "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings."),
+        ("Architect", roles.architect.as_str(),
+            "Use the investigator's findings to propose a grounded engineering solution. Make tradeoffs, uncertainties and evidence explicit."),
+        ("Reviewer", roles.reviewer.as_str(),
+            "Review the investigator and architect work critically. Correct unsupported claims. Produce ONE final answer to the user with conclusions and unresolved uncertainties. Do not reveal a multi-agent transcript."),
+    ];
+    let mut shared = String::new();
+    let question = messages.iter().rev().find(|m|m.role=="user")
+        .map(|m|m.content.as_str()).unwrap_or("");
+    for (index,(name,provider,instruction)) in steps.iter().enumerate() {
+        let mut stage:Vec<Message> = messages.iter().filter(|m|m.role=="system").cloned().collect();
+        stage.push(Message{role:"system".into(),content:format!("You are the {name} in DUDE Symphony. {instruction}")});
+        stage.push(Message{role:"user".into(),content:format!(
+            "Original user request:\n{question}\n\nPrevious verified or provisional stage findings:\n{}\n",
+            if shared.is_empty() {"(none)"} else {&shared}
+        )});
+        let response=query_provider(client,provider,stage,workspace.clone(),host,
+            local_model,groq_model,gemini_model).await
+            .map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
+        if index == 2 {return Ok(response);}
+        // Bound cost and payload sent to downstream providers.
+        shared.push_str(&format!("\n{name} ({provider}) findings:\n{}\n",
+            response.chars().take(12000).collect::<String>()));
+    }
+    Err("Symphony ended without a review".into())
 }
 
 async fn ask_groq(client: &reqwest::Client, model: &str, messages: Vec<Message>) -> Result<String, String> {
@@ -559,8 +629,8 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
 
         let footer = format!(
-            "Provider: {} | Model: {} | /providers /provider NAME | /memory | ESC",
-            app.provider, if app.provider=="groq" {&app.groq_model} else {&app.model}
+            "Mode: {} | Solo: {} ({}) | /roles /role /mode /cloud | ESC",
+            app.roles.mode, app.roles.solo_role, app.roles.selected_provider()
         );
         frame.render_widget(
             Paragraph::new(footer)
