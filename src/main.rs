@@ -331,7 +331,7 @@ impl App {
             } else {
                 vec![roles.selected_provider()]
             };
-            if participants.iter().any(|p| **p != "ollama") && !self.cloud_allowed {
+            if participants.iter().any(|p| *p != &"ollama") && !self.cloud_allowed {
                 self.busy = false;
                 self.started_at = None;
                 self.history.pop();
@@ -339,7 +339,7 @@ impl App {
                 self.output.push_str("Cloud access not approved. Type /cloud allow before using remote roles.\n");
                 return;
             }
-            let missing = participants.iter().find_map(|p| match **p {
+            let missing = participants.iter().find_map(|p| match *p {
                 "groq" if env::var("GROQ_API_KEY").is_err() => Some("GROQ_API_KEY"),
                 "gemini" if env::var("GEMINI_API_KEY").is_err() && env::var("GOOGLE_API_KEY").is_err() => Some("GEMINI_API_KEY or GOOGLE_API_KEY"),
                 "openai" => Some("OpenAI adapter (not yet enabled)"),
