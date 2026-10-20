@@ -67,6 +67,7 @@ enum ResultMessage {
     ModelReady(Result<String, String>),
     Chat { answer: Result<String, String>, telemetry: String },
     Shell(Result<String, String>),
+    ChatChunk(String),
 }
 
 struct App {
@@ -77,6 +78,7 @@ struct App {
     scroll: u16,
     follow_output: bool,
     busy: bool,
+    streamed: bool,
     started_at: Option<Instant>,
     model_ready: bool,
     model: String,
@@ -136,6 +138,7 @@ impl App {
             scroll: 0,
             follow_output: true,
             busy: false,
+            streamed: false,
             started_at: None,
             model_ready: false,
             workspace,
@@ -437,6 +440,7 @@ impl App {
         }
 
         self.busy = true;
+        self.streamed = false;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
             let command = command.trim().to_owned();
@@ -503,11 +507,11 @@ impl App {
                 let solo_provider=roles.selected_provider().to_owned();
                 let result = if is_symphony {
                     run_symphony(&client, &roles, messages, workspace, &url,
-                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone()).await
+                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(), tx.clone()).await
                 } else {
                     let solo_start=Instant::now();
                     let result=query_provider(&client, &solo_provider, messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence, metrics.clone()).await;
+                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence, metrics.clone(), Some(tx.clone())).await;
                     metrics.stage("Solo",&solo_provider,solo_start,result.is_ok());
                     result
                 };
@@ -522,6 +526,12 @@ impl App {
     }
 
     fn complete(&mut self, result: ResultMessage) {
+        if let ResultMessage::ChatChunk(ref chunk) = result {
+            self.streamed = true;
+            self.output.push_str(chunk);
+            self.follow_output = true;
+            return;
+        }
         self.busy = false;
         self.started_at = None;
         match result {
@@ -540,7 +550,8 @@ impl App {
                     }
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
-                self.output.push_str(&format!("{text}\n\n{telemetry}\n"));
+                if self.streamed { self.output.push_str(&format!("\n\n{telemetry}\n")); }
+                else { self.output.push_str(&format!("{text}\n\n{telemetry}\n")); }
             }
             ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
             ResultMessage::Chat { answer: Err(error), telemetry } => {
@@ -548,6 +559,7 @@ impl App {
                 self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
                 if self.history.last().is_some_and(|m| m.role == "user") { self.history.pop(); }
             }
+            ResultMessage::ChatChunk(_) => unreachable!("handled before completion"),
             ResultMessage::Shell(Err(error)) => {
                 self.last_question = None;
                 self.output.push_str(&format!("Error: {error}\n"));
@@ -563,7 +575,8 @@ impl App {
 
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
-    gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
+    gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
+    updates: Option<mpsc::UnboundedSender<ResultMessage>>) -> Result<String,String> {
     let mut messages = messages;
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
@@ -586,7 +599,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "user".into(), content: overview });
     }
     match provider {
-        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics).await,
+        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
@@ -595,7 +608,8 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
-    groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
+    groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
+    updates: mpsc::UnboundedSender<ResultMessage>) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
@@ -618,7 +632,8 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         )});
         let stage_start=Instant::now();
         let result=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model,index == 0,evidence.clone(),metrics.clone()).await;
+            local_model,groq_model,gemini_model,index == 0,evidence.clone(),metrics.clone(),
+            if index == 2 {Some(updates.clone())} else {None}).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {
@@ -654,6 +669,7 @@ async fn ask_ollama(
     allow_tools: bool,
     evidence: evidence::EvidenceCache,
     metrics: metrics::Metrics,
+    updates: Option<mpsc::UnboundedSender<ResultMessage>>,
 ) -> Result<String, String> {
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
@@ -662,14 +678,16 @@ async fn ask_ollama(
     for round in 0..=rounds {
         let tools_enabled = allow_tools && round < rounds;
         if allow_tools && !tools_enabled {
-            conversation.push(json!({"role":"user","content":investigation::FINALIZE}));
+            conversation.push(json!({"role":"user","content":format!("{}\\n\\nInvestigation coverage: {}\\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,evidence.coverage())}));
         }
+        let stream_final = !tools_enabled;
+        let request_start = Instant::now();
         let response = client
             .post(format!("{host}/api/chat"))
             .json(&json!({
                 "model": model,
                 "messages": conversation,
-                "stream": false,
+                "stream": stream_final,
                 "options": { "num_ctx": investigation::context_size() },
                 "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
             }))
@@ -679,9 +697,41 @@ async fn ask_ollama(
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            metrics.stage("ollama_http","ollama",request_start,false);
             return Err(format!("Ollama HTTP {status}: {body}"));
         }
+        if stream_final {
+            let mut response = response;
+            let mut buffer = Vec::<u8>::new();
+            let mut answer = String::new();
+            let mut finished = false;
+            while let Some(chunk) = response.chunk().await.map_err(|e|format!("Ollama stream error: {e}"))? {
+                buffer.extend_from_slice(&chunk);
+                if buffer.len() > 2_000_000 { return Err("Ollama stream buffer limit exceeded".into()); }
+                while let Some(pos) = buffer.iter().position(|b| *b == b'\\n') {
+                    let line: Vec<u8> = buffer.drain(..=pos).collect();
+                    let line = line.strip_suffix(b"\\n").unwrap_or(&line);
+                    if line.iter().all(u8::is_ascii_whitespace) { continue; }
+                    let value: Value = serde_json::from_slice(line).map_err(|e|format!("Ollama stream JSON: {e}"))?;
+                    if let Some(error)=value["error"].as_str(){return Err(error.into());}
+                    if let Some(delta)=value["message"]["content"].as_str() {
+                        answer.push_str(delta);
+                        if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(delta.to_owned())); }
+                    }
+                    if value["done"].as_bool() == Some(true) {
+                        if let (Some(i),Some(o))=(value["prompt_eval_count"].as_u64(),value["eval_count"].as_u64()){
+                            metrics.tokens("ollama",model,i,o);
+                        }
+                        finished = true;
+                    }
+                }
+            }
+            metrics.stage("ollama_http","ollama",request_start,finished);
+            if !finished {return Err("Ollama stream ended without done=true".into());}
+            return Ok(answer);
+        }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
+        metrics.stage("ollama_http","ollama",request_start,true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
             return Ok(reply.message.content);
