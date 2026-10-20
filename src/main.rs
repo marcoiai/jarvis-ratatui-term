@@ -64,7 +64,7 @@ struct ToolFunction { name: String, arguments: Value }
 
 enum ResultMessage {
     ModelReady(Result<String, String>),
-    Chat(Result<String, String>),
+    Chat { answer: Result<String, String>, telemetry: String },
     Shell(Result<String, String>),
 }
 
@@ -503,11 +503,11 @@ impl App {
                     result
                 };
                 let mode=if is_symphony {"symphony"}else{"solo"};
-                let result=match metrics_for_report.finish(&workspace_for_report,mode,start,result.is_ok(),&evidence_for_report){
-                    Ok(summary)=>result.map(|answer|format!("{answer}\n\n{summary}")).map_err(|e|format!("{e}\n{summary}")),
-                    Err(err)=>result.map_err(|e|format!("{e}\nMetrics warning: {err}")),
+                let telemetry=match metrics_for_report.finish(&workspace_for_report,mode,start,result.is_ok(),&evidence_for_report){
+                    Ok(summary)=>summary,
+                    Err(err)=>format!("Metrics warning: {err}"),
                 };
-                let _ = tx.send(ResultMessage::Chat(result));
+                let _ = tx.send(ResultMessage::Chat { answer: result, telemetry });
             });
         }
     }
@@ -524,17 +524,22 @@ impl App {
             ResultMessage::ModelReady(Err(error)) => {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
-            ResultMessage::Chat(Ok(text)) => {
+            ResultMessage::Chat { answer: Ok(text), telemetry } => {
                 if let (Some(store), Some(user)) = (&self.memory, self.last_question.take()) {
                     if let Err(err) = store.record(&user, &text) {
                         self.output.push_str(&format!("Memory write warning: {err}\n"));
                     }
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
-                self.output.push_str(&format!("{text}\n"));
+                self.output.push_str(&format!("{text}\n\n{telemetry}\n"));
             }
             ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
-            ResultMessage::Chat(Err(error)) | ResultMessage::Shell(Err(error)) => {
+            ResultMessage::Chat { answer: Err(error), telemetry } => {
+                self.last_question = None;
+                self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
+                if self.history.last().is_some_and(|m| m.role == "user") { self.history.pop(); }
+            }
+            ResultMessage::Shell(Err(error)) => {
                 self.last_question = None;
                 self.output.push_str(&format!("Error: {error}\n"));
                 // Retry should not include an unanswered question in context.
