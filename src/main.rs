@@ -4,7 +4,7 @@ use std::{
     env,
     error::Error,
     io::{self, Stdout},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -64,6 +64,7 @@ struct App {
     scroll: u16,
     follow_output: bool,
     busy: bool,
+    started_at: Option<Instant>,
     model_ready: bool,
     model: String,
     ollama_url: String,
@@ -113,6 +114,7 @@ impl App {
             scroll: 0,
             follow_output: true,
             busy: false,
+            started_at: None,
             model_ready: false,
             workspace,
             memory,
@@ -253,6 +255,7 @@ impl App {
         }
 
         self.busy = true;
+        self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
             let command = command.trim().to_owned();
             tokio::spawn(async move {
@@ -285,6 +288,7 @@ impl App {
 
     fn complete(&mut self, result: ResultMessage) {
         self.busy = false;
+        self.started_at = None;
         match result {
             ResultMessage::ModelReady(Ok(model)) => {
                 self.model = model.clone();
@@ -464,8 +468,18 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             frame.set_cursor_position((chunks[0].x + 1 + visible_width as u16, chunks[0].y + 1));
         }
 
+        const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+        let title = if app.busy {
+            let elapsed = app.started_at.map(|start| start.elapsed()).unwrap_or_default();
+            let frame = FRAMES[((elapsed.as_millis() / 100) as usize) % FRAMES.len()];
+            format!("Answer {frame} Thinking... {}s", elapsed.as_secs())
+        } else if !app.model_ready && app.provider == "ollama" {
+            "Answer · Preparing model".to_owned()
+        } else {
+            "Answer · Ready".to_owned()
+        };
         let output = Paragraph::new(app.output.as_str())
-            .block(Block::default().title(if app.busy { "Answer (working...)" } else { "Answer" }).borders(Borders::ALL))
+            .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         if app.follow_output {
             let visible_rows = chunks[1].height.saturating_sub(2) as usize;
