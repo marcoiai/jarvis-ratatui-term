@@ -61,7 +61,9 @@ impl Profile {
 pub fn explicit_alignment(input:&str)->Option<(&'static str,&'static str)>{
     let normalized=input.trim().trim_end_matches(['.', '!', '?']).trim()
         .to_lowercase().replace("ê","e").replace("é","e");
-    let phrase=normalized.strip_suffix(" por favor").unwrap_or(&normalized).trim();
+    let phrase=normalized.strip_suffix(" por favor")
+        .or_else(||normalized.strip_suffix(" please"))
+        .unwrap_or(&normalized).trim();
     // Match a small intent grammar, not a list of every accented/polite variant.
     // Only exact standalone preference commands are persisted; ordinary questions
     // containing language names should still reach the conversation.
@@ -92,6 +94,7 @@ mod tests{
         assert_eq!(explicit_alignment("pode falar em português?"),Some(("language","pt-BR")));
         assert!(explicit_alignment("explique como configurar o idioma portugues").is_none());
         assert_eq!(explicit_alignment("in english please"),Some(("language","en")));
+        assert_eq!(explicit_alignment("respond in english please"),Some(("language","en")));
         assert!(explicit_alignment("analise o projeto").is_none());
     }
     #[test] fn validates_preferences(){
