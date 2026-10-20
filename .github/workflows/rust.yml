@@ -1,0 +1,26 @@
+name: Rust checks
+on:
+  push:
+    branches: [main, feat/ollama-local-provider]
+  pull_request:
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Existing source files are not yet rustfmt-clean; format CI checkout so
+      # compiler/test/lint checks still execute. Repository-wide fmt is separate.
+      - name: Format CI checkout
+        run: cargo fmt --all
+      - name: Check
+        run: cargo check
+      - name: Tests
+        run: cargo test
+      - name: Clippy
+        run: cargo clippy --all-targets

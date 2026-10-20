@@ -1,1 +1,0 @@
-export API_KEY="AIzaSyBuoy2mFW-4AI6n3JPDNm-H1eijd5p0EZ8"
