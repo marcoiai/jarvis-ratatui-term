@@ -1,3 +1,4 @@
+mod metrics;
 mod router;
 mod knowledge;
 mod evidence;
@@ -296,6 +297,11 @@ impl App {
             self.output.push_str(&format!("Solo role provider update: {result:?}\n"));
             return;
         }
+        if input == "/metrics" {
+            self.output.push_str(&metrics::recent(&self.workspace));
+            self.output.push('\n');
+            return;
+        }
         if input == "/knowledge" {
             self.output.push_str(&knowledge::list(&self.workspace).unwrap_or_else(|e|format!("Knowledge error: {e}")));
             self.output.push_str("Review: /knowledge approve ID | /knowledge reject ID\n");
@@ -391,6 +397,7 @@ impl App {
             let roles = self.roles.clone();
             let route = selection;
             let evidence = evidence::EvidenceCache::default();
+            let metrics = metrics::Metrics::default();
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
             let ollama_model = self.model.clone();
@@ -429,12 +436,26 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
-                let result = if matches!(&route, router::Route::Symphony) {
+                let is_symphony=matches!(&route, router::Route::Symphony);
+                let start=Instant::now();
+                let metrics_for_report=metrics.clone();
+                let evidence_for_report=evidence.clone();
+                let workspace_for_report=workspace.clone();
+                let solo_provider=roles.selected_provider().to_owned();
+                let result = if is_symphony {
                     run_symphony(&client, &roles, messages, workspace, &url,
-                        &ollama_model, &groq_model, &gemini_model, evidence).await
+                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone()).await
                 } else {
-                    query_provider(&client, roles.selected_provider(), messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence).await
+                    let solo_start=Instant::now();
+                    let result=query_provider(&client, &solo_provider, messages, workspace,
+                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence).await;
+                    metrics.stage("Solo",&solo_provider,solo_start,result.is_ok());
+                    result
+                };
+                let mode=if is_symphony {"symphony"}else{"solo"};
+                let result=match metrics_for_report.finish(&workspace_for_report,mode,start,result.is_ok(),&evidence_for_report){
+                    Ok(summary)=>result.map(|answer|format!("{answer}\n\n{summary}")).map_err(|e|format!("{e}\n{summary}")),
+                    Err(err)=>result.map_err(|e|format!("{e}\nMetrics warning: {err}")),
                 };
                 let _ = tx.send(ResultMessage::Chat(result));
             });
@@ -510,9 +531,11 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             "Original user request:\n{question}\n\nStructured evidence from read-only tools:\n{collected}\n\nPrevious stage findings:\n{}\n",
             if shared.is_empty() {"(none)"} else {&shared}
         )});
-        let response=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model,index == 0,evidence.clone()).await
-            .map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
+        let stage_start=Instant::now();
+        let result=query_provider(client,provider,stage,workspace.clone(),host,
+            local_model,groq_model,gemini_model,index == 0,evidence.clone()).await;
+        metrics.stage(name,provider,stage_start,result.is_ok());
+        let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {
             const MARKER: &str = "DUDE_KNOWLEDGE_JSON:";
             if let Some(pos)=response.rfind(MARKER) {
