@@ -1,3 +1,4 @@
+mod credentials;
 mod cloud;
 mod roles;
 mod memory;
@@ -61,6 +62,7 @@ enum ResultMessage {
 
 struct App {
     input: String,
+    key_prompt: Option<String>,
     output: String,
     history: Vec<Message>,
     scroll: u16,
@@ -104,6 +106,7 @@ impl App {
         }
         Self {
             input: String::new(),
+            key_prompt: None,
             output: String::from(concat!(
                 "D.U.D.E. — Demented Unified Development Entity\n",
                 "Enova Engineering Assistant | Local AI Mode\n\n",
@@ -133,6 +136,17 @@ impl App {
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
                 .trim_end_matches('/')
                 .to_string(),
+        }
+    }
+
+    fn receive_key(&mut self) {
+        if let Some(provider)=self.key_prompt.take() {
+            let key=std::mem::take(&mut self.input);
+            let result=credentials::save(&provider,&key);
+            self.output.push_str(&match result{
+                Ok(())=>format!("\n{provider} API key stored in ~/.config/dude with restricted permissions.\n"),
+                Err(e)=>format!("\nCould not store {provider} API key: {e}\n")
+            });
         }
     }
 
@@ -191,6 +205,28 @@ impl App {
                 }
                 Ok(_) => self.output.push_str("Workspace path is not a directory.\n"),
                 Err(error) => self.output.push_str(&format!("Cannot open workspace: {error}\n")),
+            }
+            return;
+        }
+        if input == "/apikey" {
+            self.output.push_str(&format!("Gemini: {} | Groq: {}\n",
+                if credentials::get("gemini").is_some() {"configured"} else {"missing"},
+                if credentials::get("groq").is_some() {"configured"} else {"missing"}));
+            self.output.push_str("Use /apikey gemini or /apikey groq to enter a masked key. /apikey clear PROVIDER removes saved key.\n");
+            return;
+        }
+        if let Some(provider)=input.strip_prefix("/apikey clear ") {
+            let result=credentials::clear(provider.trim());
+            self.output.push_str(&format!("Remove saved key: {result:?}\n"));
+            return;
+        }
+        if let Some(provider)=input.strip_prefix("/apikey ") {
+            match provider.trim() {
+                "gemini" | "groq" => {
+                    self.key_prompt=Some(provider.trim().to_string());
+                    self.output.push_str(&format!("Enter {} API key (hidden). Enter to save, Esc to cancel.\n",provider.trim()));
+                }
+                _=>self.output.push_str("Use /apikey gemini or /apikey groq.\n"),
             }
             return;
         }
@@ -340,8 +376,8 @@ impl App {
                 return;
             }
             let missing = participants.iter().find_map(|p| match *p {
-                "groq" if env::var("GROQ_API_KEY").is_err() => Some("GROQ_API_KEY"),
-                "gemini" if env::var("GEMINI_API_KEY").is_err() && env::var("GOOGLE_API_KEY").is_err() => Some("GEMINI_API_KEY or GOOGLE_API_KEY"),
+                "groq" if credentials::get("groq").is_none() => Some("GROQ_API_KEY"),
+                "gemini" if credentials::get("gemini").is_none() => Some("GEMINI_API_KEY or GOOGLE_API_KEY"),
                 "openai" => Some("OpenAI adapter (not yet enabled)"),
                 _ => None
             });
@@ -566,8 +602,12 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             visible.insert(0, ch);
             visible_width += char_width;
         }
+        if app.key_prompt.is_some() {
+            visible = "*".repeat(app.input.chars().count().min(input_width.saturating_sub(1)));
+            visible_width=visible.len();
+        }
         let input = Paragraph::new(visible)
-            .block(Block::default().title("DUDE - input").borders(Borders::ALL))
+            .block(Block::default().title(if app.key_prompt.is_some() {"DUDE - secret API key"} else {"DUDE - input"}).borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
         frame.render_widget(input, chunks[0]);
         if input_width > 0 && chunks[0].height > 2 {
@@ -646,10 +686,14 @@ async fn run(
                     continue;
                 }
                 match code {
+                    KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
                     KeyCode::Esc => break,
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
                     KeyCode::Enter => app.submit(tx.clone(), client.clone()),
                     KeyCode::Backspace => { app.input.pop(); }
+                    KeyCode::Up if app.key_prompt.is_some() => {},
+                    KeyCode::Down if app.key_prompt.is_some() => {},
                     KeyCode::Up => { app.follow_output = false; app.scroll = app.scroll.saturating_sub(1); },
                     KeyCode::Down => { app.follow_output = false; app.scroll = app.scroll.saturating_add(1).min(60_000); },
                     KeyCode::Char(c) => app.input.push(c),
