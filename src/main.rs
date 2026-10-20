@@ -42,6 +42,8 @@ struct Message {
 #[derive(Deserialize)]
 struct OllamaReply {
     message: MessageReply,
+    prompt_eval_count: Option<u64>,
+    eval_count: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -448,7 +450,7 @@ impl App {
                 } else {
                     let solo_start=Instant::now();
                     let result=query_provider(&client, &solo_provider, messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence).await;
+                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence, metrics.clone()).await;
                     metrics.stage("Solo",&solo_provider,solo_start,result.is_ok());
                     result
                 };
@@ -499,9 +501,9 @@ impl App {
 
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
-    gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache) -> Result<String,String> {
+    gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
     match provider {
-        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence).await,
+        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence).await,
         other => Err(format!("Unsupported provider: {other}")),
@@ -533,7 +535,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         )});
         let stage_start=Instant::now();
         let result=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model,index == 0,evidence.clone()).await;
+            local_model,groq_model,gemini_model,index == 0,evidence.clone(),metrics.clone()).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {
@@ -568,6 +570,7 @@ async fn ask_ollama(
     workspace: PathBuf,
     allow_tools: bool,
     evidence: evidence::EvidenceCache,
+    metrics: metrics::Metrics,
 ) -> Result<String, String> {
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
@@ -590,6 +593,7 @@ async fn ask_ollama(
             return Err(format!("Ollama HTTP {status}: {body}"));
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
+        if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
             return Ok(reply.message.content);
         }
