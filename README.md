@@ -117,3 +117,7 @@ Cloud API keys can be entered without environment variables:
 After `/apikey gemini` or `/apikey groq`, type the key into the **masked input** and press Enter. Esc cancels. Missing cloud keys also trigger this prompt before a request is sent. Secrets are never written to chat history, project memory or the repository. Saved credentials live in `~/.config/dude/gemini.key` or `~/.config/dude/groq.key` with owner-only permissions on Unix; existing environment variables take precedence. The current question needs to be sent again after saving a prompted missing key. `/cloud allow` remains separately required to authorize sending project context to external services.
 
 This stores keys in local restricted files, not the operating system's encrypted keychain; protect access to your home directory.
+
+## Groq rate limits in Symphony
+
+A Groq HTTP 429 can occur when Investigator, Architect and Reviewer share the account's token-per-minute quota. The Groq adapter now retries up to three times after the initial request, honoring the suggested retry delay in seconds (or Retry-After when available), with a 75-second cap on each delay. Intermediate Symphony handoffs are capped at 5,000 characters per stage and should be concise. If the quota is still unavailable, the request fails without claiming a completed Symphony answer. Workspace switches deliberately revoke `/cloud allow`; authorize again after changing projects.
