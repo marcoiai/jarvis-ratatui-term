@@ -527,8 +527,47 @@ impl App {
                         &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(), tx.clone()).await
                 } else {
                     let solo_start=Instant::now();
-                    let result=query_provider(&client, &solo_provider, messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence, metrics.clone(), Some(tx.clone())).await;
+                    let question = messages.iter().rev().find(|m| m.role == "user")
+                        .map(|m| m.content.clone()).unwrap_or_default();
+                    let result=query_provider(&client, &solo_provider, messages, workspace.clone(),
+                        &url, &ollama_model, &groq_model, &gemini_model, true,
+                        evidence.clone(), metrics.clone(), Some(tx.clone())).await;
+                    // Knowledge extraction is a separate, read-only pass. Never send
+                    // extraction JSON to the UI or let a model promote memory itself.
+                    let result = match result {
+                        Ok(answer) if evidence.len() > 0 => {
+                            let evidence_text = evidence.export();
+                            let prompt = format!(
+                                "Extract up to 6 reusable, project-specific factual knowledge candidates from the answer below. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
+                                question.chars().take(1000).collect::<String>(),
+                                answer.chars().take(5500).collect::<String>(),
+                                evidence_text.chars().take(16000).collect::<String>()
+                            );
+                            let extraction = vec![
+                                Message {role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into()},
+                                Message {role: "user".into(), content: prompt},
+                            ];
+                            let discovered = query_provider(&client, &solo_provider, extraction, workspace.clone(),
+                                &url, &ollama_model, &groq_model, &gemini_model, false,
+                                evidence.clone(), metrics.clone(), None).await;
+                            match discovered {
+                                Ok(raw) => {
+                                    let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
+                                        .trim_end_matches("```").trim();
+                                    if let Ok(drafts) = serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
+                                        match knowledge::propose(&workspace, &question, &drafts, &evidence) {
+                                            Ok(ids) if !ids.is_empty() =>
+                                                Ok(format!("{answer}\\n\\nKnowledge: {} candidato(s) para sua aprovação.", ids.len())),
+                                            Ok(_) => Ok(answer),
+                                            Err(error) => Ok(format!("{answer}\\n\\nKnowledge: falha ao guardar candidatos: {error}")),
+                                        }
+                                    } else { Ok(answer) }
+                                }
+                                Err(_) => Ok(answer), // Knowledge is optional; never break the user's answer.
+                            }
+                        }
+                        other => other,
+                    };
                     metrics.stage("Solo",&solo_provider,solo_start,result.is_ok());
                     result
                 };
