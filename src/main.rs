@@ -504,8 +504,8 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
     match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics).await,
-        "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence).await,
-        "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence).await,
+        "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
+        "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
     }
 }
