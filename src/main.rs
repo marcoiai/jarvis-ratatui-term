@@ -555,16 +555,17 @@ impl App {
                                 Ok(raw) => {
                                     let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
                                         .trim_end_matches("```").trim();
-                                    if let Ok(drafts) = serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
-                                        match knowledge::propose(&workspace, &question, &drafts, &evidence) {
+                                    match serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
+                                        Ok(drafts) => match knowledge::propose(&workspace, &question, &drafts, &evidence) {
                                             Ok(ids) if !ids.is_empty() =>
-                                                Ok(format!("{answer}\\n\\nKnowledge: {} candidato(s) para sua aprovação.", ids.len())),
-                                            Ok(_) => Ok(answer),
-                                            Err(error) => Ok(format!("{answer}\\n\\nKnowledge: falha ao guardar candidatos: {error}")),
-                                        }
-                                    } else { Ok(answer) }
+                                                Ok(format!("{answer}\\n\\n🧠 Knowledge: {} candidato(s) aguardando tua aprovação.", ids.len())),
+                                            Ok(_) => Ok(format!("{answer}\\n\\n🧠 Knowledge: nenhum candidato novo verificável. Use /knowledge para consultar pendências.")),
+                                            Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: falha ao guardar candidatos: {error}")),
+                                        },
+                                        Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração inválida ({error}). Nenhum conhecimento novo foi salvo.")),
+                                    }
                                 }
-                                Err(_) => Ok(answer), // Knowledge is optional; never break the user's answer.
+                                Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração indisponível ({error}). Nenhum conhecimento novo foi salvo.")),
                             }
                         }
                         other => other,
