@@ -1,3 +1,4 @@
+mod investigation;
 mod alignment;
 mod environment;
 mod metrics;
@@ -555,6 +556,14 @@ impl App {
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
+    let mut messages = messages;
+    if allow_tools {
+        let root = workspace.clone();
+        let overview = tokio::task::spawn_blocking(move || investigation::overview(&root))
+            .await.map_err(|e| e.to_string())?;
+        messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
+        messages.push(Message { role: "user".into(), content: overview });
+    }
     match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
@@ -628,14 +637,20 @@ async fn ask_ollama(
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
     }).collect();
-    for _ in 0..(if allow_tools { 8 } else { 1 }) {
+    let rounds = if allow_tools { investigation::tool_rounds() } else { 0 };
+    for round in 0..=rounds {
+        let tools_enabled = allow_tools && round < rounds;
+        if allow_tools && !tools_enabled {
+            conversation.push(json!({"role":"user","content":investigation::FINALIZE}));
+        }
         let response = client
             .post(format!("{host}/api/chat"))
             .json(&json!({
                 "model": model,
                 "messages": conversation,
                 "stream": false,
-                "tools": if allow_tools { file_tools::definitions() } else { Vec::new() },
+                "options": { "num_ctx": investigation::context_size() },
+                "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
             }))
             .send()
             .await
@@ -650,7 +665,7 @@ async fn ask_ollama(
         if reply.message.tool_calls.is_empty() {
             return Ok(reply.message.content);
         }
-        if !allow_tools { return Err("Unexpected Ollama tool call in review-only stage".into()); }
+        if !tools_enabled { return Err("Ollama requested tools during final synthesis; try another model or a narrower request.".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
             json!({"type":"function","function":{
                 "name": call.function.name,
@@ -669,7 +684,7 @@ async fn ask_ollama(
             conversation.push(json!({"role":"tool","content":output}));
         }
     }
-    Err("Too many tool calls in one request (limit 8 rounds).".into())
+    Err("Ollama ended without a final response".into())
 }
 
 async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> Result<String, String> {

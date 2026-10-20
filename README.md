@@ -40,7 +40,7 @@ This branch replaces the original Gemini shell script. The obsolete Gemini shell
 
 - One active request at a time; the UI stays interactive.
 - For safety, `!` runs programs without `sh -c` or `bash -c`. It is still arbitrary command execution by the local user.
-- No built-in credential storage.
+- `/apikey` manages saved Gemini/Groq credentials.
 
 ## Persistent AI Co-Engineering memory
 
@@ -199,3 +199,18 @@ DUDE_ICON_STYLE=ascii cargo run   # portable, no special font required
 ```
 
 The status is refreshed on startup, after switching workspaces, and with `/env refresh`. Newer binary changes require restarting DUDE after `git pull` and recompilation.
+
+## Investigation limits and remote Ollama
+
+```sh
+OLLAMA_HOST=http://10.10.10.159:11434 \
+OLLAMA_MODEL=qwen3:4b-instruct-2507-q4_K_M \
+OLLAMA_NUM_CTX=16384 DUDE_TOOL_ROUNDS=12 \
+DUDE_WORKSPACE=/path/to/project cargo run --release
+```
+
+`OLLAMA_NUM_CTX` defaults to 16384 (valid range 4096–131072); choose a value supported by your model and available memory. `DUDE_TOOL_ROUNDS` defaults to 8 (valid range 1–32); this limits model/tool rounds, not individual calls. Invalid settings use the default. Ollama, Groq and Gemini reserve one additional request without tools to synthesize the evidence when this budget is exhausted. Provider/network/context errors can still interrupt synthesis.
+
+Before tool-enabled investigation, DUDE supplies a bounded filename inventory (up to 200 entries, depth 3). Hidden paths, symlinks and common dependency/build directories are omitted. This is a sample, not an exhaustive audit. Investigation guidance asks the model to cover major areas, cite evidence and disclose gaps; this is not a deterministic per-module scheduler. Larger projects may require focused follow-up requests. Context/history compaction is not yet implemented.
+
+`/apikey` shows key status. `/apikey gemini` and `/apikey groq` open masked entry; `/apikey clear PROVIDER` removes a saved key. Keys are stored by the existing credentials module; `/cloud allow` is still required for cloud use. Ollama does not require a key.

@@ -17,7 +17,7 @@ pub fn route(input:&str, mode:&str)->Route {
     let query=input.trim();
     let lower=query.to_lowercase();
     if matches!(lower.as_str(), "?" | "help" | "/help") {
-        return Route::Local("DUDE commands: /help, /roles, /mode solo|symphony, /solo ROLE, /role ROLE PROVIDER, /workspace PATH, /memory, /knowledge, /cloud allow, /clear.\nAsk a specific question to begin. Force full orchestration with 'symphony: YOUR QUESTION'.".into());
+        return Route::Local("DUDE commands: /help, /roles, /mode solo|symphony, /solo ROLE, /role ROLE PROVIDER, /workspace PATH, /memory, /knowledge, /cloud allow|deny, /clear, /provider PROVIDER, /model NAME, /apikey, /apikey gemini|groq (masked entry), /apikey clear PROVIDER, /env, /align, /metrics.\nOllama: OLLAMA_NUM_CTX (default 16384). Investigation: DUDE_TOOL_ROUNDS (default 8, max 32).\nAsk a specific question to begin. Force full orchestration with 'symphony: YOUR QUESTION'.".into());
     }
     if matches!(lower.as_str(),"oi"|"olá"|"ola"|"hey"|"hi"|"hello"|"bom dia"|"boa tarde"|"boa noite"|"eae"|"e aí") {
         return Route::Local("Hey dude! Ask me something about your project. Use /help for commands. 🦀".into());
