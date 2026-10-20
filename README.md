@@ -57,3 +57,11 @@ Type `/memory` or `/coeng status` to see current project context. The system con
 **Privacy:** `.dude/` can contain proprietary material. Do not commit or share it accidentally; add `.dude/` to your project's `.gitignore`. The built-in AI file tools block reading it. This is a first-step implementation of the co-engineering methodology, not automatic verification of facts or a secure storage vault.
 
 Principles adopted from the [AI Co-Engineering research](https://github.com/marcoiai/human-ai-coengineering): evidence over novelty, justified engineering decisions, explicit uncertainty and traceability. Recorded decisions are not automatically validated or approved. Always review them.
+
+## Groq Cloud (opt-in)
+
+Groq chat is available through an OpenAI-compatible Chat Completions endpoint. Configure `GROQ_API_KEY` in the shell before launching DUDE. You may set `GROQ_MODEL` (default `llama-3.3-70b-versatile`; check live model availability in Groq Cloud).
+
+In the TUI, type `/providers` then `/provider groq` to opt into cloud requests; use `/provider ollama` to return to local Qwen. **Selecting Groq sends your current chat and the loaded project context to Groq on subsequent prompts**. Do not select it for confidential projects unless explicitly authorized. The Groq adapter currently supports chat text only, not file tool calling. Your Groq API credentials are separate from OpenAI, Gemini and Ollama.
+
+This is an initial integration, not an audited provider sandbox. The complete provider trait remains on the roadmap.
