@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 use serde_json::{json, Value};
-use crate::{file_tools, credentials, evidence::EvidenceCache, Message};
+use crate::{file_tools, credentials, evidence::EvidenceCache, metrics::Metrics, Message};
 
 async fn tool(workspace: PathBuf, name: String, args: Value, evidence: EvidenceCache) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
@@ -8,7 +8,7 @@ async fn tool(workspace: PathBuf, name: String, args: Value, evidence: EvidenceC
     }).await.map_err(|e| e.to_string())
 }
 
-pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache) -> Result<String, String> {
+pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache, metrics: Metrics) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
     for _ in 0..(if allow_tools { 8 } else { 1 }) {
@@ -34,6 +34,7 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
         let status = response.status();
         if !status.is_success() {return Err(format!("Groq HTTP {status}: {}", response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
         let value: Value = response.json().await.map_err(|e|e.to_string())?;
+        if let (Some(i),Some(o))=(value["usage"]["prompt_tokens"].as_u64(),value["usage"]["completion_tokens"].as_u64()){ metrics.tokens("groq",model,i,o); }
         let msg = &value["choices"][0]["message"];
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
         if calls.is_empty() {return msg["content"].as_str().map(str::to_owned).ok_or_else(||"Groq returned no message".into());}
@@ -73,6 +74,7 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
         let status=response.status();
         if !status.is_success() {return Err(format!("Gemini HTTP {status}: {}",response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
         let value:Value=response.json().await.map_err(|e|e.to_string())?;
+        if let (Some(i),Some(o))=(value["usageMetadata"]["promptTokenCount"].as_u64(),value["usageMetadata"]["candidatesTokenCount"].as_u64()){ metrics.tokens("gemini",model,i,o); }
         let candidate=&value["candidates"][0]["content"];
         let parts=candidate["parts"].as_array().ok_or_else(|| format!("Gemini no content: {}",value.to_string().chars().take(250).collect::<String>()))?;
         let calls:Vec<Value>=parts.iter().filter_map(|p|p.get("functionCall").cloned()).collect();
