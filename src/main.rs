@@ -1025,6 +1025,7 @@ async fn run(
                     KeyCode::Esc => break,
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
+                    KeyCode::Enter if matches!(app.input.trim().to_ascii_lowercase().as_str(), "/exit" | "/quit" | "/sair") => break,
                     KeyCode::Enter => app.submit(tx.clone(), client.clone()),
                     KeyCode::Backspace => { app.input.pop(); }
                     KeyCode::Up if app.key_prompt.is_some() => {},
