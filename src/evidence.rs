@@ -146,6 +146,19 @@ impl EvidenceCache {
 mod tests {
     use super::*;
     #[test]
+    fn only_observed_source_lines_can_be_cited() {
+        let root = std::env::temp_dir().join(format!("dude-reference-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("example.rs"), "first\nsecond\nthird\n").unwrap();
+        let evidence = EvidenceCache::default();
+        evidence.execute(&root, "read_file", &json!({"path":"example.rs","start_line":2,"end_line":2}));
+        assert!(evidence.observed_reference("example.rs:2"));
+        assert!(!evidence.observed_reference("example.rs:1"));
+        assert!(!evidence.observed_reference("other.rs:2"));
+        assert!(!evidence.observed_reference("example.rs"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn file_reads_cache_and_invalidate() {
         let root = std::env::temp_dir().join(format!("dude-evidence-{}",std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
