@@ -48,11 +48,17 @@ impl Memory {
     }
     pub fn remember(&self, text: &str) -> Result<(), String> { self.append("memory.md", text) }
     pub fn decision(&self, text: &str) -> Result<(), String> { self.append("decisions.md", text) }
-    pub fn checkpoint(&self, summary: &str) -> Result<(), String> { self.append("checkpoints.md", summary).or_else(|_| {
-        // First checkpoint.
-        fs::write(self.dir.join("checkpoints.md"), "# Checkpoints\n").map_err(|e|e.to_string())?;
+    pub fn checkpoint(&self, summary: &str) -> Result<(), String> {
+        let path = self.dir.join("checkpoints.md");
+        if !path.exists() {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut f) => f.write_all(b"# Checkpoints\n").map_err(|e|e.to_string())?,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
         self.append("checkpoints.md", summary)
-    }) }
+    }
     pub fn record(&self, user: &str, assistant: &str) -> Result<(), String> {
         let exchange = Exchange {user:user.to_owned(),assistant:assistant.to_owned()};
         let line = serde_json::to_string(&exchange).map_err(|e|e.to_string())?;
