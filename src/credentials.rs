@@ -30,9 +30,8 @@ pub fn save(provider:&str,key:&str)->Result<(),String>{
     #[cfg(unix)]
     fs::set_permissions(&folder,fs::Permissions::from_mode(0o700)).map_err(|e|e.to_string())?;
     let target=path(provider)?;
-    if let Ok(meta)=fs::symlink_metadata(&target){
-        if meta.file_type().is_symlink(){return Err("Refusing symlink credential target".into());}
-    }
+    if let Ok(meta)=fs::symlink_metadata(&target)
+        && meta.file_type().is_symlink() { return Err("Refusing symlink credential target".into()); }
     let tmp=folder.join(format!(".{}-{}.tmp",provider,std::process::id()));
     let result=(||->Result<(),String>{
         let mut options=fs::OpenOptions::new();

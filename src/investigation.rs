@@ -84,11 +84,10 @@ pub fn baseline(root: &Path, evidence: &crate::evidence::EvidenceCache) -> Strin
         let main = evidence.execute(root, "read_file", &serde_json::json!({"path":"src/main.rs","start_line":1,"end_line":100}));
         for line in main.lines() {
             let source = line.split_once(": ").map(|(_,v)|v).unwrap_or("").trim();
-            if let Some(name) = source.strip_prefix("mod ").and_then(|v|v.strip_suffix(';')) {
-                if name.chars().all(|c|c.is_ascii_alphanumeric() || c=='_') {
+            if let Some(name) = source.strip_prefix("mod ").and_then(|v|v.strip_suffix(';'))
+                && name.chars().all(|c|c.is_ascii_alphanumeric() || c=='_') {
                     let path = format!("src/{name}.rs");
                     if paths.len() < 18 && root.join(&path).is_file() && !paths.contains(&path) { paths.push(path); }
-                }
             }
         }
     }

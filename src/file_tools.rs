@@ -79,7 +79,7 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let start = args.get("start_line").and_then(Value::as_u64).unwrap_or(1).clamp(1,100_000) as usize;
             let end = args.get("end_line").and_then(Value::as_u64).unwrap_or((start+199) as u64).clamp(start as u64,100_000) as usize;
             let value = content.lines().enumerate()
-                .filter(|(i,_)| *i+1 >= start && *i+1 <= end)
+                .filter(|(i,_)| *i+1 >= start && *i < end)
                 .map(|(i,l)| format!("{}: {}",i+1,l))
                 .collect::<Vec<_>>().join("\n");
             Ok(value.chars().take(MAX_BYTES).collect())

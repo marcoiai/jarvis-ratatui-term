@@ -28,9 +28,8 @@ impl Environment {
         if let Some(branch)=git(root,&["symbolic-ref","--quiet","--short","HEAD"])
             .or_else(||git(root,&["rev-parse","--short","HEAD"]).map(|v|format!("@{v}"))) {
             git_status=format!("{} {branch}",icon("","🌿","git:"));
-            if let Some(changes)=git(root,&["status","--porcelain","--untracked-files=normal"]) {
-                if !changes.is_empty(){git_status.push_str(" ●");}
-            }
+            if let Some(changes)=git(root,&["status","--porcelain","--untracked-files=normal"])
+                && !changes.is_empty() { git_status.push_str(" ●"); }
         }
         let venv=env::var("VIRTUAL_ENV").ok().filter(|v|!v.is_empty());
         let conda=env::var("CONDA_DEFAULT_ENV").ok().filter(|v|!v.is_empty());

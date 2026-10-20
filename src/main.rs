@@ -443,10 +443,9 @@ impl App {
                 let _ = tx.send(ResultMessage::Shell(result));
             });
         } else {
-            if let Some(store) = &self.memory {
-                if self.history.len() > 2 && self.history[2].role == "system" {
+            if let Some(store) = &self.memory
+                && self.history.len() > 2 && self.history[2].role == "system" {
                     self.history[2].content = store.context();
-                }
             }
             self.last_question = Some(input.clone());
             self.history.push(Message { role: "user".into(), content: input });
@@ -538,10 +537,9 @@ impl App {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
-                if let (Some(store), Some(user)) = (&self.memory, self.last_question.take()) {
-                    if let Err(err) = store.record(&user, &text) {
+                if let (Some(store), Some(user)) = (&self.memory, self.last_question.take())
+                    && let Err(err) = store.record(&user, &text) {
                         self.output.push_str(&format!("Memory write warning: {err}\n"));
-                    }
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
                 if self.streamed { self.output.push_str(&format!("\n\n{telemetry}\n")); }
@@ -584,7 +582,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         let overview = tokio::task::spawn_blocking(move || {
             let mut overview = investigation::overview(&root);
             if bootstrap {
-                overview.push_str("\n");
+                overview.push('\n');
                 overview.push_str(&investigation::baseline(&root, &cache));
             }
             overview
@@ -909,8 +907,8 @@ async fn run(
             app.complete(result);
         }
         draw(terminal, &mut app)?;
-        if event::poll(Duration::from_millis(80))? {
-            if let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
+        if event::poll(Duration::from_millis(80))?
+            && let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
                 if kind != KeyEventKind::Press {
                     continue;
                 }
@@ -928,7 +926,6 @@ async fn run(
                     KeyCode::Char(c) => app.input.push(c),
                     _ => {}
                 }
-            }
         }
     }
     Ok(())

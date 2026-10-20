@@ -30,15 +30,13 @@ impl EvidenceCache {
             })
         } else { None };
         let key = fingerprint.as_ref().map(|stamp| format!("{name}:{args}:{stamp}"));
-        if let Some(key) = &key {
-            if let Ok(cache) = self.entries.lock() {
-                if let Some(item) = cache.get(key) {
-                    self.hits.fetch_add(1, Ordering::Relaxed);
-                    let result = item["result"].as_str().unwrap_or_default().to_owned();
-                    self.record(name, args, started, true, true, &result);
-                    return result;
-                }
-            }
+        if let Some(key) = &key
+            && let Ok(cache) = self.entries.lock()
+            && let Some(item) = cache.get(key) {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                let result = item["result"].as_str().unwrap_or_default().to_owned();
+                self.record(name, args, started, true, true, &result);
+                return result;
         }
         self.calls.fetch_add(1, Ordering::Relaxed);
         let outcome = file_tools::execute(&root, name, args);
@@ -48,34 +46,27 @@ impl EvidenceCache {
             Err(error) => format!("Tool error: {error}"),
         };
         // Never cache errors or a truncated version of a result as if it were complete.
-        if success && result.len() <= 16000 {
-            if let Some(key) = key {
-                if let Ok(mut cache) = self.entries.lock() {
-                    if cache.len() < 80 {
-                        cache.insert(key, json!({"tool":name,"arguments":args,"result":result}));
-                    }
-                }
-            }
+        if success && result.len() <= 16000
+            && let Some(key) = key
+            && let Ok(mut cache) = self.entries.lock()
+            && cache.len() < 80 {
+                cache.insert(key, json!({"tool":name,"arguments":args,"result":result}));
         }
         self.record(name, args, started, false, success, &result);
-        if success {
-            if let Ok(mut records) = self.observations.lock() {
-                if records.len() < 100 {
-                    records.push(json!({"tool":name,"arguments":args,"result":result.chars().take(16000).collect::<String>()}));
-                }
-            }
+        if success && let Ok(mut records) = self.observations.lock()
+            && records.len() < 100 {
+                records.push(json!({"tool":name,"arguments":args,"result":result.chars().take(16000).collect::<String>()}));
         }
         result
     }
     fn record(&self, name: &str, args: &Value, started: Instant, cache_hit: bool, success: bool, result: &str) {
-        if let Ok(mut entries) = self.events.lock() {
-            if entries.len() < 256 {
+        if let Ok(mut entries) = self.events.lock()
+            && entries.len() < 256 {
                 entries.push(json!({
                     "tool":name, "path":args.get("path").and_then(Value::as_str).unwrap_or("."),
                     "cache_hit":cache_hit, "success":success, "elapsed_ms":started.elapsed().as_millis(),
                     "result_bytes":result.len(),
                 }));
-            }
         }
     }
     pub fn events(&self) -> Vec<Value> {
@@ -87,9 +78,8 @@ impl EvidenceCache {
         let mut failures = 0usize;
         for e in events.iter() {
             if e["success"] == false { failures += 1; }
-            if e["tool"] == "read_file" && e["success"] == true {
-                if let Some(path) = e["path"].as_str() { read.insert(path.to_owned()); }
-            }
+            if e["tool"] == "read_file" && e["success"] == true
+                && let Some(path) = e["path"].as_str() { read.insert(path.to_owned()); }
         }
         format!("Source reads: {}. Files: {}. Tool errors: {}. This is sampled coverage, not verification of all modules.",
             read.len(), if read.is_empty() { "(none)".into() } else { read.into_iter().collect::<Vec<_>>().join(", ") }, failures)
