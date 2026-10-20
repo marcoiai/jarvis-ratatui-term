@@ -181,6 +181,9 @@ mod tests {
         let evidence = EvidenceCache::default();
         evidence.execute(&root, "read_file", &json!({"path":"example.rs","start_line":2,"end_line":2}));
         assert!(evidence.observed_reference("example.rs:2"));
+        assert!(evidence.has_supported_citation("Implementação em example.rs:2"));
+        assert!(!evidence.has_supported_citation("Implementação em example.rs:1"));
+        assert!(!evidence.has_supported_citation("Sem referências"));
         assert!(!evidence.observed_reference("example.rs:1"));
         assert!(!evidence.observed_reference("other.rs:2"));
         assert!(!evidence.observed_reference("example.rs"));
