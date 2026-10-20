@@ -12,13 +12,17 @@ fn git(root:&Path,args:&[&str])->Option<String>{
     Some(String::from_utf8_lossy(&result.stdout).trim().chars().take(120).collect())
 }
 fn exists(root:&Path, relative:&str)->bool {root.join(relative).exists()}
+// Nerd Fonts require a Nerd Font-enabled terminal. Set DUDE_ICON_STYLE=unicode for emoji fallback.
+fn icon(nerd:&'static str, unicode:&'static str)->&'static str {
+    if env::var("DUDE_ICON_STYLE").ok().as_deref()==Some("unicode"){unicode}else{nerd}
+}
 impl Environment {
     pub fn detect(root:&Path)->Self{
         let mut tags=Vec::new();
         let mut git_status=String::new();
         if let Some(branch)=git(root,&["symbolic-ref","--quiet","--short","HEAD"])
             .or_else(||git(root,&["rev-parse","--short","HEAD"]).map(|v|format!("@{v}"))) {
-            git_status=format!("🌿 {branch}");
+            git_status=format!("{} {branch}",icon("","🌿"));
             if let Some(changes)=git(root,&["status","--porcelain","--untracked-files=normal"]) {
                 if !changes.is_empty(){git_status.push_str(" ●");}
             }
@@ -26,25 +30,25 @@ impl Environment {
         let venv=env::var("VIRTUAL_ENV").ok().filter(|v|!v.is_empty());
         let conda=env::var("CONDA_DEFAULT_ENV").ok().filter(|v|!v.is_empty());
         if let Some(name)=venv.as_ref().and_then(|v|Path::new(v).file_name()).map(|v|v.to_string_lossy().to_string()) {
-            tags.push(format!("🐍 {name} active"));
+            tags.push(format!("{} {name} active",icon("","🐍")));
         }else if let Some(name)=conda {
-            tags.push(format!("🐍 {name} conda"));
+            tags.push(format!("{} {name} conda",icon("","🐍")));
         } else if exists(root,".venv") || exists(root,"venv") {
-            tags.push("🐍 venv available".into());
+            tags.push(format!("{} venv available",icon("","🐍")));
         }
-        if exists(root,"Cargo.toml"){tags.push("🦀 Rust".into());}
-        if exists(root,"pom.xml") || exists(root,"build.gradle") || exists(root,"build.gradle.kts"){tags.push("☕ Java".into());}
+        if exists(root,"Cargo.toml"){tags.push(format!("{} Rust",icon("","🦀")));}
+        if exists(root,"pom.xml") || exists(root,"build.gradle") || exists(root,"build.gradle.kts"){tags.push(format!("{} Java",icon("","☕")));}
         if exists(root,"composer.json"){
             let framework=if exists(root,"artisan"){" Laravel"}else if exists(root,"bin/console"){" Symfony"}else{""};
-            tags.push(format!("🐘 PHP{framework}"));
+            tags.push(format!("{} PHP{framework}",icon("","🐘")));
         }
-        if exists(root,"package.json"){tags.push("📦 Node".into());}
-        if exists(root,"compose.yaml")||exists(root,"compose.yml")||exists(root,"docker-compose.yml")||exists(root,"Dockerfile"){tags.push("🐳 Docker".into());}
+        if exists(root,"package.json"){tags.push(format!("{} Node",icon("","📦")));}
+        if exists(root,"compose.yaml")||exists(root,"compose.yml")||exists(root,"docker-compose.yml")||exists(root,"Dockerfile"){tags.push(format!("{} Docker",icon("","🐳")));}
         Self{git:git_status,tags,root:root.to_path_buf()}
     }
     pub fn status(&self)->String{
         let dir=self.root.file_name().map(|v|v.to_string_lossy().into_owned()).unwrap_or_else(||self.root.display().to_string());
-        let mut parts=vec![format!("📁 {dir}")];
+        let mut parts=vec![format!("{} {dir}",icon("","📁"))];
         if !self.git.is_empty(){parts.push(self.git.clone());}
         parts.extend(self.tags.clone());
         parts.join("  |  ")
