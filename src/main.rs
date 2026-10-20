@@ -850,7 +850,7 @@ async fn ask_ollama(
                     let value: Value = serde_json::from_slice(line).map_err(|e|format!("Ollama stream JSON: {e}"))?;
                     if let Some(error)=value["error"].as_str(){return Err(error.into());}
                     if let Some(delta)=value["message"]["content"].as_str() {
-                        let visible = filter.push(delta);
+                        let visible = filter.push(delta)?;
                         if !visible.is_empty() {
                             answer.push_str(&visible);
                             if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(visible)); }
