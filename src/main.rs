@@ -510,7 +510,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
-    groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache) -> Result<String,String> {
+    groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
