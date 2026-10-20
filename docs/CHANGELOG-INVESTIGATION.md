@@ -120,3 +120,13 @@
 - Layout reordenado para `input → banner DUDE fixo → conversa rolável → ambiente → ajuda`.
 - `/clear` continua limpando somente a conversa e a rolagem não move a apresentação.
 - Teste visual local ainda necessário.
+
+## 2026-10-20 — Filtro do raciocínio exposto (streaming)
+
+- Reproduzido pelos logs: modelos Ollama podem produzir longa deliberação em `message.content` sem `<think>` inicial, terminando apenas em `</think>`. O filtro anterior emitia o texto imediatamente, antes de saber que era raciocínio.
+- O filtro agora retém saída não delimitada até encontrar `</think>` ou encerrar a resposta; respostas com `<think>` inicial continuam descartando o bloco interno. A leitura final não-streaming usa o mesmo filtro.
+- `ThinkingFilter::push` passa a retornar `Result` para sinalizar buffer de conteúdo indefinido acima de 1 MB; integração Ollama propaga a falha.
+- Testes cobrem fechamento fragmentado, abertura normal, resposta sem tags e limite do buffer.
+- **Trade-off:** respostas normais sem `<think>` agora aparecem somente ao final (streaming visual atrasado); a prioridade é impedir vazamento do raciocínio. O processamento da geração continua acontecendo.
+- A disposição da apresentação DUDE abaixo da entrada não foi alterada.
+- Ainda precisa validar `cargo fmt --check`, `cargo check`, `cargo test` e teste funcional no Mac.
