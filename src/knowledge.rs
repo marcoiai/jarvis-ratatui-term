@@ -41,7 +41,8 @@ pub fn propose(workspace:&Path,question:&str,claims:&[CandidateDraft])->Result<V
     let mut entries=load(workspace)?;
     let mut ids=Vec::new();
     for c in claims.iter().take(12){
-        if c.claim.trim().is_empty() || c.claim.len()>1600 {continue}
+        if c.claim.trim().is_empty() || c.claim.len()>1600 || !matches!(c.classification.as_str(),"documented"|"verified"|"inferred") {continue}
+        if entries.iter().any(|e|e.claim==c.claim && e.status!="rejected"){continue}
         let next=entries.iter().map(|e|e.id).max().unwrap_or(0)+1;
         entries.push(Candidate{id:next,status:"pending".into(),classification:c.classification.clone(),claim:c.claim.trim().into(),evidence:c.evidence.iter().take(5).map(|v|v.chars().take(500).collect()).collect(),question:question.chars().take(1000).collect()});
         ids.push(next);
