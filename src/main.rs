@@ -1043,7 +1043,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(
             Paragraph::new(footer)
                 .block(Block::default().title("Help").borders(Borders::ALL)),
-            chunks[3],
+            chunks[4],
         );
     })?;
     Ok(())
