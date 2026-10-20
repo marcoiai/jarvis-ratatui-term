@@ -1,18 +1,20 @@
-use std::{collections::BTreeMap, path::Path, sync::{Arc, Mutex}};
+use std::{collections::BTreeMap, path::Path, sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}}};
 use serde_json::{json, Value};
 use crate::file_tools;
 
 #[derive(Clone, Default)]
-pub struct EvidenceCache(Arc<Mutex<BTreeMap<String, Value>>>);
+pub struct EvidenceCache(Arc<Mutex<BTreeMap<String, Value>>>, Arc<AtomicUsize>, Arc<AtomicUsize>);
 
 impl EvidenceCache {
     pub fn execute(&self, root: &Path, name: &str, args: &Value) -> String {
         let key = format!("{name}:{}", args);
         if let Ok(cache) = self.0.lock() {
             if let Some(item) = cache.get(&key) {
+                self.2.fetch_add(1, Ordering::Relaxed);
                 return item["result"].as_str().unwrap_or_default().to_owned();
             }
         }
+        self.1.fetch_add(1, Ordering::Relaxed);
         let result = match file_tools::execute(root, name, args) {
             Ok(result) => result,
             Err(error) => return format!("Tool error: {error}"),
@@ -36,4 +38,6 @@ impl EvidenceCache {
         text
     }
     pub fn len(&self) -> usize { self.0.lock().map(|c|c.len()).unwrap_or(0) }
+    pub fn calls(&self) -> usize { self.1.load(Ordering::Relaxed) }
+    pub fn hits(&self) -> usize { self.2.load(Ordering::Relaxed) }
 }
