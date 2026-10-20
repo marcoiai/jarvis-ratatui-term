@@ -497,7 +497,7 @@ async fn ask_ollama(
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
     }).collect();
-    for _ in 0..if allow_tools { 8 } else { 1 } {
+    for _ in 0..(if allow_tools { 8 } else { 1 }) {
         let response = client
             .post(format!("{host}/api/chat"))
             .json(&json!({
