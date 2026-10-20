@@ -1,5 +1,10 @@
 # DUDE — Demented Unified Development Entity
 
+> **Documentação de arquitetura e produto:** [Visão de AI Co-Engineering](docs/VISION.md) · [Especificação funcional/técnica](docs/SPEC.md) · [Arquitetura e diagramas](docs/ARCHITECTURE.md) · [Roadmap e estado real](docs/ROADMAP.md).
+>
+> Os diagramas distinguem o runtime existente da arquitetura-alvo. **O executor supervisionado ainda não está implementado.** GitHub Actions estão desativadas; validação Rust é local.
+
+
 An AI-powered development companion for the terminal, built with Rust, Ratatui and local Ollama. Originally developed as Jarvis. DUDE can serve as both a personal coding assistant and (with future integrations) an Enova/NOVVS engineering assistant.
 
 ## Requirements
