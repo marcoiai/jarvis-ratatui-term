@@ -46,3 +46,9 @@
 - Validar no Mac: `cargo fmt --check`, `cargo check`, `cargo test` e reexecutar análise Solo com Qwen.
 - Próximo passo: exigir pelo menos uma observação do tipo `read_file` e validar conclusões contra referências (uma lista de arquivos não basta).
 \n## 2026-10-20 — Comando para sair\n\n- Adicionados `/exit`, `/quit` e `/sair` no tratamento de Enter da TUI; o loop termina e a rotina existente em `main()` restaura o terminal.\n- Mantidos Esc e Ctrl+C. A atualização também documenta os comandos em `/help` e no README.\n- Validar localmente com `cargo check` e `cargo test`; não executados no Mac pelo conector.\n
+## 2026-10-20 — Knowledge não pergunta ao usuário
+
+- Diagnóstico: no Solo, o segundo passe do modelo tenta extrair JSON de candidatos; quando JSON ou chamada falhava, o resultado era ignorado silenciosamente, sem candidato e sem pergunta.
+- O DUDE agora informa explicitamente se novos candidatos foram criados, se não houve candidato válido, se a extração falhou ou se houve erro de gravação.
+- Candidatos pendentes continuam sendo apresentados para aprovação com o mecanismo existente `ask_next_knowledge()`; nenhuma memória é aprovada sem consentimento.
+- Pendente: melhorar robustez da extração em modelos locais, evitar segundo passe lento quando desnecessário, testar `cargo check` e `cargo test` localmente.
