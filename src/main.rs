@@ -387,6 +387,11 @@ impl App {
                 self.history.pop();
                 self.last_question = None;
                 self.output.push_str(&format!("Provider unavailable: {missing}. No requests sent.\n"));
+                if missing == "GROQ_API_KEY" || missing == "GEMINI_API_KEY or GOOGLE_API_KEY" {
+                    let provider = if missing == "GROQ_API_KEY" { "groq" } else { "gemini" };
+                    self.key_prompt = Some(provider.into());
+                    self.output.push_str(&format!("Enter {provider} API key in the masked input, then press Enter. Resend your previous question after saving. Esc cancels.\n"));
+                }
                 return;
             }
             tokio::spawn(async move {
