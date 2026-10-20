@@ -76,6 +76,22 @@ impl EvidenceCache {
     }
     /// Machine-generated facts about completed source reads. A successful read may be
     /// bounded or truncated; it does not imply full semantic review of a module.
+    /// A reference is valid only when that exact numbered source line was returned
+    /// by a successful read_file tool call in the current investigation.
+    pub fn observed_reference(&self, reference: &str) -> bool {
+        let Some((path, line)) = reference.trim().rsplit_once(':') else { return false; };
+        let Ok(line) = line.trim().parse::<usize>() else { return false; };
+        if line == 0 || path.trim().is_empty() { return false; }
+        let Ok(observations) = self.observations.lock() else { return false; };
+        observations.iter().any(|item| {
+            item["tool"] == "read_file"
+                && item["arguments"]["path"].as_str() == Some(path.trim())
+                && item["result"].as_str().is_some_and(|content| {
+                    let prefix = format!("{line}: ");
+                    content.lines().any(|row| row.starts_with(&prefix))
+                })
+        })
+    }
     pub fn read_manifest(&self) -> String {
         let Ok(events) = self.events.lock() else { return "Source-read manifest unavailable".into(); };
         let mut paths = BTreeSet::new();
@@ -129,6 +145,19 @@ impl EvidenceCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_observed_source_lines_can_be_cited() {
+        let root = std::env::temp_dir().join(format!("dude-reference-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("example.rs"), "first\nsecond\nthird\n").unwrap();
+        let evidence = EvidenceCache::default();
+        evidence.execute(&root, "read_file", &json!({"path":"example.rs","start_line":2,"end_line":2}));
+        assert!(evidence.observed_reference("example.rs:2"));
+        assert!(!evidence.observed_reference("example.rs:1"));
+        assert!(!evidence.observed_reference("other.rs:2"));
+        assert!(!evidence.observed_reference("example.rs"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn file_reads_cache_and_invalidate() {
         let root = std::env::temp_dir().join(format!("dude-evidence-{}",std::process::id()));

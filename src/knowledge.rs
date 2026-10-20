@@ -10,6 +10,8 @@ pub struct Candidate {
     pub claim: String,
     pub evidence: Vec<String>,
     pub question: String,
+    #[serde(default)]
+    pub references_checked: bool,
 }
 fn file(workspace:&Path)->PathBuf {workspace.join(".dude/knowledge_candidates.json")}
 fn load(workspace:&Path)->Result<Vec<Candidate>,String>{
@@ -37,14 +39,21 @@ fn save(workspace:&Path, entries:&[Candidate])->Result<(),String>{
     if result.is_err(){let _=fs::remove_file(tmp);}
     result
 }
-pub fn propose(workspace:&Path,question:&str,claims:&[CandidateDraft])->Result<Vec<u64>,String>{
+pub fn propose(workspace:&Path,question:&str,claims:&[CandidateDraft], observations:&crate::evidence::EvidenceCache)->Result<Vec<u64>,String>{
     let mut entries=load(workspace)?;
     let mut ids=Vec::new();
     for c in claims.iter().take(12){
         if c.claim.trim().is_empty() || c.claim.len()>1600 || !matches!(c.classification.as_str(),"documented"|"verified"|"inferred") {continue}
         if entries.iter().any(|e|e.claim==c.claim && e.status!="rejected"){continue}
         let next=entries.iter().map(|e|e.id).max().unwrap_or(0)+1;
-        entries.push(Candidate{id:next,status:"pending".into(),classification:c.classification.clone(),claim:c.claim.trim().into(),evidence:c.evidence.iter().take(5).map(|v|v.chars().take(500).collect()).collect(),question:question.chars().take(1000).collect()});
+        let references: Vec<String> = c.evidence.iter().take(5)
+            .map(|v|v.chars().take(500).collect()).collect();
+        let checked = !references.is_empty()
+            && references.iter().all(|reference| observations.observed_reference(reference));
+        let classification = if checked { c.classification.clone() } else { "inferred".into() };
+        entries.push(Candidate{id:next,status:"pending".into(),classification,
+            claim:c.claim.trim().into(),evidence:references,question:question.chars().take(1000).collect(),
+            references_checked:checked});
         ids.push(next);
     }
     if !ids.is_empty(){save(workspace,&entries)?;}
@@ -71,7 +80,7 @@ pub fn approve(workspace:&Path,id:u64,memory:&crate::memory::Memory)->Result<(),
     let mut entries=load(workspace)?;
     let item=entries.iter_mut().find(|e|e.id==id && e.status=="pending").ok_or("Candidate not found or already reviewed")?;
     if item.classification!="verified" && item.classification!="documented" {return Err("Only documented or verified claims can be approved as facts; inferred claims require verification".into())}
-    if item.evidence.is_empty(){return Err("Cannot approve a fact without evidence references".into())}
+    if item.evidence.is_empty() || !item.references_checked {return Err("Cannot approve a fact without source lines verified from tool output".into())}
     memory.remember(&format!("[{}] {} | Sources: {}",item.classification,item.claim,item.evidence.join("; ")))?;
     item.status="approved".into();
     save(workspace,&entries)
