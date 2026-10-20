@@ -25,3 +25,23 @@
 - Executar `cargo fmt --check && cargo check && cargo test` no ambiente local (não executados por esta alteração remota).
 - Investigar por que o teste do usuário mostrou zero observações, já que o `baseline()` da versão no GitHub deveria ler arquivos existentes.
 - Em seguida: metas de cobertura de módulos, orçamento e estado explícito de investigação, e integração com Knowledge/perguntas de revisão.
+
+
+## 2026-10-20 — Etapa 2: impedir vazamento de blocos de raciocínio
+
+### Evidência recebida
+- Execução Solo em 306153 ms; 14 observações, 13 arquivos-fonte distintos lidos, 0 erros de ferramenta.
+- A saída mostrava texto intermediário seguido por `</think>` e só depois a resposta.
+- A resposta recomendava configurar `DUDE_TOOL_ROUNDS` apesar de já existir no projeto.
+
+### Implementação
+- Novo `src/response_filter.rs`: filtro incremental dos blocos **explicitamente delimitados** por `<think>...</think>`, inclusive quando a tag chega quebrada entre chunks.
+- `src/main.rs` passa o streaming pelo filtro antes de publicar `ChatChunk` e antes de acrescentar conteúdo ao histórico; aplica o mesmo tratamento à resposta não-streaming sem tool calls.
+- Um bloco `<think>` que não termina gera erro explícito, em vez de publicar raciocínio parcial.
+- Testes unitários cobrindo tags fragmentadas, resposta comum e bloco incompleto.
+
+### Limites e validação
+- Não reduz os tokens ou a duração da inferência do Ollama; apenas impede exposição de blocos reconhecidos na TUI.
+- Pensamento enviado como texto puro, sem delimitadores, não pode ser separado de resposta final com segurança sem alterar o protocolo/modelo.
+- Validar no Mac: `cargo fmt --check`, `cargo check`, `cargo test` e reexecutar análise Solo com Qwen.
+- Próximo passo: exigir pelo menos uma observação do tipo `read_file` e validar conclusões contra referências (uma lista de arquivos não basta).
