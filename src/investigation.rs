@@ -21,9 +21,11 @@ pub fn is_deep_followup(question: &str) -> bool {
 }
 
 pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool {
-    is_technical(question) || (is_deep_followup(question)
-        && previous_user.is_some_and(|previous| is_technical(previous)
-            || needs_baseline(previous)))
+    if is_deep_followup(question) {
+        return previous_user.is_some_and(|previous| is_technical(previous)
+            || needs_baseline(previous));
+    }
+    is_technical(question)
 }
 
 pub fn context_size() -> usize { setting("OLLAMA_NUM_CTX", 16384, 4096, 131072) }
@@ -204,6 +206,8 @@ mod intent_tests {
         assert!(investigation_intent("faça uma análise mais profunda", Some("analise esse projeto")));
         assert!(!investigation_intent("obrigado", Some("analise esse projeto")));
         assert!(!investigation_intent("faça uma análise mais profunda", Some("bom dia")));
+        assert!(!investigation_intent("faça uma análise mais profunda", None));
+        assert!(investigation_intent("analise o arquivo main.rs", None));
     }
     #[test]
     fn conversation_does_not_trigger_investigation() {
