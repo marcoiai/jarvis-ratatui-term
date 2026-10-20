@@ -139,6 +139,27 @@ impl EvidenceCache {
         text.push_str(&format!("\n{}\n{}\n",self.coverage(),self.read_manifest()));
         text
     }
+    /// Whether the report contains at least one file:line pointing to a line
+    /// actually returned by read_file. This is citation presence, NOT claim validation.
+    pub fn has_supported_citation(&self, report: &str) -> bool {
+        let Ok(events) = self.events.lock() else { return false; };
+        let paths: BTreeSet<String> = events.iter()
+            .filter(|event| event["tool"] == "read_file" && event["success"] == true)
+            .filter_map(|event| event["path"].as_str().map(str::to_owned))
+            .collect();
+        drop(events);
+        for path in paths {
+            let needle = format!("{path}:");
+            for (offset, _) in report.match_indices(&needle) {
+                let remainder = &report[offset + needle.len()..];
+                let digits: String = remainder.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+                if !digits.is_empty() && self.observed_reference(&format!("{path}:{digits}")) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
     pub fn source_read_count(&self) -> usize {
         self.events.lock().map(|events| events.iter()
             .filter(|event| event["tool"] == "read_file" && event["success"] == true).count())
