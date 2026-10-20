@@ -91,6 +91,7 @@ struct App {
     communication: alignment::Profile,
     memory: Option<memory::Memory>,
     last_question: Option<String>,
+    pending_knowledge: Option<u64>,
     roles: roles::Roles,
 }
 
@@ -140,6 +141,7 @@ impl App {
             communication,
             memory,
             last_question: None,
+            pending_knowledge: None,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into()),
@@ -175,6 +177,28 @@ impl App {
         self.output.push_str(&format!("\n> {input}\n"));
         self.follow_output = true;
 
+        // A simple answer to a knowledge review is handled locally, never sent to an LLM.
+        if let Some(id) = self.pending_knowledge {
+            let lower = input.to_lowercase();
+            if matches!(lower.as_str(), "sim" | "s" | "yes" | "y") {
+                let result = self.memory.as_ref().ok_or("Memória indisponível".to_string())
+                    .and_then(|memory| knowledge::approve(&self.workspace, id, memory));
+                self.pending_knowledge = None;
+                self.output.push_str(&format!("Knowledge #{id}: {}\\n", if result.is_ok() {"aprovado"} else {"não aprovado"}));
+                if let Err(error) = result { self.output.push_str(&format!("Motivo: {error}\\n")); }
+                self.ask_next_knowledge();
+                return;
+            }
+            if matches!(lower.as_str(), "não" | "nao" | "n" | "no") {
+                let result = knowledge::reject(&self.workspace, id);
+                self.pending_knowledge = None;
+                self.output.push_str(&format!("Knowledge #{id}: {result:?}\\n"));
+                self.ask_next_knowledge();
+                return;
+            }
+            // Do not hijack arbitrary input: other commands and questions remain available.
+            self.pending_knowledge = None;
+        }
         if input == "/align" {
             self.output.push_str(&format!("{}\n",self.communication.describe()));
             return;
@@ -518,6 +542,25 @@ impl App {
         }
     }
 
+    fn ask_next_knowledge(&mut self) {
+        match knowledge::next_pending(&self.workspace) {
+            Ok(Some(candidate)) => {
+                self.pending_knowledge = Some(candidate.id);
+                let supported = (candidate.classification == "verified" || candidate.classification == "documented")
+                    && !candidate.evidence.is_empty();
+                self.output.push_str(&format!(
+                    "\\n🧠 Conhecimento proposto #{} [{}]: {}\\nEvidências: {}\\n{}\\n",
+                    candidate.id, candidate.classification, candidate.claim,
+                    if candidate.evidence.is_empty() {"(nenhuma)".to_string()} else {candidate.evidence.join("; ")},
+                    if supported {"Salvar na memória? (sim/não; ou /knowledge para revisar)"}
+                    else {"Ainda não verificável como fato. Use /knowledge para revisar; responda não para descartar."}
+                ));
+            }
+            Ok(None) => self.pending_knowledge = None,
+            Err(error) => self.output.push_str(&format!("Aviso Knowledge: {error}\\n")),
+        }
+    }
+
     fn complete(&mut self, result: ResultMessage) {
         if let ResultMessage::ChatChunk(ref chunk) = result {
             self.streamed = true;
@@ -544,6 +587,7 @@ impl App {
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
                 if self.streamed { self.output.push_str(&format!("\n\n{telemetry}\n")); }
                 else { self.output.push_str(&format!("{text}\n\n{telemetry}\n")); }
+                self.ask_next_knowledge();
             }
             ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
             ResultMessage::Chat { answer: Err(error), telemetry } => {
