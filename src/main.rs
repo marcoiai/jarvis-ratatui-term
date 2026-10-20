@@ -400,7 +400,7 @@ impl App {
                         &ollama_model, &groq_model, &gemini_model).await
                 } else {
                     query_provider(&client, roles.selected_provider(), messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model).await
+                        &url, &ollama_model, &groq_model, &gemini_model, true).await
                 };
                 let _ = tx.send(ResultMessage::Chat(result));
             });
@@ -444,11 +444,11 @@ impl App {
 
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
-    gemini_model: &str) -> Result<String,String> {
+    gemini_model: &str, allow_tools: bool) -> Result<String,String> {
     match provider {
-        "ollama" => ask_ollama(client, host, local_model, messages, workspace).await,
-        "groq" => cloud::groq(client, groq_model, messages, workspace).await,
-        "gemini" => cloud::gemini(client, gemini_model, messages, workspace).await,
+        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools).await,
+        "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools).await,
+        "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools).await,
         other => Err(format!("Unsupported provider: {other}")),
     }
 }
@@ -460,9 +460,9 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
         ("Architect", roles.architect.as_str(),
-            "Use the investigator's findings to propose a grounded engineering solution. Make tradeoffs, uncertainties and evidence explicit. Keep your handoff below 700 words; do not repeat the investigation verbatim."),
+            "Do not re-open files; use evidence provided by Investigator. Use the investigator's findings to propose a grounded engineering solution. Make tradeoffs, uncertainties and evidence explicit. Keep your handoff below 700 words; do not repeat the investigation verbatim."),
         ("Reviewer", roles.reviewer.as_str(),
-            "Review the investigator and architect work critically. Correct unsupported claims. Produce ONE final answer to the user with conclusions and unresolved uncertainties. Do not reveal a multi-agent transcript."),
+            "Do not re-open files; use the shared evidence. Review the investigator and architect work critically. Correct unsupported claims. Produce ONE final answer to the user with conclusions and unresolved uncertainties. Do not reveal a multi-agent transcript."),
     ];
     let mut shared = String::new();
     let question = messages.iter().rev().find(|m|m.role=="user")
@@ -476,7 +476,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if shared.is_empty() {"(none)"} else {&shared}
         )});
         let response=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model).await
+            local_model,groq_model,gemini_model,index == 0).await
             .map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {return Ok(response);}
         // Bound cost and payload sent to downstream providers.
@@ -492,18 +492,19 @@ async fn ask_ollama(
     model: &str,
     messages: Vec<Message>,
     workspace: PathBuf,
+    allow_tools: bool,
 ) -> Result<String, String> {
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
     }).collect();
-    for _ in 0..8 {
+    for _ in 0..if allow_tools { 8 } else { 1 } {
         let response = client
             .post(format!("{host}/api/chat"))
             .json(&json!({
                 "model": model,
                 "messages": conversation,
                 "stream": false,
-                "tools": file_tools::definitions(),
+                "tools": if allow_tools { file_tools::definitions() } else { Vec::new() },
             }))
             .send()
             .await
@@ -517,6 +518,7 @@ async fn ask_ollama(
         if reply.message.tool_calls.is_empty() {
             return Ok(reply.message.content);
         }
+        if !allow_tools { return Err("Unexpected Ollama tool call in review-only stage".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
             json!({"type":"function","function":{
                 "name": call.function.name,
