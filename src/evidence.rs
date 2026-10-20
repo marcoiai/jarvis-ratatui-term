@@ -137,6 +137,11 @@ impl EvidenceCache {
         text.push_str(&format!("\n{}\n{}\n",self.coverage(),self.read_manifest()));
         text
     }
+    pub fn source_read_count(&self) -> usize {
+        self.events.lock().map(|events| events.iter()
+            .filter(|event| event["tool"] == "read_file" && event["success"] == true).count())
+            .unwrap_or(0)
+    }
     pub fn len(&self) -> usize { self.observations.lock().map(|c|c.len()).unwrap_or(0) }
     pub fn calls(&self) -> usize { self.calls.load(Ordering::Relaxed) }
     pub fn hits(&self) -> usize { self.hits.load(Ordering::Relaxed) }
