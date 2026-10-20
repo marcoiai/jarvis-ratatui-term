@@ -119,6 +119,37 @@ pub fn baseline(root: &Path, evidence: &crate::evidence::EvidenceCache) -> Strin
     ];
     let mut paths: Vec<String> = candidates.iter().filter(|p|root.join(p).is_file())
         .take(12).map(|p|(*p).to_owned()).collect();
+    // Laravel: inspect actual HTTP entry points and application behavior, not just manifests.
+    // Fixed representative paths remain bounded and pass through read-only file tools.
+    if root.join("artisan").is_file() && root.join("composer.json").is_file() {
+        for p in [
+            "routes/web.php", "routes/api.php", "routes/console.php",
+            "bootstrap/app.php", "config/database.php",
+            "app/Models/User.php", "app/Http/Controllers/Controller.php",
+            "tests/Feature/ExampleTest.php",
+        ] {
+            if paths.len() >= 20 { break; }
+            if root.join(p).is_file() && !paths.iter().any(|v| v == p) {
+                paths.push(p.into());
+            }
+        }
+        // Representative first-level controllers and models, sorted for reproducibility.
+        for folder in ["app/Http/Controllers", "app/Models", "app/Services"] {
+            if paths.len() >= 24 { break; }
+            if let Ok(entries) = fs::read_dir(root.join(folder)) {
+                let mut entries: Vec<_> = entries.filter_map(Result::ok)
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(".php"))
+                    .collect();
+                entries.sort_by_key(|e| e.file_name());
+                for entry in entries.into_iter().take(2) {
+                    if paths.len() >= 24 { break; }
+                    let path = format!("{folder}/{}", entry.file_name().to_string_lossy());
+                    if !paths.contains(&path) { paths.push(path); }
+                }
+            }
+        }
+    }
     // Symfony 1.x applications: sample actual configuration and actions, not just a web menu.
     let apps = root.join("apps");
     if apps.is_dir() {
@@ -186,6 +217,22 @@ mod baseline_tests {
         assert!(output.contains("apps/cliente/config/app.yml"));
         assert!(output.contains("accepted_uploads"));
         assert!(output.contains("apps/cliente/config/security.yml"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn laravel_baseline_reads_routes_and_controllers() {
+        let root = env::temp_dir().join(format!("dude-laravel-baseline-{}", std::process::id()));
+        fs::create_dir_all(root.join("routes")).unwrap();
+        fs::create_dir_all(root.join("app/Http/Controllers")).unwrap();
+        fs::write(root.join("artisan"), "<?php").unwrap();
+        fs::write(root.join("composer.json"), "{}").unwrap();
+        fs::write(root.join("routes/web.php"), "<?php Route::get('/channels', 'channels');").unwrap();
+        fs::write(root.join("app/Http/Controllers/ChannelsController.php"), "<?php class ChannelsController {}").unwrap();
+        let cache = crate::evidence::EvidenceCache::default();
+        let output = baseline(&root, &cache);
+        assert!(output.contains("routes/web.php"));
+        assert!(output.contains("ChannelsController.php"));
+        assert!(cache.observed_reference("routes/web.php:1"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
