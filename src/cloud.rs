@@ -12,7 +12,7 @@ async fn tool(workspace: PathBuf, name: String, args: Value) -> Result<String, S
 pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
-    for _ in 0..if allow_tools { 8 } else { 1 } {
+    for _ in 0..(if allow_tools { 8 } else { 1 }) {
         // Rate limits are shared across all Groq calls, including other Symphony roles.
         // Retry the exact same turn; never re-execute completed file tools.
         let mut retries = 0;
@@ -66,7 +66,7 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
         let f=&t["function"];
         json!({"name":f["name"],"description":f["description"],"parameters":f["parameters"]})
     }).collect();
-    for _ in 0..if allow_tools { 8 } else { 1 } {
+    for _ in 0..(if allow_tools { 8 } else { 1 }) {
         let response = client.post(format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"))
             .header("x-goog-api-key",&key)
             .json(&if allow_tools { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents,"tools":[{"functionDeclarations":defs}]}) } else { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents}) })
