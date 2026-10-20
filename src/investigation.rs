@@ -129,3 +129,27 @@ mod baseline_tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// Keep project investigation policy and file tools out of ordinary conversation.
+pub fn is_technical(question: &str) -> bool {
+    let q = question.to_lowercase();
+    ["projeto", "project", "codebase", "repository", "repositorio", "repositório",
+        "arquivo", "file", "codigo", "código", "code", "bug", "erro", "error",
+        "arquitet", "architect", "implement", "debug", "refator", "refactor",
+        "função", "funcao", "function", "modulo", "módulo", "module",
+        "test", "compil", "build", "query", "sql", "api", "dependenc", "dependênc",
+        "analise", "análise", "analis", "investig", "review", "audit"]
+        .iter().any(|word|q.contains(word))
+}
+
+#[cfg(test)]
+mod intent_tests {
+    use super::*;
+    #[test]
+    fn conversation_does_not_trigger_investigation() {
+        assert!(!is_technical("voce pode a partir de agora falar sempre em portugues?"));
+        assert!(!is_technical("valeu buddy"));
+        assert!(is_technical("leia os arquivos e explique o projeto"));
+        assert!(is_technical("Investigate the user request: inspect main.rs code"));
+    }
+}

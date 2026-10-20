@@ -206,7 +206,15 @@ impl App {
             let mut updated=self.communication.clone();
             let result=updated.set(key,value).and_then(|_|updated.save());
             match result {
-                Ok(())=>{self.communication=updated;self.history[1].content=self.communication.instructions();self.output.push_str(&format!("Preference saved: {}\n",self.communication.describe()));}
+                Ok(())=>{
+                    self.communication=updated;
+                    self.history[1].content=self.communication.instructions();
+                    self.output.push_str(match (key,value) {
+                        ("language","pt-BR") => "Fechado, vou falar em português daqui pra frente. Preferência salva.\n",
+                        ("language","en") => "Got it, I'll respond in English from now on. Preference saved.\n",
+                        _ => "Preferência de comunicação salva.\n",
+                    });
+                }
                 Err(e)=>self.output.push_str(&format!("Alignment error: {e}\n")),
             }
             return;
@@ -557,6 +565,9 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String,String> {
     let mut messages = messages;
+    let question = messages.iter().rev().find(|m|m.role == "user")
+        .map(|m|m.content.as_str()).unwrap_or("");
+    let allow_tools = allow_tools && investigation::is_technical(question);
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")

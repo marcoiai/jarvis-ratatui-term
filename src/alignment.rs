@@ -44,7 +44,7 @@ impl Profile {
         result
     }
     pub fn instructions(&self)->String{
-        format!("Communication alignment (user-owned, not project knowledge): language={}; detail={}; pacing={}. Follow the latest explicit user instruction for the current answer. Adapt answer length to task difficulty and safety. A social utterance is not automatically a software change request. Do not reinterpret a correction of style or language as a request to re-investigate source files.",self.language,self.detail,self.pacing)
+        format!("Communication alignment (user-owned, not project knowledge): language={}; detail={}; pacing={}. Follow the latest explicit user instruction for the current answer. Adapt answer length to task difficulty and safety. For simple acknowledgements, be brief; do not add project analysis, implementation caveats or a menu of next steps. A social utterance is not automatically a software change request. Do not reinterpret a correction of style or language as a request to re-investigate source files.",self.language,self.detail,self.pacing)
     }
     pub fn describe(&self)->String{format!("Language: {} | Detail: {} | Pacing: {}",self.language,self.detail,self.pacing)}
     pub fn set(&mut self,key:&str,value:&str)->Result<(),String>{
@@ -64,6 +64,21 @@ pub fn explicit_alignment(input:&str)->Option<(&'static str,&'static str)>{
     let phrase=normalized.strip_suffix(" por favor")
         .or_else(||normalized.strip_suffix(" please"))
         .unwrap_or(&normalized).trim();
+    // Optional politeness, time and persistence modifiers in a standalone request.
+    // The remainder must still be exactly a supported language: mixed tasks fall through.
+    let language_request = phrase.strip_prefix("voce ").unwrap_or(phrase);
+    let language_request = language_request.strip_prefix("pode ").unwrap_or(language_request);
+    let language_request = language_request.strip_prefix("a partir de agora ").unwrap_or(language_request);
+    if let Some(rest) = language_request.strip_prefix("falar ")
+        .or_else(|| language_request.strip_prefix("responder "))
+        .or_else(|| language_request.strip_prefix("fale "))
+        .or_else(|| language_request.strip_prefix("responda ")) {
+        let rest = rest.strip_prefix("a partir de agora ").unwrap_or(rest);
+        let rest = rest.strip_prefix("sempre ").unwrap_or(rest);
+        let rest = rest.strip_suffix(" a partir de agora").unwrap_or(rest);
+        if rest == "em portugues" { return Some(("language","pt-BR")); }
+        if rest == "em ingles" { return Some(("language","en")); }
+    }
     // Match a small intent grammar, not a list of every accented/polite variant.
     // Only exact standalone preference commands are persisted; ordinary questions
     // containing language names should still reach the conversation.
@@ -96,6 +111,15 @@ mod tests{
         assert_eq!(explicit_alignment("in english please"),Some(("language","en")));
         assert_eq!(explicit_alignment("respond in english please"),Some(("language","en")));
         assert!(explicit_alignment("analise o projeto").is_none());
+    }
+    #[test] fn persistent_language_requests_are_local(){
+        for input in ["voce pode a partir de agora falar sempre em portugues?",
+            "Você pode a partir de agora falar sempre em português?",
+            "fale sempre em português", "responda em português a partir de agora"] {
+            assert_eq!(explicit_alignment(input), Some(("language","pt-BR")), "{input}");
+        }
+        assert!(explicit_alignment("voce pode falar em portugues e analisar o projeto?").is_none());
+        assert!(explicit_alignment("como fazer o agente responder sempre em portugues?").is_none());
     }
     #[test] fn validates_preferences(){
         let mut p=Profile::default();
