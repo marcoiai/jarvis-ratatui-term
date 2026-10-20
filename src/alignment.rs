@@ -59,10 +59,22 @@ impl Profile {
 }
 // Simple explicit preference statements are handled without any LLM request.
 pub fn explicit_alignment(input:&str)->Option<(&'static str,&'static str)>{
-    let normalized=input.trim().trim_end_matches(['.', '!', '?']).trim().to_lowercase().replace("ê","e").replace("é","e");
-    match normalized.as_str(){
-        "em portugues"|"em portugues por favor"|"responda em portugues"|"responda em portugues por favor"=>Some(("language","pt-BR")),
-        "in english please"|"respond in english"|"in english"=>Some(("language","en")),
+    let normalized=input.trim().trim_end_matches(['.', '!', '?']).trim()
+        .to_lowercase().replace("ê","e").replace("é","e");
+    let phrase=normalized.strip_suffix(" por favor").unwrap_or(&normalized).trim();
+    // Match a small intent grammar, not a list of every accented/polite variant.
+    // Only exact standalone preference commands are persisted; ordinary questions
+    // containing language names should still reach the conversation.
+    if ["em portugues","fale em portugues","responda em portugues",
+        "pode falar em portugues","por favor fale em portugues",
+        "prefiro portugues"].contains(&phrase) {
+        return Some(("language","pt-BR"));
+    }
+    if ["in english","respond in english","speak in english",
+        "please speak in english","please respond in english"].contains(&phrase){
+        return Some(("language","en"));
+    }
+    match phrase {
         "seja mais objetivo"|"mais objetivo"|"respostas mais curtas"|"seja mais breve"=>Some(("detail","concise")),
         "mais detalhes"|"explique com mais detalhes"=>Some(("detail","detailed")),
         "passo a passo"|"vamos passo a passo"=>Some(("pacing","step")),
@@ -76,6 +88,9 @@ mod tests{
         assert_eq!(explicit_alignment("Em português por favor"),Some(("language","pt-BR")));
         assert_eq!(explicit_alignment("em portugues"),Some(("language","pt-BR")));
         assert_eq!(explicit_alignment("em portugues!"),Some(("language","pt-BR")));
+        assert_eq!(explicit_alignment("fale em portugues por favor"),Some(("language","pt-BR")));
+        assert_eq!(explicit_alignment("pode falar em português?"),Some(("language","pt-BR")));
+        assert!(explicit_alignment("explique como configurar o idioma portugues").is_none());
         assert_eq!(explicit_alignment("in english please"),Some(("language","en")));
         assert!(explicit_alignment("analise o projeto").is_none());
     }
