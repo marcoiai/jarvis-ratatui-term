@@ -105,3 +105,11 @@
 - O texto de inicialização permanece no histórico inicial, sem duplicar o nome/subtítulo que agora são renderizados separadamente.
 - Painéis de entrada, ambiente e ajuda reposicionados sob o cabeçalho fixo.
 - Compilação e teste visual local pendentes.
+
+## 2026-10-20 — Correção do banner fixo completo
+
+- Diagnóstico após teste do usuário: versão anterior fixava somente nome/subtítulo; demais informações de inicialização continuavam em `app.output` e desapareciam com rolagem ou `/clear`.
+- `App::banner()` agora contém também sanidade, diagnóstico NOVVS, café, aviso de aprovação e saudação, em cinco linhas permanentes.
+- `draw()` reserva cinco linhas independentes para o banner; a conversa permanece em outro painel com rolagem.
+- Textos duplicados foram removidos da mensagem inicial do transcript.
+- Observação: a cópia local apresentava 17 arquivos modificados; preservar diferenças antes de atualizar remoto. Teste visual local continua pendente.
