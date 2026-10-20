@@ -62,3 +62,13 @@
 - Nova `EvidenceCache::source_read_count()` distingue leitura bem-sucedida de simples inventário; gate de análise ampla usa leituras reais.
 - Memória: `history.jsonl` registra conversas; `memory.md` não recebe candidatos sem aprovação; `knowledge_candidates.json` armazena propostas pendentes. Não há prova de aprovação/persistência de Knowledge nos logs do IPTV. Não declarar que memórias factuais já foram salvas.
 - Pendente: testes `cargo fmt --check`, `cargo check`, `cargo test` e execução end-to-end no Mac; investigação de custo do segundo passe de extração; seleção dinâmica de módulos por relevância.
+
+## 2026-10-20 — Separação de memória operacional e aprendizado
+
+- **Memória operacional bruta:** arquivo `.dude/journal/YYYY-MM-DD.jsonl` (data UTC), com timestamp e cada troca concluída, sem sumarização ou aprovação de fatos.
+- Escrita append-only seguida de `sync_data()` a cada troca concluída; não depende do extrator de Knowledge.
+- **Histórico de contexto:** `.dude/history.jsonl` continua com conversas recentes recuperáveis.
+- **Aprendizado curado:** candidatos em `.dude/knowledge_candidates.json` e fatos aprovados em `.dude/memory.md`, sempre sob revisão do usuário.
+- Teste adicionando verificação de persistência do journal após reabertura, sem promoção automática para memory.md.
+- **Limites:** ainda não existe temporizador/autosave horário independente; a gravação acontece após respostas concluídas enquanto o programa roda. Não registra chunks de respostas incompletas nem tarefas interrompidas; `sync_data` não equivale a backup externo.
+- `chrono` adicionado ao Cargo.toml; atualizar Cargo.lock localmente e validar build/testes.
