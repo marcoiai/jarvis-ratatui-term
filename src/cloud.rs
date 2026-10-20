@@ -1,6 +1,6 @@
-use std::{env, path::PathBuf};
+use std::path::PathBuf;
 use serde_json::{json, Value};
-use crate::{file_tools, Message};
+use crate::{file_tools, credentials, Message};
 
 async fn tool(workspace: PathBuf, name: String, args: Value) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
@@ -10,7 +10,7 @@ async fn tool(workspace: PathBuf, name: String, args: Value) -> Result<String, S
 }
 
 pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf) -> Result<String, String> {
-    let key = env::var("GROQ_API_KEY").map_err(|_| "Missing GROQ_API_KEY".to_string())?;
+    let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
     for _ in 0..8 {
         let response = client.post("https://api.groq.com/openai/v1/chat/completions")
@@ -36,8 +36,7 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
 }
 
 pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf) -> Result<String, String> {
-    let key = env::var("GEMINI_API_KEY").or_else(|_|env::var("GOOGLE_API_KEY"))
-        .map_err(|_|"Set GEMINI_API_KEY (or GOOGLE_API_KEY) for Gemini API access".to_owned())?;
+    let key = credentials::get("gemini").ok_or("Missing Gemini API key. Use /apikey gemini")?;
     let mut context = String::new();
     let mut contents = Vec::<Value>::new();
     for message in messages {
