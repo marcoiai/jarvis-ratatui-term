@@ -867,10 +867,17 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let environment_line=app.environment.status();
         frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[2]);
 
-        let footer = format!(
-            "Mode: {} | Solo: {} ({}) | /roles /role /mode /cloud | ESC",
-            app.roles.mode, app.roles.solo_role, app.roles.selected_provider()
-        );
+        let mode_label = if app.roles.mode == "symphony" {
+            format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
+                app.roles.investigator, app.roles.architect, app.roles.reviewer)
+        } else {
+            format!("Solo | {} ({})", app.roles.solo_role, app.roles.selected_provider())
+        };
+        let footer = if app.communication.language == "pt-BR" {
+            format!("Modo: {mode_label} | /mode /roles | ESC")
+        } else {
+            format!("Mode: {mode_label} | /mode /roles | ESC")
+        };
         frame.render_widget(
             Paragraph::new(footer)
                 .block(Block::default().title("Help").borders(Borders::ALL)),
