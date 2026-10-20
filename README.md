@@ -142,3 +142,15 @@ This is a first candidate-review workflow, not a semantic vector memory or a ver
 DUDE classifies requests deterministically before contacting any provider. In Symphony mode, empty-help prompts like `?`, `/help`, and basic greetings receive local responses without a network call. Brief questions are sent to the selected Solo role, while longer requests containing engineering-analysis markers use Investigator → Architect → Reviewer. Use `symphony: YOUR QUESTION` to force all roles even when Solo mode is selected, or `solo: YOUR QUESTION` to force one provider in Symphony mode. Regular `/mode solo` always uses the Solo provider unless a Symphony override is present.
 
 This is deliberately a simple, transparent heuristic, not an LLM intent classifier. It avoids unnecessary requests but can misclassify unusual prompts; use the explicit prefixes for deterministic behavior. Unit tests cover greetings, basic questions, complex engineering reviews, and overrides.
+
+## Request metrics and commercial evaluation
+
+Every dispatched Solo/Symphony request records metadata in `.dude/metrics.jsonl`:
+- mode and end-to-end elapsed milliseconds
+- each stage's provider, duration and success/error status
+- read-only file-tool execution count, evidence-cache hit count and distinct cached evidence item count
+- overall success/error status
+
+Run `/metrics` to inspect the latest 8 raw JSONL records. Each model response includes a compact summary of these measurements. Trivial requests answered locally do not dispatch an AI request and do not produce metrics. Logs contain no prompt text, source code or API keys. This is **operational instrumentation**, not yet a benchmark of answer quality. Token counts are marked unavailable rather than estimated; exact provider token accounting and currency costs require additional integration.
+
+Use the same engineering task in `solo: ...` and `symphony: ...` to compare latency and tool usage. Independently grade correctness against actual source lines before claiming Symphony improves quality.
