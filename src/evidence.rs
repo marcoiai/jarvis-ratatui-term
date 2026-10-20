@@ -94,8 +94,8 @@ impl EvidenceCache {
         if paths.is_empty() {
             "No source files read. No source-code behavior has been verified.".into()
         } else {
-            format!("READ SOURCE EXCERPTS (not verified modules; no percentage is available):\\n{}",
-                paths.into_iter().collect::<Vec<_>>().join("\\n"))
+            format!("READ SOURCE EXCERPTS (not verified modules; no percentage is available):\n{}",
+                paths.into_iter().collect::<Vec<_>>().join("\n"))
         }
     }
     pub fn coverage(&self) -> String {
