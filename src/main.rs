@@ -813,7 +813,9 @@ async fn ask_ollama(
         if allow_tools && !tools_enabled {
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\n{}", evidence.coverage(), evidence.read_manifest()))}));
         }
-        let stream_final = !tools_enabled;
+        // Internal extraction has no UI consumer: request one complete JSON response.
+        // Streaming is only useful when sending ChatChunk updates to the TUI.
+        let stream_final = !tools_enabled && updates.is_some();
         let request_start = Instant::now();
         let response = client
             .post(format!("{host}/api/chat"))
