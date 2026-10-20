@@ -678,7 +678,7 @@ async fn ask_ollama(
     for round in 0..=rounds {
         let tools_enabled = allow_tools && round < rounds;
         if allow_tools && !tools_enabled {
-            conversation.push(json!({"role":"user","content":format!("{}\\n\\nInvestigation coverage: {}\\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,evidence.coverage())}));
+            conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,evidence.coverage())}));
         }
         let stream_final = !tools_enabled;
         let request_start = Instant::now();
@@ -708,9 +708,9 @@ async fn ask_ollama(
             while let Some(chunk) = response.chunk().await.map_err(|e|format!("Ollama stream error: {e}"))? {
                 buffer.extend_from_slice(&chunk);
                 if buffer.len() > 2_000_000 { return Err("Ollama stream buffer limit exceeded".into()); }
-                while let Some(pos) = buffer.iter().position(|b| *b == b'\\n') {
+                while let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = buffer.drain(..=pos).collect();
-                    let line = line.strip_suffix(b"\\n").unwrap_or(&line);
+                    let line = line.strip_suffix(b"\n").unwrap_or(&line);
                     if line.iter().all(u8::is_ascii_whitespace) { continue; }
                     let value: Value = serde_json::from_slice(line).map_err(|e|format!("Ollama stream JSON: {e}"))?;
                     if let Some(error)=value["error"].as_str(){return Err(error.into());}
