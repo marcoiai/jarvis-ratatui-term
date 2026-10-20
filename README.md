@@ -121,3 +121,18 @@ This stores keys in local restricted files, not the operating system's encrypted
 ## Groq rate limits in Symphony
 
 A Groq HTTP 429 can occur when Investigator, Architect and Reviewer share the account's token-per-minute quota. The Groq adapter now retries up to three times after the initial request, honoring the suggested retry delay in seconds (or Retry-After when available), with a 75-second cap on each delay. Intermediate Symphony handoffs are capped at 5,000 characters per stage and should be concise. If the quota is still unavailable, the request fails without claiming a completed Symphony answer. Workspace switches deliberately revoke `/cloud allow`; authorize again after changing projects.
+
+## Reviewable engineering knowledge
+
+In Symphony mode, the Reviewer is instructed to propose a structured set of claims, each classified as `documented`, `verified`, or `inferred`, and accompanied by source references. Proposals are stored per workspace in `.dude/knowledge_candidates.json` as `pending` and are **not** written automatically to curated memory.
+
+```
+/knowledge
+/knowledge approve 1
+/knowledge reject 2
+/memory
+```
+
+Approval is limited to documented/verified claims with source references; inferred claims require further investigation. Approved claims are appended to `.dude/memory.md` with their classifications and references. Rejected proposals remain in the candidate journal with `rejected` status. Review the actual code before approval: the Reviewer can still invent or misinterpret evidence references. Duplicate claims are skipped. The structured output is optional; if the model omits or malforms its proposal, the ordinary answer remains available and no knowledge is promoted.
+
+This is a first candidate-review workflow, not a semantic vector memory or a verified source-line validator. Run `cargo check` and `cargo test` locally to validate changes before use.
