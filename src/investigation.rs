@@ -62,10 +62,12 @@ mod tests {
 /// Explicit fixed candidates avoid executing project code or following arbitrary paths.
 pub fn needs_baseline(question: &str) -> bool {
     let q = question.to_lowercase();
-    let project = ["projeto", "project", "codebase", "repositório", "repository"]
+    let project = ["projeto", "project", "codebase", "repositório", "repository", "sistema"]
         .iter().any(|word| q.contains(word));
-    project && ["entend", "understand", "analis", "anális", "analy", "arquitet", "architect", "review", "audit"]
-        .iter().any(|word| q.contains(word))
+    (project && ["entend", "understand", "analis", "anális", "analy", "arquitet", "architect", "review", "audit", "faz", "serve", "purpose"]
+        .iter().any(|word| q.contains(word)))
+        || ["análise mais profunda", "analise mais profunda", "aprofund", "deep dive", "investigue melhor"]
+            .iter().any(|word| q.contains(word))
 }
 
 pub fn baseline(root: &Path, evidence: &crate::evidence::EvidenceCache) -> String {
@@ -78,6 +80,25 @@ pub fn baseline(root: &Path, evidence: &crate::evidence::EvidenceCache) -> Strin
     ];
     let mut paths: Vec<String> = candidates.iter().filter(|p|root.join(p).is_file())
         .take(12).map(|p|(*p).to_owned()).collect();
+    // Symfony 1.x applications: sample actual configuration and actions, not just a web menu.
+    let apps = root.join("apps");
+    if apps.is_dir() {
+        if root.join("config/ProjectConfiguration.class.php").is_file() { paths.push("config/ProjectConfiguration.class.php".into()); }
+        if let Ok(entries) = fs::read_dir(&apps) {
+            let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries.into_iter().take(8) {
+                if !entry.file_type().is_ok_and(|kind|kind.is_dir()) { continue; }
+                let app = entry.file_name().to_string_lossy().to_string();
+                if app.starts_with('.') || !app.chars().all(|c|c.is_ascii_alphanumeric() || c=='_' || c=='-') { continue; }
+                for rel in ["config/app.yml","config/routing.yml","config/security.yml"] {
+                    let path = format!("apps/{app}/{rel}");
+                    if paths.len() >= 20 { break; }
+                    if root.join(&path).is_file() { paths.push(path); }
+                }
+            }
+        }
+    }
     // Rust entry points declare the modules needed to trace the actual application.
     // Read through the existing path checks; symlinks outside the workspace are denied.
     if root.join("src/main.rs").is_file() {
@@ -99,7 +120,7 @@ pub fn baseline(root: &Path, evidence: &crate::evidence::EvidenceCache) -> Strin
         let excerpt: String = content.chars().take(remaining.min(2200)).collect();
         result.push_str(&format!("\n--- {path} (partial excerpt, max 120 lines / 2200 chars) ---\n{excerpt}\n"));
     }
-    result.push_str("\nExplain the actual application purpose and execution flow using these excerpts and further tools. Report what was read and what remains unverified. Answer in the language of the original user request. Do not end with an offer to read files instead of doing the requested investigation.\n");
+    result.push_str("\nConfiguration conventions are framework-specific. For Symfony 1.x, keys from app.yml use the app_ prefix in sfConfig; do not flag a missing explicit assignment as a bug. Only declare failures after inspecting actual callers and configuration precedence.\nExplain the actual application purpose and execution flow using these excerpts and further tools. Report what was read and what remains unverified. Answer in the language of the original user request. Do not end with an offer to read files instead of doing the requested investigation.\n");
     result
 }
 
@@ -111,7 +132,22 @@ mod baseline_tests {
         assert!(needs_baseline("entenda o projeto atual"));
         assert!(needs_baseline("analise o PROJETO INTEIRO"));
         assert!(needs_baseline("understand this codebase"));
+        assert!(needs_baseline("o que esse projeto faz?"));
+        assert!(needs_baseline("faça uma análise mais profunda"));
         assert!(!needs_baseline("o que é Tokio?"));
+    }
+    #[test]
+    fn symfony_baseline_reads_application_configuration() {
+        let root = env::temp_dir().join(format!("dude-symfony-baseline-{}", std::process::id()));
+        fs::create_dir_all(root.join("apps/cliente/config")).unwrap();
+        fs::write(root.join("apps/cliente/config/app.yml"), "all:\\n  accepted_uploads: true\\n").unwrap();
+        fs::write(root.join("apps/cliente/config/security.yml"), "default:\\n  is_secure: true\\n").unwrap();
+        let evidence = crate::evidence::EvidenceCache::default();
+        let output = baseline(&root, &evidence);
+        assert!(output.contains("apps/cliente/config/app.yml"));
+        assert!(output.contains("accepted_uploads"));
+        assert!(output.contains("apps/cliente/config/security.yml"));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn baseline_contains_real_source_and_evidence() {
@@ -137,7 +173,7 @@ pub fn is_technical(question: &str) -> bool {
         "arquitet", "architect", "implement", "debug", "refator", "refactor",
         "função", "funcao", "function", "modulo", "módulo", "module",
         "test", "compil", "build", "query", "sql", "api", "dependenc", "dependênc",
-        "analise", "análise", "analis", "investig", "review", "audit"]
+        "analise", "análise", "analis", "investig", "review", "audit", "aprofund"]
         .iter().any(|word|q.contains(word))
 }
 
@@ -150,5 +186,6 @@ mod intent_tests {
         assert!(!is_technical("valeu buddy"));
         assert!(is_technical("leia os arquivos e explique o projeto"));
         assert!(is_technical("Investigate the user request: inspect main.rs code"));
+        assert!(is_technical("faça uma análise mais profunda"));
     }
 }
