@@ -547,7 +547,7 @@ impl App {
             Ok(Some(candidate)) => {
                 self.pending_knowledge = Some(candidate.id);
                 let supported = (candidate.classification == "verified" || candidate.classification == "documented")
-                    && !candidate.evidence.is_empty();
+                    && !candidate.evidence.is_empty() && candidate.references_checked;
                 self.output.push_str(&format!(
                     "\\n🧠 Conhecimento proposto #{} [{}]: {}\\nEvidências: {}\\n{}\\n",
                     candidate.id, candidate.classification, candidate.claim,
@@ -678,7 +678,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if let Some(pos)=response.rfind(MARKER) {
                 let raw=response[pos+MARKER.len()..].trim();
                 if let Ok(drafts)=serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
-                    match knowledge::propose(&workspace,question,&drafts) {
+                    match knowledge::propose(&workspace,question,&drafts,&evidence) {
                         Ok(ids) => {
                             let final_text=response[..pos].trim_end();
                             if ids.is_empty(){ return Ok(final_text.to_owned()); }
