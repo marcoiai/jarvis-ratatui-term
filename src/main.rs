@@ -1,3 +1,4 @@
+mod evidence;
 mod credentials;
 mod cloud;
 mod roles;
@@ -357,6 +358,7 @@ impl App {
             self.history.push(Message { role: "user".into(), content: input });
             let messages = self.history.clone();
             let roles = self.roles.clone();
+            let evidence = evidence::EvidenceCache::default();
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
             let ollama_model = self.model.clone();
@@ -397,10 +399,10 @@ impl App {
             tokio::spawn(async move {
                 let result = if roles.mode == "symphony" {
                     run_symphony(&client, &roles, messages, workspace, &url,
-                        &ollama_model, &groq_model, &gemini_model).await
+                        &ollama_model, &groq_model, &gemini_model, evidence).await
                 } else {
                     query_provider(&client, roles.selected_provider(), messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model, true).await
+                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence).await
                 };
                 let _ = tx.send(ResultMessage::Chat(result));
             });
@@ -444,18 +446,18 @@ impl App {
 
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
-    gemini_model: &str, allow_tools: bool) -> Result<String,String> {
+    gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache) -> Result<String,String> {
     match provider {
-        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools).await,
-        "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools).await,
-        "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools).await,
+        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence).await,
+        "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence).await,
+        "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence).await,
         other => Err(format!("Unsupported provider: {other}")),
     }
 }
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
-    groq_model: &str, gemini_model: &str) -> Result<String,String> {
+    groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
@@ -471,12 +473,13 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         let mut stage:Vec<Message> = messages.iter().filter(|m|m.role=="system").cloned().collect();
         stage.push(Message{role:"system".into(),content:format!("You are the {name} in DUDE Symphony. {instruction}")});
         // Avoid broadcasting unrelated old chat turns to every Symphony stage.
+        let collected = if index == 0 { String::new() } else { evidence.export() };
         stage.push(Message{role:"user".into(),content:format!(
-            "Original user request:\n{question}\n\nPrevious verified or provisional stage findings:\n{}\n",
+            "Original user request:\n{question}\n\nStructured evidence from read-only tools:\n{collected}\n\nPrevious stage findings:\n{}\n",
             if shared.is_empty() {"(none)"} else {&shared}
         )});
         let response=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model,index == 0).await
+            local_model,groq_model,gemini_model,index == 0,evidence.clone()).await
             .map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {return Ok(response);}
         // Bound cost and payload sent to downstream providers.
@@ -493,6 +496,7 @@ async fn ask_ollama(
     messages: Vec<Message>,
     workspace: PathBuf,
     allow_tools: bool,
+    evidence: evidence::EvidenceCache,
 ) -> Result<String, String> {
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
@@ -530,8 +534,9 @@ async fn ask_ollama(
             let root = workspace.clone();
             let name = call.function.name;
             let args = call.function.arguments;
+            let evidence = evidence.clone();
             let output = tokio::task::spawn_blocking(move || {
-                file_tools::execute(&root, &name, &args).unwrap_or_else(|e| format!("Tool error: {e}"))
+                evidence.execute(&root, &name, &args)
             }).await.map_err(|e| e.to_string())?;
             conversation.push(json!({"role":"tool","content":output}));
         }
