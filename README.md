@@ -71,3 +71,23 @@ This is an initial integration, not an audited provider sandbox. The complete pr
 Use `/workspace` to print the active workspace, or `/workspace ~/Projects/levelup` to explicitly switch to a different directory. The command expands `~`, verifies the target exists, and reloads that project's separate `.dude/` memory and conversation history. AI tools remain confined to the selected workspace and cannot switch it themselves.
 
 Alternatively launch DUDE with `DUDE_WORKSPACE="$HOME/Projects/levelup" cargo run`. The directory must exist and be accessible. `/workspace` is a user command, not an LLM tool.
+
+## AI roles and modes (experimental)
+
+Role configuration lives in `.dude/roles.json`, separately for each workspace. Commands:
+
+```text
+/roles
+/role investigator ollama
+/role architect gemini
+/role reviewer groq
+/mode solo
+/solo investigator
+/mode symphony
+```
+
+`/mode symfony` is accepted as an alias for `/mode symphony`. **Solo** sends your next chat prompt to the provider configured for the selected role. Currently Ollama and Groq chats are available; Gemini and OpenAI role names may be configured but are not yet executable. The separate older `/provider` option is legacy and will be reconciled with role selection.
+
+**Symphony** is the planned closed workflow: Investigator gathers evidence, Architect proposes and organizes, Reviewer challenges, then DUDE consolidates the answer. The configuration can now be stored, but the execution is intentionally blocked until adapters, unified tools and cloud data-consent controls are complete. It will not silently send project material to cloud providers.
+
+Use `/mode solo` while Symphony is under construction.
