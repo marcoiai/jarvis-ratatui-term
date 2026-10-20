@@ -8,6 +8,7 @@ use std::{
 };
 
 use crossterm::{
+    cursor::{SetCursorStyle, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -22,6 +23,7 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthChar;
 use tokio::{process::Command, sync::mpsc};
 
 #[derive(Clone, Serialize)]
@@ -444,10 +446,23 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
             .split(frame.area());
 
-        let input = Paragraph::new(app.input.as_str())
+        // Keep the input tail and the real terminal cursor visible.
+        let input_width = chunks[0].width.saturating_sub(2) as usize;
+        let mut visible = String::new();
+        let mut visible_width = 0usize;
+        for ch in app.input.chars().rev() {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if visible_width + char_width >= input_width { break; }
+            visible.insert(0, ch);
+            visible_width += char_width;
+        }
+        let input = Paragraph::new(visible)
             .block(Block::default().title("DUDE - input").borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
         frame.render_widget(input, chunks[0]);
+        if input_width > 0 && chunks[0].height > 2 {
+            frame.set_cursor_position((chunks[0].x + 1 + visible_width as u16, chunks[0].y + 1));
+        }
 
         let output = Paragraph::new(app.output.as_str())
             .block(Block::default().title(if app.busy { "Answer (working...)" } else { "Answer" }).borders(Borders::ALL))
@@ -530,13 +545,13 @@ async fn run(
 async fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, Show, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run(&mut terminal).await;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     result
 }
