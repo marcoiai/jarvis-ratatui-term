@@ -167,3 +167,11 @@
 - O painel fixo comporta 11 linhas: 7 da arte e 4 linhas de identificação/status DUDE.
 - A pedido do usuário, reorganizado o layout: **ENOVA + DUDE (fixo) → campo de entrada → respostas roláveis → status → ajuda**.
 - `/clear` continua limpando somente o histórico visual. Verificação visual, `cargo fmt --check`, `cargo check` e `cargo test` seguem pendentes no Mac.
+
+## 2026-10-20 — Logo ENOVA vermelha, input entre logo e identificação
+
+- Arte ASCII ENOVA recebida do usuário preservada literalmente e renderizada em vermelho (`Color::Red`) num painel fixo de 7 linhas.
+- Entrada posicionada logo abaixo da arte; identificação e status de DUDE em outro painel fixo de 4 linhas abaixo da entrada.
+- Ordem final: `logo vermelha → input → identificação DUDE → conversa rolável → ambiente → ajuda`.
+- `/clear` continua limpando a conversa, sem alterar logo e identificação fixas.
+- Testes `cargo check`, `cargo test` e validação visual no Mac ainda pendentes.
