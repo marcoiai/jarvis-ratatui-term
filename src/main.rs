@@ -200,6 +200,22 @@ impl App {
             // Do not hijack arbitrary input: other commands and questions remain available.
             self.pending_knowledge = None;
         }
+        if input == "/recover" {
+            match self.memory.as_ref().map(|m|m.pending()).unwrap_or(Ok(None)) {
+                Ok(Some(question)) => {
+                    self.input=question;
+                    self.output.push_str("Pedido recuperado para edição. Pressione Enter para reenviar.\\n");
+                }
+                Ok(None)=>self.output.push_str("Nenhum pedido pendente para recuperar.\\n"),
+                Err(error)=>self.output.push_str(&format!("Erro ao recuperar: {error}\\n")),
+            }
+            return;
+        }
+        if input == "/recover discard" {
+            let result=self.memory.as_ref().map(|m|m.clear_pending()).unwrap_or(Ok(()));
+            self.output.push_str(&format!("Descarte do pedido pendente: {result:?}\\n"));
+            return;
+        }
         if input == "/align" {
             self.output.push_str(&format!("{}\n",self.communication.describe()));
             return;
@@ -516,6 +532,18 @@ impl App {
                 }
                 return;
             }
+            if let Some(store)=&self.memory {
+                if let Some(question)=self.last_question.as_deref() {
+                    if let Err(error)=store.save_pending(question) {
+                        self.output.push_str(&format!("Checkpoint error (request not dispatched): {error}\\n"));
+                        self.history.pop();
+                        self.last_question=None;
+                        self.busy=false;
+                        self.started_at=None;
+                        return;
+                    }
+                }
+            }
             tokio::spawn(async move {
                 let is_symphony=matches!(&route, router::Route::Symphony);
                 let start=Instant::now();
@@ -627,6 +655,11 @@ impl App {
                     }
                     if let Err(err) = store.record(&user, &text) {
                         self.output.push_str(&format!("History write warning: {err}\\n"));
+                    }
+                }
+                if let Some(store)=&self.memory {
+                    if let Err(error)=store.clear_pending() {
+                        self.output.push_str(&format!("Recovery cleanup warning: {error}\\n"));
                     }
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
@@ -997,6 +1030,13 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> Result<(), Box<dyn Error>> {
     let mut app = App::new();
+    if let Some(store)=&app.memory {
+        match store.pending() {
+            Ok(Some(_))=>app.output.push_str("\\n⚠ Pedido inacabado encontrado em disco. Use /recover para carregar ou /recover discard para descartar.\\n"),
+            Ok(None)=>(),
+            Err(error)=>app.output.push_str(&format!("Aviso recuperação: {error}\\n")),
+        }
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()?;
