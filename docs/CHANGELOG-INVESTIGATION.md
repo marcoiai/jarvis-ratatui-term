@@ -89,3 +89,11 @@
 - Metadados apenas: nenhum conteúdo de arquivo, expressão de busca ou resposta do modelo no journal de progresso; Knowledge continua separado.
 - Cada evento faz append e `sync_data`; teste unitário verifica persistência dos metadados e ausência do padrão de busca.
 - **Limite:** o journal é histórico append-only e ainda não é consumido para retomar a sequência de ferramentas automaticamente. A recuperação do pedido continua usando `/recover`. O estado em memória das evidências não é reconstruído. Erros de gravação do progresso não interrompem a investigação (best effort); ainda falta feedback operacional e compactação por sessão. Testes locais pendentes.
+
+## 2026-10-20 — Etapa 6: aviso conservador de percentuais de cobertura
+
+- Novo módulo `src/claim_audit.rs` sinaliza alegações numéricas de cobertura associadas a porcentagens e termos como cobertura/componentes/fluxos. Inclui testes positivos e negativos.
+- Resposta final do Ollama mantém o texto gerado, mas recebe alerta explícito caso uma porcentagem de cobertura seja citada sem medição do runtime. O alerta também é transmitido à TUI.
+- Esta checagem NÃO valida semanticamente afirmações, caminhos nem citações; é um primeiro alerta determinístico e limitado. Evitar declarar parecer inteiramente validado.
+- Identidade visual e cabeçalho **DUDE**, incluindo nome e demais identificações existentes, preservados; mudanças limitadas à análise e à mensagem de auditoria.
+- Pendente: compilação e testes locais, filtro mais robusto de `<think>` e validação completa de referências de origem.
