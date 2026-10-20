@@ -9,17 +9,17 @@ async fn tool(workspace: PathBuf, name: String, args: Value) -> Result<String, S
     }).await.map_err(|e| e.to_string())
 }
 
-pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf) -> Result<String, String> {
+pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
-    for _ in 0..8 {
+    for _ in 0..if allow_tools { 8 } else { 1 } {
         // Rate limits are shared across all Groq calls, including other Symphony roles.
         // Retry the exact same turn; never re-execute completed file tools.
         let mut retries = 0;
         let response = loop {
             let response = client.post("https://api.groq.com/openai/v1/chat/completions")
                 .bearer_auth(&key)
-                .json(&json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}))
+                .json(&if allow_tools { json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}) } else { json!({"model":model,"messages":convo,"stream":false}) })
                 .send().await.map_err(|e|format!("Groq connection: {e}"))?;
             if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {break response;}
             if retries >= 3 {break response;}
@@ -38,6 +38,7 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
         let msg = &value["choices"][0]["message"];
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
         if calls.is_empty() {return msg["content"].as_str().map(str::to_owned).ok_or_else(||"Groq returned no message".into());}
+        if !allow_tools { return Err("Unexpected Groq tool call in review-only stage".into()); }
         convo.push(msg.clone());
         for call in calls {
             let name = call["function"]["name"].as_str().ok_or("Groq tool missing name")?.to_owned();
@@ -65,11 +66,10 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
         let f=&t["function"];
         json!({"name":f["name"],"description":f["description"],"parameters":f["parameters"]})
     }).collect();
-    for _ in 0..8 {
+    for _ in 0..if allow_tools { 8 } else { 1 } {
         let response = client.post(format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"))
             .header("x-goog-api-key",&key)
-            .json(&json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents,
-                "tools":[{"functionDeclarations":defs}]}))
+            .json(&if allow_tools { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents,"tools":[{"functionDeclarations":defs}]}) } else { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents}) })
             .send().await.map_err(|e|format!("Gemini connection: {e}"))?;
         let status=response.status();
         if !status.is_success() {return Err(format!("Gemini HTTP {status}: {}",response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
@@ -81,6 +81,7 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
             let text=parts.iter().filter_map(|p|p["text"].as_str()).collect::<Vec<_>>().join("\n");
             return if text.is_empty(){Err("Gemini response has no text".into())}else{Ok(text)};
         }
+        if !allow_tools { return Err("Unexpected Gemini tool call in review-only stage".into()); }
         contents.push(candidate.clone());
         let mut responses=Vec::new();
         for call in calls {
