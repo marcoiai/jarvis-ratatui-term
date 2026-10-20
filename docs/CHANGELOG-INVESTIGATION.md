@@ -153,3 +153,10 @@
 - Preservada identificação `D.U.D.E. — Demented Unified Development Entity`, textos de status, idioma pt-BR/inglês e posição abaixo do campo de entrada.
 - Reservadas 9 linhas para o painel fixo; rolagem e `/clear` continuam restritos à conversa.
 - A alteração foi feita remotamente no GitHub; `cargo fmt --check`, `cargo check`, `cargo test` e teste visual em diferentes larguras de terminal ainda pendentes.
+
+## 2026-10-20 — Ollama: timeout de inferência longa no Solo
+
+- Um parecer profundo leu 13 arquivos/14 ferramentas sem falhas, mas a requisição ao `/api/chat` encerrou próximo de 180 s (`error sending request`), coincidindo com o timeout global do cliente reqwest.
+- Ambos os clientes criados em `run()` passam a usar `connect_timeout(15 s)` e timeout total de 600 s, permitindo inferências locais mais lentas; mensagem de erro agora distingue falha de requisição/timeout de uma indisponibilidade comprovada do servidor.
+- Isto **não prova** que todo erro de transporte venha do timeout: Ollama ou rede também podem encerrar conexões. Ainda falta observar logs do servidor e testar no Mac.
+- Sem alteração de cabeçalho DUDE nem do fluxo de Knowledge.
