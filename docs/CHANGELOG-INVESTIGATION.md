@@ -130,3 +130,11 @@
 - **Trade-off:** respostas normais sem `<think>` agora aparecem somente ao final (streaming visual atrasado); a prioridade é impedir vazamento do raciocínio. O processamento da geração continua acontecendo.
 - A disposição da apresentação DUDE abaixo da entrada não foi alterada.
 - Ainda precisa validar `cargo fmt --check`, `cargo check`, `cargo test` e teste funcional no Mac.
+
+## 2026-10-20 — Solo: extração interna de Knowledge sem streaming
+
+- Teste Solo: 13 arquivos lidos em 14 ferramentas, parecer conciso distinguindo pontos verificados e lacunas; nenhuma porcentagem de cobertura inventada.
+- Após a análise, a segunda chamada ao Ollama para sugerir Knowledge falhou com `Ollama stream error: error decoding response body`. Nenhuma memória curada foi salva.
+- Em `ask_ollama`, a resposta final só usa streaming quando existe consumidor de `ChatChunk` (`updates.is_some()`). Chamadas internas, como extração JSON de Knowledge, passam a usar resposta completa não-streaming.
+- A correção evita processamento de chunks desnecessários nesse segundo passe, mas **não prova** que a falha de transporte do Ollama esteja eliminada; validar novamente no Mac. Nenhum candidato é salvo sem parsing e validação de evidências.
+- Não altera o cabeçalho fixo, a análise Solo nem a necessidade de aprovação explícita de Knowledge.
