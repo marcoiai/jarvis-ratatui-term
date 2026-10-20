@@ -1,3 +1,4 @@
+mod response_filter;
 mod investigation;
 mod alignment;
 mod environment;
@@ -789,6 +790,7 @@ async fn ask_ollama(
             let mut response = response;
             let mut buffer = Vec::<u8>::new();
             let mut answer = String::new();
+            let mut filter = response_filter::ThinkingFilter::default();
             let mut finished = false;
             while let Some(chunk) = response.chunk().await.map_err(|e|format!("Ollama stream error: {e}"))? {
                 buffer.extend_from_slice(&chunk);
@@ -800,8 +802,11 @@ async fn ask_ollama(
                     let value: Value = serde_json::from_slice(line).map_err(|e|format!("Ollama stream JSON: {e}"))?;
                     if let Some(error)=value["error"].as_str(){return Err(error.into());}
                     if let Some(delta)=value["message"]["content"].as_str() {
-                        answer.push_str(delta);
-                        if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(delta.to_owned())); }
+                        let visible = filter.push(delta);
+                        if !visible.is_empty() {
+                            answer.push_str(&visible);
+                            if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(visible)); }
+                        }
                     }
                     if value["done"].as_bool() == Some(true) {
                         if let (Some(i),Some(o))=(value["prompt_eval_count"].as_u64(),value["eval_count"].as_u64()){
@@ -813,13 +818,18 @@ async fn ask_ollama(
             }
             metrics.stage("ollama_http","ollama",request_start,finished);
             if !finished {return Err("Ollama stream ended without done=true".into());}
+            let tail = filter.finish()?;
+            if !tail.is_empty() {
+                answer.push_str(&tail);
+                if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(tail)); }
+            }
             return Ok(answer);
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
         metrics.stage("ollama_http","ollama",request_start,true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
-            return Ok(reply.message.content);
+            return response_filter::strip_completed(&reply.message.content);
         }
         if !tools_enabled { return Err("Ollama requested tools during final synthesis; try another model or a narrower request.".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
