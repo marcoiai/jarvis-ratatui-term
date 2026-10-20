@@ -1,3 +1,4 @@
+mod roles;
 mod memory;
 mod file_tools;
 use std::{
@@ -73,6 +74,7 @@ struct App {
     workspace: PathBuf,
     memory: Option<memory::Memory>,
     last_question: Option<String>,
+    roles: roles::Roles,
 }
 
 impl App {
@@ -81,6 +83,7 @@ impl App {
             .and_then(|p| std::fs::canonicalize(p).ok())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let memory = memory::Memory::open(&workspace).ok();
+        let roles = roles::Roles::load(&workspace).unwrap_or_default();
         let mut history = vec![Message {
             role: "system".into(),
             content: concat!(
@@ -119,6 +122,7 @@ impl App {
             workspace,
             memory,
             last_question: None,
+            roles,
             provider: "ollama".into(),
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".into()),
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
@@ -171,6 +175,7 @@ impl App {
                                 self.history.push(Message { role: "assistant".into(), content: exchange.assistant });
                             }
                             self.memory = Some(store);
+                            self.roles = roles::Roles::load(&self.workspace).unwrap_or_default();
                             self.last_question = None;
                             self.output.push_str(&format!(
                                 "Workspace switched to {}. Project memory reloaded.\n",
@@ -183,6 +188,44 @@ impl App {
                 Ok(_) => self.output.push_str("Workspace path is not a directory.\n"),
                 Err(error) => self.output.push_str(&format!("Cannot open workspace: {error}\n")),
             }
+            return;
+        }
+        if input == "/roles" {
+            self.output.push_str(&self.roles.summary());
+            self.output.push_str("Solo: one selected role. Symphony: three-role workflow (pending adapter completion).\n");
+            return;
+        }
+        if let Some(spec) = input.strip_prefix("/role ") {
+            let words: Vec<&str> = spec.split_whitespace().collect();
+            let result = match words.as_slice() {
+                [name, provider] => {
+                    let mut updated = self.roles.clone();
+                    updated.set(name, provider).and_then(|_| updated.save(&self.workspace).map(|_| {
+                        self.roles = updated;
+                    }))
+                }
+                _ => Err("Usage: /role investigator|architect|reviewer PROVIDER".into()),
+            };
+            self.output.push_str(&format!("Role configuration: {result:?}\n"));
+            return;
+        }
+        if let Some(mode) = input.strip_prefix("/mode ") {
+            let mut updated = self.roles.clone();
+            let result = updated.set_mode(mode.trim()).and_then(|_| updated.save(&self.workspace).map(|_| {
+                self.roles = updated;
+            }));
+            self.output.push_str(&format!("Mode configuration: {result:?}\n"));
+            if self.roles.mode == "symphony" {
+                self.output.push_str("Symphony execution is not enabled yet; no automatic cloud calls will occur.\n");
+            }
+            return;
+        }
+        if let Some(role) = input.strip_prefix("/solo ") {
+            let mut updated = self.roles.clone();
+            let result = updated.set_solo_role(role.trim()).and_then(|_| updated.save(&self.workspace).map(|_| {
+                self.roles = updated;
+            }));
+            self.output.push_str(&format!("Solo role: {result:?}\n"));
             return;
         }
         if input == "/providers" {
