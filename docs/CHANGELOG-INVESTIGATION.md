@@ -146,3 +146,10 @@
 - O aviso chega ao streaming da TUI e à resposta gravada em memória operacional.
 - Teste de referências ampliado para citações aceitas, linhas não lidas e respostas sem citações.
 - Limitação importante: encontrar ao menos uma referência válida **não valida todas as afirmações**; a auditoria semântica por afirmação ainda está pendente. `cargo check` e `cargo test` precisam ser executados no Mac.
+
+## 2026-10-20 — Wordmark ASCII Enova na apresentação fixa
+
+- `App::banner()` ganhou wordmark tipográfico ASCII inspirado no nome ENOVA (não é reprodução do logotipo oficial).
+- Preservada identificação `D.U.D.E. — Demented Unified Development Entity`, textos de status, idioma pt-BR/inglês e posição abaixo do campo de entrada.
+- Reservadas 9 linhas para o painel fixo; rolagem e `/clear` continuam restritos à conversa.
+- A alteração foi feita remotamente no GitHub; `cargo fmt --check`, `cargo check`, `cargo test` e teste visual em diferentes larguras de terminal ainda pendentes.
