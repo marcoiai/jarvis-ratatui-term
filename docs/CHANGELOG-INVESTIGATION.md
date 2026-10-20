@@ -113,3 +113,10 @@
 - `draw()` reserva cinco linhas independentes para o banner; a conversa permanece em outro painel com rolagem.
 - Textos duplicados foram removidos da mensagem inicial do transcript.
 - Observação: a cópia local apresentava 17 arquivos modificados; preservar diferenças antes de atualizar remoto. Teste visual local continua pendente.
+
+## 2026-10-20 — Posição original do cabeçalho fixo
+
+- Correção após esclarecimento do usuário: a apresentação deve ficar **abaixo do campo de entrada**, no início da área de resposta, não acima de todos os painéis.
+- Layout reordenado para `input → banner DUDE fixo → conversa rolável → ambiente → ajuda`.
+- `/clear` continua limpando somente a conversa e a rolagem não move a apresentação.
+- Teste visual local ainda necessário.
