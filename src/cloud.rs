@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 use serde_json::{json, Value};
 use crate::{file_tools, credentials, Message};
 
@@ -13,10 +13,25 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
     for _ in 0..8 {
-        let response = client.post("https://api.groq.com/openai/v1/chat/completions")
-            .bearer_auth(&key)
-            .json(&json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}))
-            .send().await.map_err(|e|format!("Groq connection: {e}"))?;
+        // Rate limits are shared across all Groq calls, including other Symphony roles.
+        // Retry the exact same turn; never re-execute completed file tools.
+        let mut retries = 0;
+        let response = loop {
+            let response = client.post("https://api.groq.com/openai/v1/chat/completions")
+                .bearer_auth(&key)
+                .json(&json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}))
+                .send().await.map_err(|e|format!("Groq connection: {e}"))?;
+            if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {break response;}
+            if retries >= 3 {break response;}
+            let retry_header = response.headers().get("retry-after")
+                .and_then(|h|h.to_str().ok())
+                .and_then(|h|h.parse::<f64>().ok());
+            let body = response.text().await.unwrap_or_default();
+            let suggested = parse_retry_seconds(&body).or(retry_header).unwrap_or(15.0);
+            let wait = suggested.ceil().clamp(1.0, 75.0) as u64;
+            retries += 1;
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+        };
         let status = response.status();
         if !status.is_success() {return Err(format!("Groq HTTP {status}: {}", response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
         let value: Value = response.json().await.map_err(|e|e.to_string())?;
@@ -79,4 +94,22 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
         contents.push(json!({"role":"user","parts":responses}));
     }
     Err("Gemini exceeded eight tool rounds".into())
+}
+
+
+fn parse_retry_seconds(body: &str) -> Option<f64> {
+    let start = body.find("Please try again in ")? + "Please try again in ".len();
+    let suffix = &body[start..];
+    let end = suffix.find('s')?;
+    suffix[..end].trim().parse::<f64>().ok().filter(|v|v.is_finite() && *v > 0.0)
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    #[test]
+    fn detects_retry_seconds() {
+        assert_eq!(parse_retry_seconds("Please try again in 12.1425s."), Some(12.1425));
+        assert_eq!(parse_retry_seconds("unrelated"), None);
+    }
 }
