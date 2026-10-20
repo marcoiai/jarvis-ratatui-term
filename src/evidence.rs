@@ -65,12 +65,38 @@ impl EvidenceCache {
                 entries.push(json!({
                     "tool":name, "path":args.get("path").and_then(Value::as_str).unwrap_or("."),
                     "cache_hit":cache_hit, "success":success, "elapsed_ms":started.elapsed().as_millis(),
+                    "start_line":args.get("start_line").and_then(Value::as_u64).unwrap_or(1),
+                    "end_line":args.get("end_line").and_then(Value::as_u64),
                     "result_bytes":result.len(),
                 }));
         }
     }
     pub fn events(&self) -> Vec<Value> {
         self.events.lock().map(|e| e.clone()).unwrap_or_default()
+    }
+    /// Machine-generated facts about completed source reads. A successful read may be
+    /// bounded or truncated; it does not imply full semantic review of a module.
+    pub fn read_manifest(&self) -> String {
+        let Ok(events) = self.events.lock() else { return "Source-read manifest unavailable".into(); };
+        let mut paths = BTreeSet::new();
+        for entry in events.iter() {
+            if entry["tool"] == "read_file" && entry["success"] == true {
+                let path = entry["path"].as_str().unwrap_or("(unknown)");
+                let start = entry["start_line"].as_u64().unwrap_or(1);
+                let end = entry["end_line"].as_u64();
+                let range = match end {
+                    Some(end) => format!("{start}-{end} (requested range; actual result may be shorter)"),
+                    None => format!("{start}+ (bounded tool output)"),
+                };
+                paths.insert(format!("{path}: {range}"));
+            }
+        }
+        if paths.is_empty() {
+            "No source files read. No source-code behavior has been verified.".into()
+        } else {
+            format!("READ SOURCE EXCERPTS (not verified modules; no percentage is available):\n{}",
+                paths.into_iter().collect::<Vec<_>>().join("\n"))
+        }
     }
     pub fn coverage(&self) -> String {
         let Ok(events) = self.events.lock() else { return "Coverage unavailable".into() };
@@ -92,7 +118,7 @@ impl EvidenceCache {
             if text.len()+line.len()>28000 { text.push_str("[Further evidence omitted due to context budget]\n"); break; }
             text.push_str(&line);
         }
-        text.push_str(&format!("\n{}\n",self.coverage()));
+        text.push_str(&format!("\n{}\n{}\n",self.coverage(),self.read_manifest()));
         text
     }
     pub fn len(&self) -> usize { self.observations.lock().map(|c|c.len()).unwrap_or(0) }
