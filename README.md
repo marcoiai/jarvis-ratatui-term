@@ -170,3 +170,20 @@ Known limitation: the current UI includes the metrics summary in chat history; t
 DUDE renders a compact, read-only workspace bar inspired by shell prompts: directory 📁, Git branch and a dirty-tree marker 🌿, active Python virtualenv or Conda 🐍, available inactive venv 🐍, Rust 🦀, Java ☕, PHP/Laravel/Symfony 🐘, Node 📦 and Docker/Compose 🐳. Only detected stacks appear. It never sources `.zshrc`, `.envrc` or executes workspace scripts; Git status is obtained through `git -C` with an argument list (no shell). A `Dockerfile` indicator means configuration exists, **not** that the daemon or container is running. `VIRTUAL_ENV` and `CONDA_DEFAULT_ENV` reflect environment variables inherited by DUDE at launch; changes made in another shell cannot be observed automatically in the existing DUDE process.
 
 Indicators are refreshed on startup, on `/workspace PATH`, and using `/env` or `/env refresh`. The bar is currently UI-only; workspace metadata is not silently forwarded to cloud providers. It is not a shell prompt emulator or a continuously updating file watcher.
+
+## Personal communication alignment (meta-pattern)
+
+Communication preferences are a **per-developer profile**, separate from repository knowledge. The `marco-personal-communication` LevelUp skill inspired the separation of communication defaults, explicit overrides, pacing, and opt-in persistence; that private skill is **not** automatically distributed to other employees.
+
+DUDE now loads `~/.config/dude/communication.json` for the current OS user and applies its language, verbosity, and pacing instructions in both Solo and Symphony. It does not copy the profile into `.dude/`, and switching workspace keeps personal settings. The current implementation is a small foundation for a broader alignment pattern, not a generic skill interpreter.
+
+Commands:
+- `/align` — inspect the profile.
+- `/align language pt-BR` or `/align language en` (also `auto`).
+- `/align detail concise|balanced|detailed`.
+- `/align pacing adaptive|step`.
+- `/align reset` — restore defaults.
+
+Common explicit requests like `em português por favor`, `in english please`, `mais objetivo`, and `passo a passo` update the user's profile locally without an API request. The latest instruction for a particular task still takes precedence in the prompt. The implementation deliberately does not infer persistent preferences from every offhand utterance.
+
+Known limits: detection currently uses a conservative set of exact phrases; it is not natural-language preference extraction. Profiles store no identity, API keys or project secrets. Tests cover alignment validation and common triggers; compilation must be verified with Cargo.
