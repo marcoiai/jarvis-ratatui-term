@@ -136,3 +136,9 @@ In Symphony mode, the Reviewer is instructed to propose a structured set of clai
 Approval is limited to documented/verified claims with source references; inferred claims require further investigation. Approved claims are appended to `.dude/memory.md` with their classifications and references. Rejected proposals remain in the candidate journal with `rejected` status. Review the actual code before approval: the Reviewer can still invent or misinterpret evidence references. Duplicate claims are skipped. The structured output is optional; if the model omits or malforms its proposal, the ordinary answer remains available and no knowledge is promoted.
 
 This is a first candidate-review workflow, not a semantic vector memory or a verified source-line validator. Run `cargo check` and `cargo test` locally to validate changes before use.
+
+## Complexity routing
+
+DUDE classifies requests deterministically before contacting any provider. In Symphony mode, empty-help prompts like `?`, `/help`, and basic greetings receive local responses without a network call. Brief questions are sent to the selected Solo role, while longer requests containing engineering-analysis markers use Investigator → Architect → Reviewer. Use `symphony: YOUR QUESTION` to force all roles even when Solo mode is selected, or `solo: YOUR QUESTION` to force one provider in Symphony mode. Regular `/mode solo` always uses the Solo provider unless a Symphony override is present.
+
+This is deliberately a simple, transparent heuristic, not an LLM intent classifier. It avoids unnecessary requests but can misclassify unusual prompts; use the explicit prefixes for deterministic behavior. Unit tests cover greetings, basic questions, complex engineering reviews, and overrides.
