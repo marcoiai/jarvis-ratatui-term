@@ -63,9 +63,14 @@ impl Memory {
         let exchange = Exchange {user:user.to_owned(),assistant:assistant.to_owned()};
         let line = serde_json::to_string(&exchange).map_err(|e|e.to_string())?;
         if line.len() > 64_000 { return Err("Exchange too large to persist".into()); }
-        let mut file=OpenOptions::new().create(true).append(true).open(self.dir.join("history.jsonl"))
+        let path = self.dir.join("history.jsonl");
+        if path.exists() && fs::symlink_metadata(&path).map_err(|e|e.to_string())?.file_type().is_symlink() {
+            return Err("Symlink history is not allowed".into());
+        }
+        let mut file=OpenOptions::new().create(true).append(true).open(path)
             .map_err(|e|e.to_string())?;
-        writeln!(file,"{line}").map_err(|e|e.to_string())
+        writeln!(file,"{line}").map_err(|e|e.to_string())?;
+        file.sync_data().map_err(|e|e.to_string())
     }
     pub fn recent(&self) -> Vec<Exchange> {
         let Ok(text)=fs::read_to_string(self.dir.join("history.jsonl")) else {return Vec::new()};
@@ -73,4 +78,76 @@ impl Memory {
             .collect::<Vec<_>>().into_iter().rev().collect()
     }
     pub fn location(&self) -> &Path { &self.dir }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let id=NEXT.fetch_add(1,Ordering::Relaxed);
+            let path=std::env::temp_dir().join(format!("dude-memory-test-{}-{id}",std::process::id()));
+            fs::create_dir_all(&path).expect("create fixture");
+            Self(path)
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn persists_across_restarts() {
+        let fixture=Fixture::new();
+        let memory=Memory::open(&fixture.0).unwrap();
+        memory.remember("Qt 6 migration").unwrap();
+        memory.decision("ADR-1: test first").unwrap();
+        memory.checkpoint("checkpoint one").unwrap();
+        memory.record("hi","hello").unwrap();
+        drop(memory);
+        let restored=Memory::open(&fixture.0).unwrap();
+        assert!(restored.context().contains("Qt 6 migration"));
+        assert!(restored.context().contains("ADR-1"));
+        assert_eq!(restored.recent().len(),1);
+        assert_eq!(restored.recent()[0].assistant,"hello");
+        assert!(restored.location().join("checkpoints.md").exists());
+    }
+
+    #[test]
+    fn corrupted_history_line_does_not_lose_valid_entries() {
+        let fixture=Fixture::new();
+        let memory=Memory::open(&fixture.0).unwrap();
+        memory.record("valid","answer").unwrap();
+        fs::OpenOptions::new().append(true)
+            .open(memory.location().join("history.jsonl")).unwrap()
+            .write_all(b"{partial json\n").unwrap();
+        let restored=Memory::open(&fixture.0).unwrap();
+        assert_eq!(restored.recent().len(),1);
+        assert_eq!(restored.recent()[0].user,"valid");
+    }
+
+    #[test]
+    fn rejects_blank_and_overlong_memory() {
+        let fixture=Fixture::new();
+        let memory=Memory::open(&fixture.0).unwrap();
+        assert!(memory.remember("   ").is_err());
+        assert!(memory.decision(&"x".repeat(4001)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_journal() {
+        use std::os::unix::fs::symlink;
+        let fixture=Fixture::new();
+        let memory=Memory::open(&fixture.0).unwrap();
+        let outside=fixture.0.join("outside");
+        fs::write(&outside,"untouched").unwrap();
+        symlink(&outside,memory.location().join("history.jsonl")).unwrap();
+        assert!(memory.record("secret","response").is_err());
+        assert_eq!(fs::read_to_string(outside).unwrap(),"untouched");
+    }
 }
