@@ -100,11 +100,11 @@ struct App {
 
 impl App {
     fn banner(&self) -> &'static str {
-        // Terminal-inspired wordmark. The official Enova logo is not reproduced.
+        // Wordmark provided by the project engineer; keep exact spacing.
         if self.communication.language == "pt-BR" {
-            "  _____  _   _   ___  __     __  _\n | ____|| \\ | | / _ \\ \\ \\   / / / \\\n |  _|  |  \\| || | | | \\ \\ / / / _ \\\n | |___ | |\\  || |_| |  \\ V / / ___ \\\n |_____||_| \\_| \\___/    \\_/ /_/   \\_\\\nD.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\nSanidade: FALHARAM | NOVVS: EM ESPERA | Café: CRÍTICO\nDeploys questionáveis: só com aprovação. E aí, buddy!"
+            "######## ##    ##  #######  ##     ##    ###\n##       ###   ## ##     ## ##     ##   ## ##\n##       ####  ## ##     ## ##     ##  ##   ##\n######   ## ## ## ##     ## ##     ## ##     ##\n##       ##  #### ##     ##  ##   ##  #########\n##       ##   ### ##     ##   ## ##   ##     ##\n######## ##    ##  #######     ###    ##     ##\nD.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\nSanidade: FALHARAM | NOVVS: EM ESPERA | Café: CRÍTICO\nDeploys questionáveis: só com aprovação. E aí, buddy!"
         } else {
-            "  _____  _   _   ___  __     __  _\n | ____|| \\ | | / _ \\ \\ \\   / / / \\\n |  _|  |  \\| || | | | \\ \\ / / / _ \\\n | |___ | |\\  || |_| |  \\ V / / ___ \\\n |_____||_| \\_| \\___/    \\_/ /_/   \\_\\\nD.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\nSanity: FAILED | NOVVS: STANDBY | Coffee: CRITICAL\nQuestionable deployments require approval. Hey dude!"
+            "######## ##    ##  #######  ##     ##    ###\n##       ###   ## ##     ## ##     ##   ## ##\n##       ####  ## ##     ## ##     ##  ##   ##\n######   ## ## ## ##     ## ##     ## ##     ##\n##       ##  #### ##     ##  ##   ##  #########\n##       ##   ### ##     ##   ## ##   ##     ##\n######## ##    ##  #######     ###    ##     ##\nD.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\nSanity: FAILED | NOVVS: STANDBY | Coffee: CRITICAL\nQuestionable deployments require approval. Hey dude!"
         }
     }
 
@@ -980,7 +980,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(3), Constraint::Length(9), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(3), Constraint::Length(11), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
         // Fixed introduction stays at its original position below input, outside scrollable transcript.
