@@ -70,7 +70,6 @@ struct App {
     model_ready: bool,
     model: String,
     ollama_url: String,
-    provider: String,
     groq_model: String,
     gemini_model: String,
     cloud_allowed: bool,
@@ -126,7 +125,6 @@ impl App {
             memory,
             last_question: None,
             roles,
-            provider: "ollama".into(),
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into()),
             cloud_allowed: false,
@@ -444,23 +442,6 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             response.chars().take(12000).collect::<String>()));
     }
     Err("Symphony ended without a review".into())
-}
-
-async fn ask_groq(client: &reqwest::Client, model: &str, messages: Vec<Message>) -> Result<String, String> {
-    let api_key = env::var("GROQ_API_KEY").map_err(|_| "Missing GROQ_API_KEY".to_owned())?;
-    let response = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .bearer_auth(api_key)
-        .json(&json!({"model":model,"messages":messages,"stream":false}))
-        .send().await.map_err(|e|format!("Groq connection error: {e}"))?;
-    let status=response.status();
-    if !status.is_success() {
-        return Err(format!("Groq HTTP {status}: {}",response.text().await.unwrap_or_default().chars().take(800).collect::<String>()));
-    }
-    let result:Value=response.json().await.map_err(|e|format!("Groq response error: {e}"))?;
-    result["choices"][0]["message"]["content"].as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| format!("Groq returned no text: {}", result.to_string().chars().take(400).collect::<String>()))
 }
 
 async fn ask_ollama(
