@@ -838,7 +838,7 @@ async fn ask_ollama(
             }))
             .send()
             .await
-            .map_err(|e| format!("Cannot reach Ollama: {e}"))?;
+            .map_err(|e| format!("Ollama request failed or timed out: {e}. Check Ollama logs and model availability."))?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -1072,7 +1072,8 @@ async fn run(
         }
     }
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(180))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
         .build()?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.output.push_str(&format!(
@@ -1087,7 +1088,8 @@ async fn run(
     });
     // The UI stays responsive while a missing model downloads.
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(180))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
         .build()?;
     loop {
         while let Ok(result) = rx.try_recv() {
