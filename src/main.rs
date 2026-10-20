@@ -99,12 +99,15 @@ struct App {
 }
 
 impl App {
+    fn logo(&self) -> &'static str {
+        "######## ##    ##  #######  ##     ##    ###\n##       ###   ## ##     ## ##     ##   ## ##\n##       ####  ## ##     ## ##     ##  ##   ##\n######   ## ## ## ##     ## ##     ## ##     ##\n##       ##  #### ##     ##  ##   ##  #########\n##       ##   ### ##     ##   ## ##   ##     ##\n######## ##    ##  #######     ###    ##     ##"
+    }
+
     fn banner(&self) -> &'static str {
-        // Wordmark provided by the project engineer; keep exact spacing.
         if self.communication.language == "pt-BR" {
-            "######## ##    ##  #######  ##     ##    ###\n##       ###   ## ##     ## ##     ##   ## ##\n##       ####  ## ##     ## ##     ##  ##   ##\n######   ## ## ## ##     ## ##     ## ##     ##\n##       ##  #### ##     ##  ##   ##  #########\n##       ##   ### ##     ##   ## ##   ##     ##\n######## ##    ##  #######     ###    ##     ##\nD.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\nSanidade: FALHARAM | NOVVS: EM ESPERA | Café: CRÍTICO\nDeploys questionáveis: só com aprovação. E aí, buddy!"
+            "D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\nSanidade: FALHARAM | NOVVS: EM ESPERA | Café: CRÍTICO\nDeploys questionáveis: só com aprovação. E aí, buddy!"
         } else {
-            "######## ##    ##  #######  ##     ##    ###\n##       ###   ## ##     ## ##     ##   ## ##\n##       ####  ## ##     ## ##     ##  ##   ##\n######   ## ## ## ##     ## ##     ## ##     ##\n##       ##  #### ##     ##  ##   ##  #########\n##       ##   ### ##     ##   ## ##   ##     ##\n######## ##    ##  #######     ###    ##     ##\nD.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\nSanity: FAILED | NOVVS: STANDBY | Coffee: CRITICAL\nQuestionable deployments require approval. Hey dude!"
+            "D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\nSanity: FAILED | NOVVS: STANDBY | Coffee: CRITICAL\nQuestionable deployments require approval. Hey dude!"
         }
     }
 
@@ -980,13 +983,18 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(11), Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(7), Constraint::Length(3), Constraint::Length(4), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
-        // Fixed ENOVA/DUDE identity above input, outside scrollable transcript.
+        // ENOVA logo stays red and fixed above the input.
+        frame.render_widget(
+            Paragraph::new(app.logo()).style(Style::default().fg(Color::Red)),
+            chunks[0],
+        );
+        // DUDE identification stays fixed below the input, outside the transcript.
         frame.render_widget(
             Paragraph::new(app.banner()).style(Style::default().fg(Color::Cyan)),
-            chunks[0],
+            chunks[2],
         );
 
         // Keep the input tail and the real terminal cursor visible.
@@ -1025,8 +1033,8 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         if app.follow_output {
-            let visible_rows = chunks[2].height.saturating_sub(2) as usize;
-            let available_width = chunks[2].width.saturating_sub(2).max(1);
+            let visible_rows = chunks[3].height.saturating_sub(2) as usize;
+            let available_width = chunks[3].width.saturating_sub(2).max(1);
             let width = available_width as usize;
             let wrapped_rows: usize = app.output.lines().map(|line| {
                 let columns = line.chars().count();
@@ -1035,10 +1043,10 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             // Keep the final lines in view, without scrolling into blank space.
             app.scroll = wrapped_rows.saturating_sub(visible_rows).min(60_000) as u16;
         }
-        frame.render_widget(output.scroll((app.scroll, 0)), chunks[2]);
+        frame.render_widget(output.scroll((app.scroll, 0)), chunks[3]);
 
         let environment_line=app.environment.status();
-        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[3]);
+        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[4]);
 
         let mode_label = if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
@@ -1054,7 +1062,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(
             Paragraph::new(footer)
                 .block(Block::default().title("Help").borders(Borders::ALL)),
-            chunks[4],
+            chunks[5],
         );
     })?;
     Ok(())
