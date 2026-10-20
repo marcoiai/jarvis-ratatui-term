@@ -81,3 +81,11 @@
 - Em resposta concluída, limpa o marcador após gravar histórico/journal; falhas mantêm o pedido disponível para nova tentativa.
 - Teste verifica recuperação através de nova instância de Memory e limpeza explícita.
 - Limitações: não salva chunks nem execuções parciais; não tem autosave horário; novo pedido substitui o marcador anterior; escrita em disco não equivale a backup externo. Validar `cargo fmt`, `cargo check` e `cargo test` no ambiente local.
+
+## 2026-10-20 — Etapa 5: progresso da investigação em disco
+
+- Novo módulo `src/progress.rs`, que grava eventos de ferramentas em `.dude/investigation_progress.jsonl` com timestamp UTC, nome da ferramenta, caminho, resultado, cache hit e intervalo de linhas.
+- `EvidenceCache::execute` registra progresso tanto para execução normal quanto para leitura via cache.
+- Metadados apenas: nenhum conteúdo de arquivo, expressão de busca ou resposta do modelo no journal de progresso; Knowledge continua separado.
+- Cada evento faz append e `sync_data`; teste unitário verifica persistência dos metadados e ausência do padrão de busca.
+- **Limite:** o journal é histórico append-only e ainda não é consumido para retomar a sequência de ferramentas automaticamente. A recuperação do pedido continua usando `/recover`. O estado em memória das evidências não é reconstruído. Erros de gravação do progresso não interrompem a investigação (best effort); ainda falta feedback operacional e compactação por sessão. Testes locais pendentes.
