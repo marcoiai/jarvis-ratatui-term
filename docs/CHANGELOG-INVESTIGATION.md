@@ -175,3 +175,10 @@
 - Ordem final: `logo vermelha → input → identificação DUDE → conversa rolável → ambiente → ajuda`.
 - `/clear` continua limpando a conversa, sem alterar logo e identificação fixas.
 - Testes `cargo check`, `cargo test` e validação visual no Mac ainda pendentes.
+
+## 2026-10-20 — Logo ENOVA Business Solutions baseada na referência enviada
+
+- Inspecionada a imagem PNG incorporada no HTML enviado: lettering ENOVA com N vermelho, demais letras escuras e subtítulo cinza `business solutions`.
+- Nova arte tipográfica de 5 linhas no terminal usando `ratatui::text::{Line, Span, Text}`, com vermelho apenas no N, letras restantes neutras e subtítulo cinza. É adaptação para terminal, não renderização pixel a pixel do PNG.
+- Mantida a ordem fixa `logo → input → cabeçalho DUDE → conversa rolável` e os controles `/clear`/rolagem.
+- Testar `cargo fmt --check`, `cargo check`, `cargo test` e aparência no Mac; comportamento em terminal estreito ainda não validado.
