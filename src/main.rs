@@ -766,6 +766,7 @@ async fn ask_ollama(
                 "model": model,
                 "messages": conversation,
                 "stream": stream_final,
+                "think": false,
                 "options": { "num_ctx": investigation::context_size() },
                 "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
             }))
