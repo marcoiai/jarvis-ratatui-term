@@ -458,9 +458,9 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     groq_model: &str, gemini_model: &str) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
-            "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings."),
+            "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
         ("Architect", roles.architect.as_str(),
-            "Use the investigator's findings to propose a grounded engineering solution. Make tradeoffs, uncertainties and evidence explicit."),
+            "Use the investigator's findings to propose a grounded engineering solution. Make tradeoffs, uncertainties and evidence explicit. Keep your handoff below 700 words; do not repeat the investigation verbatim."),
         ("Reviewer", roles.reviewer.as_str(),
             "Review the investigator and architect work critically. Correct unsupported claims. Produce ONE final answer to the user with conclusions and unresolved uncertainties. Do not reveal a multi-agent transcript."),
     ];
@@ -470,6 +470,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     for (index,(name,provider,instruction)) in steps.iter().enumerate() {
         let mut stage:Vec<Message> = messages.iter().filter(|m|m.role=="system").cloned().collect();
         stage.push(Message{role:"system".into(),content:format!("You are the {name} in DUDE Symphony. {instruction}")});
+        // Avoid broadcasting unrelated old chat turns to every Symphony stage.
         stage.push(Message{role:"user".into(),content:format!(
             "Original user request:\n{question}\n\nPrevious verified or provisional stage findings:\n{}\n",
             if shared.is_empty() {"(none)"} else {&shared}
@@ -480,7 +481,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         if index == 2 {return Ok(response);}
         // Bound cost and payload sent to downstream providers.
         shared.push_str(&format!("\n{name} ({provider}) findings:\n{}\n",
-            response.chars().take(12000).collect::<String>()));
+            response.chars().take(5000).collect::<String>()));
     }
     Err("Symphony ended without a review".into())
 }
