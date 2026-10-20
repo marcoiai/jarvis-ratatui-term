@@ -99,6 +99,14 @@ struct App {
 }
 
 impl App {
+    fn banner(&self) -> &'static str {
+        if self.communication.language == "pt-BR" {
+            "D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local"
+        } else {
+            "D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode"
+        }
+    }
+
     fn new() -> Self {
         let workspace = env::var("DUDE_WORKSPACE").ok()
             .and_then(|p| std::fs::canonicalize(p).ok())
@@ -128,9 +136,9 @@ impl App {
             input: String::new(),
             key_prompt: None,
             output: if communication.language == "pt-BR" {
-                String::from("D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\n\nDUDE inicializado.\nTestes de sanidade: FALHARAM.\nDiagnóstico NOVVS: EM ESPERA.\nDependência de café: CRÍTICA.\nPronto para deploys questionáveis (com sua aprovação).\n\nE aí, buddy! O que vamos construir hoje?\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
+                String::from("DUDE inicializado.\nTestes de sanidade: FALHARAM.\nDiagnóstico NOVVS: EM ESPERA.\nDependência de café: CRÍTICA.\nPronto para deploys questionáveis (com sua aprovação).\n\nE aí, buddy! O que vamos construir hoje?\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
             } else {
-                String::from("D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\n\nDUDE initialized successfully.\nSanity checks: FAILED.\nNOVVS diagnostics: STANDBY.\nCoffee dependency: CRITICAL.\nReady to deploy questionable decisions (with your approval).\n\nHey dude! What are we building today?\nType a question, !command, /model NAME or /clear.\n")
+                String::from("DUDE initialized successfully.\nSanity checks: FAILED.\nNOVVS diagnostics: STANDBY.\nCoffee dependency: CRITICAL.\nReady to deploy questionable decisions (with your approval).\n\nHey dude! What are we building today?\nType a question, !command, /model NAME or /clear.\n")
             },
             history,
             scroll: 0,
@@ -961,11 +969,17 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(2), Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
+        // Permanent identity: separate from the scrollable transcript and /clear.
+        frame.render_widget(
+            Paragraph::new(app.banner()).style(Style::default().fg(Color::Cyan)),
+            chunks[0],
+        );
+
         // Keep the input tail and the real terminal cursor visible.
-        let input_width = chunks[0].width.saturating_sub(2) as usize;
+        let input_width = chunks[1].width.saturating_sub(2) as usize;
         let mut visible = String::new();
         let mut visible_width = 0usize;
         for ch in app.input.chars().rev() {
@@ -981,9 +995,9 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let input = Paragraph::new(visible)
             .block(Block::default().title(if app.key_prompt.is_some() {"DUDE - secret API key"} else {"DUDE - input"}).borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
-        frame.render_widget(input, chunks[0]);
-        if input_width > 0 && chunks[0].height > 2 {
-            frame.set_cursor_position((chunks[0].x + 1 + visible_width as u16, chunks[0].y + 1));
+        frame.render_widget(input, chunks[1]);
+        if input_width > 0 && chunks[1].height > 2 {
+            frame.set_cursor_position((chunks[1].x + 1 + visible_width as u16, chunks[1].y + 1));
         }
 
         const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
@@ -1000,8 +1014,8 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         if app.follow_output {
-            let visible_rows = chunks[1].height.saturating_sub(2) as usize;
-            let available_width = chunks[1].width.saturating_sub(2).max(1);
+            let visible_rows = chunks[2].height.saturating_sub(2) as usize;
+            let available_width = chunks[2].width.saturating_sub(2).max(1);
             let width = available_width as usize;
             let wrapped_rows: usize = app.output.lines().map(|line| {
                 let columns = line.chars().count();
@@ -1010,10 +1024,10 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             // Keep the final lines in view, without scrolling into blank space.
             app.scroll = wrapped_rows.saturating_sub(visible_rows).min(60_000) as u16;
         }
-        frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
+        frame.render_widget(output.scroll((app.scroll, 0)), chunks[2]);
 
         let environment_line=app.environment.status();
-        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[2]);
+        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[3]);
 
         let mode_label = if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
