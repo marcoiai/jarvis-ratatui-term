@@ -246,26 +246,17 @@ impl App {
             return;
         }
         if input == "/providers" {
-            self.output.push_str("Providers: ollama (local), groq (cloud; GROQ_API_KEY required).\n");
-            self.output.push_str(&format!("Selected: {}\n", self.provider));
+            self.output.push_str("Providers: ollama (local), gemini (GEMINI_API_KEY/GOOGLE_API_KEY), groq (GROQ_API_KEY), openai (planned).\n");
+            self.output.push_str(&self.roles.summary());
             return;
         }
         if let Some(name) = input.strip_prefix("/provider ") {
-            match name.trim() {
-                "ollama" | "local" => {
-                    self.provider = "ollama".into();
-                    self.output.push_str("Provider: Ollama local.\n");
-                }
-                "groq" => {
-                    if env::var("GROQ_API_KEY").is_ok() {
-                        self.provider = "groq".into();
-                        self.output.push_str("Groq Cloud selected. Conversation and project context will be sent to Groq on your next question.\n");
-                    } else {
-                        self.output.push_str("Set GROQ_API_KEY before starting DUDE.\n");
-                    }
-                }
-                _ => self.output.push_str("Unknown provider. Use /providers.\n"),
-            }
+            let mut updated=self.roles.clone();
+            let role=updated.solo_role.clone();
+            let result=updated.set(&role,name.trim()).and_then(|_|updated.save(&self.workspace).map(|_|{
+                self.roles=updated;
+            }));
+            self.output.push_str(&format!("Solo role provider update: {result:?}\n"));
             return;
         }
         if input == "/memory" || input == "/coeng status" {
@@ -294,7 +285,7 @@ impl App {
             self.output.push_str(&format!("Checkpoint: {:?}\n",result));
             return;
         }
-        if !self.model_ready && ((self.roles.mode == "solo" && self.roles.selected_provider() == "ollama") || (self.roles.mode == "symphony" && [&self.roles.investigator,&self.roles.architect,&self.roles.reviewer].iter().any(|p|p.as_str()=="ollama"))) {
+        if !input.starts_with('!') && !input.starts_with('/') && !self.model_ready && ((self.roles.mode == "solo" && self.roles.selected_provider() == "ollama") || (self.roles.mode == "symphony" && [&self.roles.investigator,&self.roles.architect,&self.roles.reviewer].iter().any(|p|p.as_str()=="ollama"))) {
             self.output.push_str("Local model not ready. You can still use memory commands.\n");
             return;
         }
@@ -607,7 +598,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             let elapsed = app.started_at.map(|start| start.elapsed()).unwrap_or_default();
             let frame = FRAMES[((elapsed.as_millis() / 100) as usize) % FRAMES.len()];
             format!("Answer {frame} Thinking... {}s", elapsed.as_secs())
-        } else if !app.model_ready && app.provider == "ollama" {
+        } else if !app.model_ready && app.roles.mode == "solo" && app.roles.selected_provider() == "ollama" {
             "Answer · Preparing model".to_owned()
         } else {
             "Answer · Ready".to_owned()
