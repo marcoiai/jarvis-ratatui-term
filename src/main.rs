@@ -65,6 +65,8 @@ struct App {
     model_ready: bool,
     model: String,
     ollama_url: String,
+    provider: String,
+    groq_model: String,
     workspace: PathBuf,
     memory: Option<memory::Memory>,
     last_question: Option<String>,
@@ -113,6 +115,8 @@ impl App {
             workspace,
             memory,
             last_question: None,
+            provider: "ollama".into(),
+            groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".into()),
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
@@ -133,6 +137,29 @@ impl App {
         self.output.push_str(&format!("\n> {input}\n"));
         self.follow_output = true;
 
+        if input == "/providers" {
+            self.output.push_str("Providers: ollama (local), groq (cloud; GROQ_API_KEY required).\n");
+            self.output.push_str(&format!("Selected: {}\n", self.provider));
+            return;
+        }
+        if let Some(name) = input.strip_prefix("/provider ") {
+            match name.trim() {
+                "ollama" | "local" => {
+                    self.provider = "ollama".into();
+                    self.output.push_str("Provider: Ollama local.\n");
+                }
+                "groq" => {
+                    if env::var("GROQ_API_KEY").is_ok() {
+                        self.provider = "groq".into();
+                        self.output.push_str("Groq Cloud selected. Conversation and project context will be sent to Groq on your next question.\n");
+                    } else {
+                        self.output.push_str("Set GROQ_API_KEY before starting DUDE.\n");
+                    }
+                }
+                _ => self.output.push_str("Unknown provider. Use /providers.\n"),
+            }
+            return;
+        }
         if input == "/memory" || input == "/coeng status" {
             match &self.memory {
                 Some(store) => self.output.push_str(&format!("Coengineering memory: {}\n{}\n",
@@ -159,8 +186,8 @@ impl App {
             self.output.push_str(&format!("Checkpoint: {:?}\n",result));
             return;
         }
-        if !self.model_ready {
-            self.output.push_str("Model not ready. You can still use memory commands.\n");
+        if !self.model_ready && self.provider == "ollama" {
+            self.output.push_str("Local model not ready. You can still use memory commands.\n");
             return;
         }
 
@@ -195,11 +222,16 @@ impl App {
             self.last_question = Some(input.clone());
             self.history.push(Message { role: "user".into(), content: input });
             let messages = self.history.clone();
-            let model = self.model.clone();
+            let model = if self.provider == "groq" { self.groq_model.clone() } else { self.model.clone() };
+            let provider = self.provider.clone();
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
             tokio::spawn(async move {
-                let result = ask_ollama(&client, &url, &model, messages, workspace).await;
+                let result = if provider == "groq" {
+                    ask_groq(&client, &model, messages).await
+                } else {
+                    ask_ollama(&client, &url, &model, messages, workspace).await
+                };
                 let _ = tx.send(ResultMessage::Chat(result));
             });
         }
@@ -237,6 +269,23 @@ impl App {
         }
         self.follow_output = true;
     }
+}
+
+async fn ask_groq(client: &reqwest::Client, model: &str, messages: Vec<Message>) -> Result<String, String> {
+    let api_key = env::var("GROQ_API_KEY").map_err(|_| "Missing GROQ_API_KEY".to_owned())?;
+    let response = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&json!({"model":model,"messages":messages,"stream":false}))
+        .send().await.map_err(|e|format!("Groq connection error: {e}"))?;
+    let status=response.status();
+    if !status.is_success() {
+        return Err(format!("Groq HTTP {status}: {}",response.text().await.unwrap_or_default().chars().take(800).collect::<String>()));
+    }
+    let result:Value=response.json().await.map_err(|e|format!("Groq response error: {e}"))?;
+    result["choices"][0]["message"]["content"].as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("Groq returned no text: {}", result.to_string().chars().take(400).collect::<String>()))
 }
 
 async fn ask_ollama(
@@ -373,8 +422,8 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
 
         let footer = format!(
-            "Ollama: {} | Model: {} | /memory /remember /decision /checkpoint | ESC",
-            app.ollama_url, app.model
+            "Provider: {} | Model: {} | /providers /provider NAME | /memory | ESC",
+            app.provider, if app.provider=="groq" {&app.groq_model} else {&app.model}
         );
         frame.render_widget(
             Paragraph::new(footer)
