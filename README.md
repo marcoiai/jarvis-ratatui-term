@@ -164,3 +164,9 @@ Use the same engineering task in `solo: ...` and `symphony: ...` to compare late
 5. Repeat across multiple tasks before drawing conclusions; no quality score is automatically generated from model output.
 
 Known limitation: the current UI includes the metrics summary in chat history; this may slightly increase later context size. Separating telemetry from model-facing history remains future cleanup.
+
+## Workspace status indicators
+
+DUDE renders a compact, read-only workspace bar inspired by shell prompts: directory 📁, Git branch and a dirty-tree marker 🌿, active Python virtualenv or Conda 🐍, available inactive venv 🐍, Rust 🦀, Java ☕, PHP/Laravel/Symfony 🐘, Node 📦 and Docker/Compose 🐳. Only detected stacks appear. It never sources `.zshrc`, `.envrc` or executes workspace scripts; Git status is obtained through `git -C` with an argument list (no shell). A `Dockerfile` indicator means configuration exists, **not** that the daemon or container is running. `VIRTUAL_ENV` and `CONDA_DEFAULT_ENV` reflect environment variables inherited by DUDE at launch; changes made in another shell cannot be observed automatically in the existing DUDE process.
+
+Indicators are refreshed on startup, on `/workspace PATH`, and using `/env` or `/env refresh`. The bar is currently UI-only; workspace metadata is not silently forwarded to cloud providers. It is not a shell prompt emulator or a continuously updating file watcher.
