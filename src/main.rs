@@ -1,3 +1,4 @@
+mod environment;
 mod metrics;
 mod router;
 mod knowledge;
@@ -82,6 +83,7 @@ struct App {
     gemini_model: String,
     cloud_allowed: bool,
     workspace: PathBuf,
+    environment: environment::Environment,
     memory: Option<memory::Memory>,
     last_question: Option<String>,
     roles: roles::Roles,
@@ -94,6 +96,7 @@ impl App {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let memory = memory::Memory::open(&workspace).ok();
         let roles = roles::Roles::load(&workspace).unwrap_or_default();
+        let environment = environment::Environment::detect(&workspace);
         let mut history = vec![Message {
             role: "system".into(),
             content: concat!(
@@ -131,6 +134,7 @@ impl App {
             started_at: None,
             model_ready: false,
             workspace,
+            environment,
             memory,
             last_question: None,
             roles,
@@ -168,6 +172,11 @@ impl App {
         self.output.push_str(&format!("\n> {input}\n"));
         self.follow_output = true;
 
+        if input == "/env" || input == "/env refresh" {
+            self.environment=environment::Environment::detect(&self.workspace);
+            self.output.push_str(&self.environment.describe());
+            return;
+        }
         if input == "/workspace" {
             self.output.push_str(&format!("Workspace: {}\n", self.workspace.display()));
             return;
@@ -188,6 +197,7 @@ impl App {
                     match memory::Memory::open(&path) {
                         Ok(store) => {
                             self.workspace = path;
+                            self.environment = environment::Environment::detect(&self.workspace);
                             self.history.truncate(1);
                             self.history.push(Message {
                                 role: "system".into(),
@@ -677,7 +687,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
         // Keep the input tail and the real terminal cursor visible.
@@ -728,6 +738,9 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         }
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
 
+        let environment_line=app.environment.status();
+        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[2]);
+
         let footer = format!(
             "Mode: {} | Solo: {} ({}) | /roles /role /mode /cloud | ESC",
             app.roles.mode, app.roles.solo_role, app.roles.selected_provider()
@@ -735,7 +748,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(
             Paragraph::new(footer)
                 .block(Block::default().title("Help").borders(Borders::ALL)),
-            chunks[2],
+            chunks[3],
         );
     })?;
     Ok(())
