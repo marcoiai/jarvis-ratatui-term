@@ -65,3 +65,9 @@ Groq chat is available through an OpenAI-compatible Chat Completions endpoint. C
 In the TUI, type `/providers` then `/provider groq` to opt into cloud requests; use `/provider ollama` to return to local Qwen. **Selecting Groq sends your current chat and the loaded project context to Groq on subsequent prompts**. Do not select it for confidential projects unless explicitly authorized. The Groq adapter currently supports chat text only, not file tool calling. Your Groq API credentials are separate from OpenAI, Gemini and Ollama.
 
 This is an initial integration, not an audited provider sandbox. The complete provider trait remains on the roadmap.
+
+## Switching workspaces
+
+Use `/workspace` to print the active workspace, or `/workspace ~/Projects/levelup` to explicitly switch to a different directory. The command expands `~`, verifies the target exists, and reloads that project's separate `.dude/` memory and conversation history. AI tools remain confined to the selected workspace and cannot switch it themselves.
+
+Alternatively launch DUDE with `DUDE_WORKSPACE="$HOME/Projects/levelup" cargo run`. The directory must exist and be accessible. `/workspace` is a user command, not an LLM tool.
