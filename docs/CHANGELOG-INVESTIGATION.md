@@ -72,3 +72,12 @@
 - Teste adicionando verificação de persistência do journal após reabertura, sem promoção automática para memory.md.
 - **Limites:** ainda não existe temporizador/autosave horário independente; a gravação acontece após respostas concluídas enquanto o programa roda. Não registra chunks de respostas incompletas nem tarefas interrompidas; `sync_data` não equivale a backup externo.
 - `chrono` adicionado ao Cargo.toml; atualizar Cargo.lock localmente e validar build/testes.
+
+## 2026-10-20 — Etapa 4: checkpoint e recuperação de pedidos
+
+- `Memory::save_pending`: grava o pedido antes do dispatch em `.dude/pending_request.json` com timestamp UTC e escrita temporária seguida de rename; o pedido fica separado de Knowledge e do diário bruto.
+- `Memory::pending` / `clear_pending`: consulta e descarte do pedido pendente, com bloqueio de arquivos symlink.
+- Startup alerta sobre pedido interrompido; `/recover` carrega o texto na entrada para revisão e reenvio manual, `/recover discard` descarta.
+- Em resposta concluída, limpa o marcador após gravar histórico/journal; falhas mantêm o pedido disponível para nova tentativa.
+- Teste verifica recuperação através de nova instância de Memory e limpeza explícita.
+- Limitações: não salva chunks nem execuções parciais; não tem autosave horário; novo pedido substitui o marcador anterior; escrita em disco não equivale a backup externo. Validar `cargo fmt`, `cargo check` e `cargo test` no ambiente local.
