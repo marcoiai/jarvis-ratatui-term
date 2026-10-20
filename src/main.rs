@@ -656,6 +656,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
+    let require_project_evidence = allow_tools && investigation::needs_baseline(question);
     let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
     if allow_tools {
         let root = workspace.clone();
@@ -674,12 +675,17 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
-    match provider {
+    let evidence_for_gate = evidence.clone();
+    let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
+    }?;
+    if require_project_evidence {
+        investigation::require_evidence_for_overview(evidence_for_gate.len())?;
     }
+    Ok(answer)
 }
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
