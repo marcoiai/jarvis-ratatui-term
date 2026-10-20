@@ -123,17 +123,11 @@ impl App {
         Self {
             input: String::new(),
             key_prompt: None,
-            output: String::from(concat!(
-                "D.U.D.E. — Demented Unified Development Entity\n",
-                "Enova Engineering Assistant | Local AI Mode\n\n",
-                "DUDE initialized successfully.\n",
-                "Sanity checks: FAILED.\n",
-                "NOVVS diagnostics: STANDBY.\n",
-                "Coffee dependency: CRITICAL.\n",
-                "Ready to deploy questionable decisions (with your approval).\n\n",
-                "Hey dude! What are we building today?\n",
-                "Type a question, !command, /model NAME or /clear.\n"
-            )),
+            output: if communication.language == "pt-BR" {
+                String::from("D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\n\nDUDE inicializado.\nTestes de sanidade: FALHARAM.\nDiagnóstico NOVVS: EM ESPERA.\nDependência de café: CRÍTICA.\nPronto para deploys questionáveis (com sua aprovação).\n\nE aí, buddy! O que vamos construir hoje?\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
+            } else {
+                String::from("D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\n\nDUDE initialized successfully.\nSanity checks: FAILED.\nNOVVS diagnostics: STANDBY.\nCoffee dependency: CRITICAL.\nReady to deploy questionable decisions (with your approval).\n\nHey dude! What are we building today?\nType a question, !command, /model NAME or /clear.\n")
+            },
             history,
             scroll: 0,
             follow_output: true,
@@ -424,7 +418,7 @@ impl App {
             return;
         }
 
-        let selection = router::route(&input, &self.roles.mode);
+        let selection = router::route(&input, &self.roles.mode, &self.communication.language);
         if let router::Route::Local(reply) = &selection {
             self.output.push_str(reply);
             self.output.push('\n');
@@ -538,7 +532,7 @@ impl App {
             ResultMessage::ModelReady(Ok(model)) => {
                 self.model = model.clone();
                 self.model_ready = true;
-                self.output.push_str(&format!("Model ready: {model}\n"));
+                self.output.push_str(&format!("{}: {model}\n", if self.communication.language == "pt-BR" {"Modelo pronto"} else {"Model ready"}));
             }
             ResultMessage::ModelReady(Err(error)) => {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
@@ -897,7 +891,7 @@ async fn run(
         .build()?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.output.push_str(&format!(
-        "Checking Ollama for {} (downloading if missing)...\n", app.model
+        "{} {}...\n", if app.communication.language == "pt-BR" {"Verificando Ollama para"} else {"Checking Ollama for"}, app.model
     ));
     let tx_init = tx.clone();
     let host = app.ollama_url.clone();
