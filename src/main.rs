@@ -137,6 +137,50 @@ impl App {
         self.output.push_str(&format!("\n> {input}\n"));
         self.follow_output = true;
 
+        if input == "/workspace" {
+            self.output.push_str(&format!("Workspace: {}\n", self.workspace.display()));
+            return;
+        }
+        if let Some(requested) = input.strip_prefix("/workspace ") {
+            let requested = requested.trim();
+            let expanded = if requested == "~" {
+                env::var("HOME").map(PathBuf::from)
+            } else if let Some(tail) = requested.strip_prefix("~/") {
+                env::var("HOME").map(|home| PathBuf::from(home).join(tail))
+            } else {
+                Ok(PathBuf::from(requested))
+            };
+            let target = expanded.map_err(|e| e.to_string())
+                .and_then(|p| std::fs::canonicalize(p).map_err(|e| e.to_string()));
+            match target {
+                Ok(path) if path.is_dir() => {
+                    match memory::Memory::open(&path) {
+                        Ok(store) => {
+                            self.workspace = path;
+                            self.history.truncate(1);
+                            self.history.push(Message {
+                                role: "system".into(),
+                                content: store.context(),
+                            });
+                            for exchange in store.recent() {
+                                self.history.push(Message { role: "user".into(), content: exchange.user });
+                                self.history.push(Message { role: "assistant".into(), content: exchange.assistant });
+                            }
+                            self.memory = Some(store);
+                            self.last_question = None;
+                            self.output.push_str(&format!(
+                                "Workspace switched to {}. Project memory reloaded.\n",
+                                self.workspace.display()
+                            ));
+                        }
+                        Err(error) => self.output.push_str(&format!("Workspace memory error: {error}\n")),
+                    }
+                }
+                Ok(_) => self.output.push_str("Workspace path is not a directory.\n"),
+                Err(error) => self.output.push_str(&format!("Cannot open workspace: {error}\n")),
+            }
+            return;
+        }
         if input == "/providers" {
             self.output.push_str("Providers: ollama (local), groq (cloud; GROQ_API_KEY required).\n");
             self.output.push_str(&format!("Selected: {}\n", self.provider));
