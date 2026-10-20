@@ -19,6 +19,8 @@ struct Record<'a> {
     evidence_items:usize,
     stages:Vec<Stage>,
     token_usage:Vec<TokenUsage>,
+    tool_events:Vec<serde_json::Value>,
+    coverage:String,
 }
 impl Metrics {
     pub fn tokens(&self,provider:&str,model:&str,input:u64,output:u64){
@@ -31,7 +33,7 @@ impl Metrics {
         let stages=self.0.lock().map_err(|e|e.to_string())?.clone();
         let elapsed_ms=start.elapsed().as_millis();
         let usage=self.1.lock().map_err(|e|e.to_string())?.clone();
-        let record=Record{mode,elapsed_ms,success,tool_executions:evidence.calls(),evidence_cache_hits:evidence.hits(),evidence_items:evidence.len(),stages:stages.clone(),token_usage:usage.clone()};
+        let record=Record{mode,elapsed_ms,success,tool_executions:evidence.calls(),evidence_cache_hits:evidence.hits(),evidence_items:evidence.len(),stages:stages.clone(),token_usage:usage.clone(),tool_events:evidence.events(),coverage:evidence.coverage()};
         let path=workspace.join(".dude/metrics.jsonl");
         let dir=path.parent().ok_or("Missing metrics directory")?;
         fs::create_dir_all(dir).map_err(|e|e.to_string())?;
