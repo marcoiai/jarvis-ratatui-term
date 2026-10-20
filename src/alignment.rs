@@ -59,9 +59,9 @@ impl Profile {
 }
 // Simple explicit preference statements are handled without any LLM request.
 pub fn explicit_alignment(input:&str)->Option<(&'static str,&'static str)>{
-    let normalized=input.trim().to_lowercase();
+    let normalized=input.trim().trim_end_matches(['.', '!', '?']).trim().to_lowercase().replace("ê","e").replace("é","e");
     match normalized.as_str(){
-        "em português"|"em português por favor"|"responda em português"|"responda em português por favor"=>Some(("language","pt-BR")),
+        "em portugues"|"em portugues por favor"|"responda em portugues"|"responda em portugues por favor"=>Some(("language","pt-BR")),
         "in english please"|"respond in english"|"in english"=>Some(("language","en")),
         "seja mais objetivo"|"mais objetivo"|"respostas mais curtas"|"seja mais breve"=>Some(("detail","concise")),
         "mais detalhes"|"explique com mais detalhes"=>Some(("detail","detailed")),
@@ -74,6 +74,8 @@ mod tests{
     use super::*;
     #[test] fn different_people_same_pattern(){
         assert_eq!(explicit_alignment("Em português por favor"),Some(("language","pt-BR")));
+        assert_eq!(explicit_alignment("em portugues"),Some(("language","pt-BR")));
+        assert_eq!(explicit_alignment("em portugues!"),Some(("language","pt-BR")));
         assert_eq!(explicit_alignment("in english please"),Some(("language","en")));
         assert!(explicit_alignment("analise o projeto").is_none());
     }
