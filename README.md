@@ -41,3 +41,19 @@ This branch replaces the original Gemini shell script. The obsolete Gemini shell
 - One active request at a time; the UI stays interactive.
 - For safety, `!` runs programs without `sh -c` or `bash -c`. It is still arbitrary command execution by the local user.
 - No built-in credential storage.
+
+## Persistent AI Co-Engineering memory
+
+DUDE uses a project-local `.dude/` directory (relative to `DUDE_WORKSPACE`, or current directory). It creates:
+
+- `context.md`: manually editable project goals, constraints and references.
+- `memory.md`: explicit durable facts recorded using `/remember FACT`.
+- `decisions.md`: append-only engineering decisions using `/decision Decision and rationale`.
+- `checkpoints.md`: session checkpoints using `/checkpoint SUMMARY`.
+- `history.jsonl`: successful user/assistant exchanges, restored up to the most recent 8 exchanges when starting again.
+
+Type `/memory` or `/coeng status` to see current project context. The system context is refreshed before each chat request. The app limits material loaded into the model, but **history on disk is retained until you delete it yourself**. `/clear` clears the active chat, not persistent storage.
+
+**Privacy:** `.dude/` can contain proprietary material. Do not commit or share it accidentally; add `.dude/` to your project's `.gitignore`. The built-in AI file tools block reading it. This is a first-step implementation of the co-engineering methodology, not automatic verification of facts or a secure storage vault.
+
+Principles adopted from the [AI Co-Engineering research](https://github.com/marcoiai/human-ai-coengineering): evidence over novelty, justified engineering decisions, explicit uncertainty and traceability. Recorded decisions are not automatically validated or approved. Always review them.
