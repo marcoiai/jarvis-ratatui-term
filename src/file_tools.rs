@@ -17,7 +17,7 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf,String> {
     if p.is_absolute() { return Err("Absolute paths are disabled".into()); }
     if p.components().any(|c| {
         let v = c.as_os_str().to_string_lossy();
-        v == ".env" || v.starts_with(".env.") || v == ".git" || v == ".ssh" ||
+        v == ".env" || v.starts_with(".env.") || v == ".dude" || v == ".git" || v == ".ssh" ||
         v == ".aws" || v == ".config" || v == "id_rsa" || v == "id_ed25519"
     }) {
         return Err("Sensitive paths are blocked from AI tools".into());
@@ -38,7 +38,7 @@ fn scan(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
         if files.len() >= MAX_ENTRIES { break; }
         if entry.file_name().is_some_and(|n| {
             let v = n.to_string_lossy();
-            v == ".git" || v == "target" || v == "node_modules" || v == ".env" ||
+            v == ".dude" || v == ".git" || v == "target" || v == "node_modules" || v == ".env" ||
             v.starts_with(".env.") || v == ".ssh" || v == ".aws" || v == ".config" ||
             v == "id_rsa" || v == "id_ed25519"
         }) { continue; }
