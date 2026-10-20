@@ -150,6 +150,17 @@ pub fn baseline(root: &Path, evidence: &crate::evidence::EvidenceCache) -> Strin
             }
         }
     }
+    // Functional entry points should survive the bounded 26K-character evidence budget.
+    if root.join("artisan").is_file() && root.join("composer.json").is_file() {
+        paths.sort_by_key(|path| {
+            if path.starts_with("routes/") { 0 }
+            else if path.starts_with("app/Http/Controllers/") { 1 }
+            else if path.starts_with("app/Services/") { 2 }
+            else if path.starts_with("app/Models/") { 3 }
+            else if path == "composer.json" { 4 }
+            else { 5 }
+        });
+    }
     // Symfony 1.x applications: sample actual configuration and actions, not just a web menu.
     let apps = root.join("apps");
     if apps.is_dir() {
