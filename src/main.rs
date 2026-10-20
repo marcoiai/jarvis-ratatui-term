@@ -1,3 +1,4 @@
+mod router;
 mod knowledge;
 mod evidence;
 mod credentials;
@@ -339,10 +340,6 @@ impl App {
             self.output.push_str(&format!("Checkpoint: {:?}\n",result));
             return;
         }
-        if !input.starts_with('!') && !input.starts_with('/') && !self.model_ready && ((self.roles.mode == "solo" && self.roles.selected_provider() == "ollama") || (self.roles.mode == "symphony" && [&self.roles.investigator,&self.roles.architect,&self.roles.reviewer].iter().any(|p|p.as_str()=="ollama"))) {
-            self.output.push_str("Local model not ready. You can still use memory commands.\n");
-            return;
-        }
 
         if let Some(model) = input.strip_prefix("/model ") {
             if !model.trim().is_empty() {
@@ -356,6 +353,21 @@ impl App {
             self.output.clear();
             self.scroll = 0;
             self.follow_output = true;
+            return;
+        }
+
+        let selection = router::route(&input, &self.roles.mode);
+        if let router::Route::Local(reply) = &selection {
+            self.output.push_str(reply);
+            self.output.push('\n');
+            return;
+        }
+        if input.starts_with('/') {
+            self.output.push_str("Unknown command. Try /help.\n");
+            return;
+        }
+        if !input.starts_with('!') && !self.model_ready && selection.needs_ollama(&self.roles) {
+            self.output.push_str("Local model not ready.\n");
             return;
         }
 
@@ -377,13 +389,14 @@ impl App {
             self.history.push(Message { role: "user".into(), content: input });
             let messages = self.history.clone();
             let roles = self.roles.clone();
+            let route = selection;
             let evidence = evidence::EvidenceCache::default();
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
             let ollama_model = self.model.clone();
             let groq_model = self.groq_model.clone();
             let gemini_model = self.gemini_model.clone();
-            let participants: Vec<&str> = if roles.mode == "symphony" {
+            let participants: Vec<&str> = if matches!(route, router::Route::Symphony) {
                 vec![&roles.investigator, &roles.architect, &roles.reviewer]
             } else {
                 vec![roles.selected_provider()]
@@ -416,7 +429,7 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
-                let result = if roles.mode == "symphony" {
+                let result = if matches!(route, router::Route::Symphony) {
                     run_symphony(&client, &roles, messages, workspace, &url,
                         &ollama_model, &groq_model, &gemini_model, evidence).await
                 } else {
