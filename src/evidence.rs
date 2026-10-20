@@ -8,6 +8,7 @@ pub struct EvidenceCache {
     calls: Arc<AtomicUsize>,
     hits: Arc<AtomicUsize>,
     events: Arc<Mutex<Vec<Value>>>,
+    observations: Arc<Mutex<Vec<Value>>>,
 }
 
 impl EvidenceCache {
@@ -56,6 +57,13 @@ impl EvidenceCache {
             }
         }
         self.record(name, args, started, false, success, &result);
+        if success {
+            if let Ok(mut records) = self.observations.lock() {
+                if records.len() < 100 {
+                    records.push(json!({"tool":name,"arguments":args,"result":result.chars().take(16000).collect::<String>()}));
+                }
+            }
+        }
         result
     }
     fn record(&self, name: &str, args: &Value, started: Instant, cache_hit: bool, success: bool, result: &str) {
@@ -86,9 +94,9 @@ impl EvidenceCache {
             read.len(), if read.is_empty() { "(none)".into() } else { read.into_iter().collect::<Vec<_>>().join(", ") }, failures)
     }
     pub fn export(&self) -> String {
-        let Ok(cache) = self.entries.lock() else { return "Evidence cache unavailable".into() };
+        let Ok(cache) = self.observations.lock() else { return "Evidence records unavailable".into() };
         let mut text = String::new();
-        for (index, item) in cache.values().enumerate() {
+        for (index, item) in cache.iter().enumerate() {
             let line = format!("Evidence #{}: {}({})\n{}\n\n",index+1,item["tool"].as_str().unwrap_or("unknown"),item["arguments"],item["result"].as_str().unwrap_or(""));
             if text.len()+line.len()>28000 { text.push_str("[Further evidence omitted due to context budget]\n"); break; }
             text.push_str(&line);
@@ -96,7 +104,7 @@ impl EvidenceCache {
         text.push_str(&format!("\n{}\n",self.coverage()));
         text
     }
-    pub fn len(&self) -> usize { self.entries.lock().map(|c|c.len()).unwrap_or(0) }
+    pub fn len(&self) -> usize { self.observations.lock().map(|c|c.len()).unwrap_or(0) }
     pub fn calls(&self) -> usize { self.calls.load(Ordering::Relaxed) }
     pub fn hits(&self) -> usize { self.hits.load(Ordering::Relaxed) }
 }
