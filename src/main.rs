@@ -396,7 +396,7 @@ impl App {
             let ollama_model = self.model.clone();
             let groq_model = self.groq_model.clone();
             let gemini_model = self.gemini_model.clone();
-            let participants: Vec<&str> = if matches!(route, router::Route::Symphony) {
+            let participants: Vec<&str> = if matches!(&route, router::Route::Symphony) {
                 vec![&roles.investigator, &roles.architect, &roles.reviewer]
             } else {
                 vec![roles.selected_provider()]
@@ -429,7 +429,7 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
-                let result = if matches!(route, router::Route::Symphony) {
+                let result = if matches!(&route, router::Route::Symphony) {
                     run_symphony(&client, &roles, messages, workspace, &url,
                         &ollama_model, &groq_model, &gemini_model, evidence).await
                 } else {
