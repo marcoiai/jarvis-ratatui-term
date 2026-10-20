@@ -1,3 +1,4 @@
+mod claim_audit;
 mod progress;
 mod response_filter;
 mod investigation;
@@ -861,6 +862,13 @@ async fn ask_ollama(
             if !tail.is_empty() {
                 answer.push_str(&tail);
                 if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(tail)); }
+            }
+            if crate::claim_audit::unsupported_coverage_percentages(&answer) {
+                let warning = "\n\n⚠ Auditoria DUDE: percentual de cobertura mencionado pelo modelo não foi medido pelo runtime. Não o trate como evidência de verificação.\n";
+                answer.push_str(warning);
+                if let Some(sender)=&updates {
+                    let _=sender.send(ResultMessage::ChatChunk(warning.into()));
+                }
             }
             return Ok(answer);
         }
