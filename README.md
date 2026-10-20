@@ -81,9 +81,9 @@ DUDE supports independent provider assignment to three roles in **both** modes:
 - Architect: organizes findings and develops proposals.
 - Reviewer: checks claims and prepares the final response.
 
-The selected providers are saved per workspace in \`.dude/roles.json\`. In **Solo**, DUDE uses only the selected role. In **Symphony**, DUDE invokes all three roles in order, sharing bounded intermediate findings and showing **only one final response** from the Reviewer (no intermediate agent transcript).
+The selected providers are saved per workspace in `.dude/roles.json`. In **Solo**, DUDE uses only the selected role. In **Symphony**, DUDE invokes all three roles in order, sharing bounded intermediate findings and showing **only one final response** from the Reviewer (no intermediate agent transcript).
 
-\`\`\`text
+```text
 /roles
 /role investigator ollama
 /role architect gemini
@@ -92,11 +92,11 @@ The selected providers are saved per workspace in \`.dude/roles.json\`. In **Sol
 /solo architect
 /mode symphony
 /cloud allow
-\`\`\`
+```
 
-\`/mode symfony\` is an alias. \`/cloud deny\` revokes cloud permission for the current session. Permission is **off on startup and after workspace changes**. A cloud role receives conversation history, project memory/context and results of explicitly requested read-only file tools; do not enable cloud for proprietary workspaces unless authorized. Shell commands (\`!command\`) remain explicitly user initiated.
+`/mode symfony` is an alias. `/cloud deny` revokes cloud permission for the current session. Permission is **off on startup and after workspace changes**. A cloud role receives conversation history, project memory/context and results of explicitly requested read-only file tools; do not enable cloud for proprietary workspaces unless authorized. Shell commands (`!command`) remain explicitly user initiated.
 
-Supported runtime adapters: Ollama local (\`OLLAMA_MODEL\`, default \`qwen3:4b\`); Groq (\`GROQ_API_KEY\`, optional \`GROQ_MODEL\`, default \`openai/gpt-oss-120b\`); Gemini (\`GEMINI_API_KEY\` or \`GOOGLE_API_KEY\`, optional \`GEMINI_MODEL\`, default \`gemini-2.5-flash\`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
+Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `qwen3:4b`); Groq (`GROQ_API_KEY`, optional `GROQ_MODEL`, default `openai/gpt-oss-120b`); Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_MODEL`, default `gemini-2.5-flash`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
 
 If any Symphony stage errors, DUDE displays an error instead of silently treating partial results as a complete three-role answer. Shared tools are read-only, and each provider is limited to eight rounds of tool calls.
 
