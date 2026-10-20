@@ -31,6 +31,25 @@ pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool
 pub fn context_size() -> usize { setting("OLLAMA_NUM_CTX", 16384, 4096, 131072) }
 pub fn tool_rounds() -> usize { setting("DUDE_TOOL_ROUNDS", 8, 1, 32) }
 
+/// Reject unsupported whole-project summaries rather than presenting guesses as inspected facts.
+/// An evidence item proves only a successful tool observation, not correctness of conclusions.
+pub fn require_evidence_for_overview(observations: usize) -> Result<(), String> {
+    if observations == 0 {
+        return Err("Análise não concluída: nenhum arquivo foi lido com sucesso. Confira /workspace e as permissões de leitura. Nenhuma conclusão sobre o projeto foi validada.".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod evidence_gate_tests {
+    use super::*;
+    #[test]
+    fn project_overview_requires_real_observations() {
+        assert!(require_evidence_for_overview(0).is_err());
+        assert!(require_evidence_for_overview(1).is_ok());
+    }
+}
+
 pub fn overview(root: &Path) -> String {
     let mut lines = Vec::new();
     walk(root, root, 0, &mut lines);
