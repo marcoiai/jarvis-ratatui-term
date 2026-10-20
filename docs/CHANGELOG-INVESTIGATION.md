@@ -182,3 +182,10 @@
 - Nova arte tipográfica de 5 linhas no terminal usando `ratatui::text::{Line, Span, Text}`, com vermelho apenas no N, letras restantes neutras e subtítulo cinza. É adaptação para terminal, não renderização pixel a pixel do PNG.
 - Mantida a ordem fixa `logo → input → cabeçalho DUDE → conversa rolável` e os controles `/clear`/rolagem.
 - Testar `cargo fmt --check`, `cargo check`, `cargo test` e aparência no Mac; comportamento em terminal estreito ainda não validado.
+
+## 2026-10-20 — Marca ENOVA mais compacta
+
+- Reduzida aproximadamente a largura da wordmark em blocos, preservando cinco linhas de letras e o destaque vermelho no N.
+- Removida a linha vazia entre logo e `business solutions`; painel fixo da logo reduzido de 7 para 6 linhas.
+- Mantida a ordem `logo → input → cabeçalho DUDE → conversa rolável`.
+- Aparência e compilação pendentes de validação no terminal Mac (`cargo fmt --check`, `cargo check`, `cargo test`).
