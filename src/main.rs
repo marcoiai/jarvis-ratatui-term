@@ -633,7 +633,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
             overview
         }).await.map_err(|e| e.to_string())?;
         messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
-        messages.push(Message { role: "user".into(), content: overview });
+        messages.push(Message { role: "user".into(), content: format!("{overview}\\n\\n{}", evidence.read_manifest()) });
     }
     match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
@@ -717,7 +717,7 @@ async fn ask_ollama(
         // Stop requesting more tools after two rounds without new observations.
         let tools_enabled = allow_tools && round < rounds && stalled_rounds < 2;
         if allow_tools && !tools_enabled {
-            conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,evidence.coverage())}));
+            conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\\n{}", evidence.coverage(), evidence.read_manifest()))}));
         }
         let stream_final = !tools_enabled;
         let request_start = Instant::now();
