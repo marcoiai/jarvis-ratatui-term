@@ -725,6 +725,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
     let evidence_for_gate = evidence.clone();
+    let updates_for_audit = updates.clone();
     let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
@@ -733,6 +734,13 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     }?;
     if require_project_evidence {
         investigation::require_evidence_for_overview(evidence_for_gate.source_read_count())?;
+        if !evidence_for_gate.has_supported_citation(&answer) {
+            let warning = "\n\n⚠ DUDE: este parecer não apresenta referências arquivo:linha confirmadas nas leituras. É uma síntese preliminar, não uma verificação das afirmações.\n";
+            if let Some(tx) = updates_for_audit {
+                let _ = tx.send(ResultMessage::ChatChunk(warning.to_owned()));
+            }
+            return Ok(format!("{answer}{warning}"));
+        }
     }
     Ok(answer)
 }
