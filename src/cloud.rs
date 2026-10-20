@@ -50,7 +50,7 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
     Err("Groq exceeded eight tool rounds".into())
 }
 
-pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf) -> Result<String, String> {
+pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache) -> Result<String, String> {
     let key = credentials::get("gemini").ok_or("Missing Gemini API key. Use /apikey gemini")?;
     let mut context = String::new();
     let mut contents = Vec::<Value>::new();
