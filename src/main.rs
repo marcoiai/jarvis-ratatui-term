@@ -1,3 +1,4 @@
+mod knowledge;
 mod evidence;
 mod credentials;
 mod cloud;
@@ -294,6 +295,24 @@ impl App {
             self.output.push_str(&format!("Solo role provider update: {result:?}\n"));
             return;
         }
+        if input == "/knowledge" {
+            self.output.push_str(&knowledge::list(&self.workspace).unwrap_or_else(|e|format!("Knowledge error: {e}")));
+            self.output.push_str("Review: /knowledge approve ID | /knowledge reject ID\n");
+            return;
+        }
+        if let Some(rest)=input.strip_prefix("/knowledge approve ") {
+            let result=rest.trim().parse::<u64>().map_err(|e|e.to_string()).and_then(|id|{
+                self.memory.as_ref().ok_or("Memory unavailable".to_string())
+                    .and_then(|m|knowledge::approve(&self.workspace,id,m))
+            });
+            self.output.push_str(&format!("Knowledge approval: {result:?}\n"));
+            return;
+        }
+        if let Some(rest)=input.strip_prefix("/knowledge reject ") {
+            let result=rest.trim().parse::<u64>().map_err(|e|e.to_string()).and_then(|id|knowledge::reject(&self.workspace,id));
+            self.output.push_str(&format!("Knowledge rejection: {result:?}\n"));
+            return;
+        }
         if input == "/memory" || input == "/coeng status" {
             match &self.memory {
                 Some(store) => self.output.push_str(&format!("Coengineering memory: {}\n{}\n",
@@ -464,7 +483,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         ("Architect", roles.architect.as_str(),
             "Do not re-open files; use evidence provided by Investigator. Use the investigator's findings to propose a grounded engineering solution. Make tradeoffs, uncertainties and evidence explicit. Keep your handoff below 700 words; do not repeat the investigation verbatim."),
         ("Reviewer", roles.reviewer.as_str(),
-            "Do not re-open files; use the shared evidence. Review the investigator and architect work critically. Correct unsupported claims. Produce ONE final answer to the user with conclusions and unresolved uncertainties. Do not reveal a multi-agent transcript."),
+            "Do not re-open files; use the shared evidence. Review the investigator and architect work critically. Correct unsupported claims. Produce ONE final answer to the user with conclusions and unresolved uncertainties. Do not reveal a multi-agent transcript. At the END append a separate line beginning DUDE_KNOWLEDGE_JSON: followed by a compact JSON array of up to 8 candidate objects {classification: documented|verified|inferred, claim: string, evidence: [source file and line references]}. Only propose grounded, specific claims, never invent references. Use [] if no grounded claims."),
     ];
     let mut shared = String::new();
     let question = messages.iter().rev().find(|m|m.role=="user")
@@ -481,7 +500,23 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         let response=query_provider(client,provider,stage,workspace.clone(),host,
             local_model,groq_model,gemini_model,index == 0,evidence.clone()).await
             .map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
-        if index == 2 {return Ok(response);}
+        if index == 2 {
+            const MARKER: &str = "DUDE_KNOWLEDGE_JSON:";
+            if let Some(pos)=response.rfind(MARKER) {
+                let raw=response[pos+MARKER.len()..].trim();
+                if let Ok(drafts)=serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
+                    match knowledge::propose(&workspace,question,&drafts) {
+                        Ok(ids) => {
+                            let final_text=response[..pos].trim_end();
+                            if ids.is_empty(){ return Ok(final_text.to_owned()); }
+                            return Ok(format!("{final_text}\n\nKnowledge candidates awaiting approval: {}. View with /knowledge.",ids.iter().map(|v|format!("#{v}")).collect::<Vec<_>>().join(", ")));
+                        }
+                        Err(error)=>return Ok(format!("{}\n\nKnowledge candidate storage warning: {error}",response[..pos].trim_end())),
+                    }
+                }
+            }
+            return Ok(response);
+        }
         // Bound cost and payload sent to downstream providers.
         shared.push_str(&format!("\n{name} ({provider}) findings:\n{}\n",
             response.chars().take(5000).collect::<String>()));
