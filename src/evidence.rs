@@ -36,6 +36,7 @@ impl EvidenceCache {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 let result = item["result"].as_str().unwrap_or_default().to_owned();
                 self.record(name, args, started, true, true, &result);
+                let _ = crate::progress::append(&root, name, args, true, true);
                 return result;
         }
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -53,6 +54,7 @@ impl EvidenceCache {
                 cache.insert(key, json!({"tool":name,"arguments":args,"result":result}));
         }
         self.record(name, args, started, false, success, &result);
+        let _ = crate::progress::append(&root, name, args, success, false);
         if success && let Ok(mut records) = self.observations.lock()
             && records.len() < 100 {
                 records.push(json!({"tool":name,"arguments":args,"result":result.chars().take(16000).collect::<String>()}));
