@@ -160,3 +160,10 @@
 - Ambos os clientes criados em `run()` passam a usar `connect_timeout(15 s)` e timeout total de 600 s, permitindo inferências locais mais lentas; mensagem de erro agora distingue falha de requisição/timeout de uma indisponibilidade comprovada do servidor.
 - Isto **não prova** que todo erro de transporte venha do timeout: Ollama ou rede também podem encerrar conexões. Ainda falta observar logs do servidor e testar no Mac.
 - Sem alteração de cabeçalho DUDE nem do fluxo de Knowledge.
+
+## 2026-10-20 — Wordmark ENOVA fornecido e input abaixo
+
+- Substituída a arte anterior pelas sete linhas de ASCII `ENOVA` fornecidas pelo engenheiro, preservando espaçamentos e conteúdo literal.
+- O painel fixo comporta 11 linhas: 7 da arte e 4 linhas de identificação/status DUDE.
+- A pedido do usuário, reorganizado o layout: **ENOVA + DUDE (fixo) → campo de entrada → respostas roláveis → status → ajuda**.
+- `/clear` continua limpando somente o histórico visual. Verificação visual, `cargo fmt --check`, `cargo check` e `cargo test` seguem pendentes no Mac.
