@@ -1,15 +1,14 @@
 use std::{path::PathBuf, time::Duration};
 use serde_json::{json, Value};
-use crate::{file_tools, credentials, Message};
+use crate::{file_tools, credentials, evidence::EvidenceCache, Message};
 
-async fn tool(workspace: PathBuf, name: String, args: Value) -> Result<String, String> {
+async fn tool(workspace: PathBuf, name: String, args: Value, evidence: EvidenceCache) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        file_tools::execute(&workspace, &name, &args)
-            .unwrap_or_else(|e| format!("Tool error: {e}"))
+        evidence.execute(&workspace, &name, &args)
     }).await.map_err(|e| e.to_string())
 }
 
-pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool) -> Result<String, String> {
+pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
     for _ in 0..(if allow_tools { 8 } else { 1 }) {
@@ -44,7 +43,7 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
             let name = call["function"]["name"].as_str().ok_or("Groq tool missing name")?.to_owned();
             let args_str = call["function"]["arguments"].as_str().unwrap_or("{}");
             let args: Value = serde_json::from_str(args_str).map_err(|e|format!("Groq tool arguments: {e}"))?;
-            let output = tool(workspace.clone(), name, args).await?;
+            let output = tool(workspace.clone(), name, args, evidence.clone()).await?;
             convo.push(json!({"role":"tool","tool_call_id":call["id"],"content":output}));
         }
     }
@@ -87,7 +86,7 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
         for call in calls {
             let name=call["name"].as_str().ok_or("Gemini tool missing name")?.to_owned();
             let args=call.get("args").cloned().unwrap_or(json!({}));
-            let output=tool(workspace.clone(),name.clone(),args).await?;
+            let output=tool(workspace.clone(),name.clone(),args, evidence.clone()).await?;
             let mut reply=json!({"name":name,"response":{"output":output}});
             if let Some(id)=call.get("id"){reply["id"]=id.clone();}
             responses.push(json!({"functionResponse":reply}));
