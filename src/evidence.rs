@@ -14,6 +14,7 @@ pub struct EvidenceCache {
 impl EvidenceCache {
     pub fn execute(&self, root: &Path, name: &str, args: &Value) -> String {
         let started = Instant::now();
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         // Only cache individual file reads; recursive searches and listings may change
         // between calls even when their directory metadata remains unchanged.
         let fingerprint = if name == "read_file" {
@@ -40,7 +41,7 @@ impl EvidenceCache {
             }
         }
         self.calls.fetch_add(1, Ordering::Relaxed);
-        let outcome = file_tools::execute(root, name, args);
+        let outcome = file_tools::execute(&root, name, args);
         let success = outcome.is_ok();
         let result = match outcome {
             Ok(text) => text,
