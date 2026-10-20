@@ -57,6 +57,14 @@ impl ThinkingFilter {
 }
 
 pub fn strip_completed(content: &str) -> Result<String, String> {
+    // Some Ollama templates omit the opening tag while still returning </think>.
+    // Filter only when a closing delimiter is present: do not guess from prose.
+    let trimmed=content.trim_start();
+    if !trimmed.starts_with(OPEN) {
+        if let Some(end)=content.find(CLOSE) {
+            return Ok(content[end+CLOSE.len()..].trim_start().to_owned());
+        }
+    }
     let mut filter = ThinkingFilter::default();
     let visible = filter.push(content);
     Ok(format!("{}{}", visible, filter.finish()?))
@@ -80,5 +88,6 @@ mod tests {
         assert_eq!(strip_completed("Olá, buddy!").unwrap(), "Olá, buddy!");
         assert_eq!(strip_completed("<think>interno</think>Resposta").unwrap(), "Resposta");
         assert!(strip_completed("<think>sem fechamento").is_err());
+        assert_eq!(strip_completed("Reasoning without opening tag</think>Resposta").unwrap(),"Resposta");
     }
 }
