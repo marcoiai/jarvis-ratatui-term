@@ -228,3 +228,7 @@ Standalone language preferences such as `voce pode a partir de agora falar sempr
 ## Raw operational memory versus learned knowledge
 
 DUDE keeps separate layers. Successful completed exchanges are appended with UTC timestamps to `.dude/journal/YYYY-MM-DD.jsonl` and synced to disk, independently of the optional Knowledge extraction step. `.dude/history.jsonl` still provides recent chat context. Only reviewed/approved Knowledge candidates enter `.dude/memory.md`; raw journal entries are never automatically promoted to facts. Daily filenames do not imply a background timer: there is no hourly scheduler and unfinished responses are not yet journaled. Protect `.dude/` from Git and backups shared externally; journal entries may contain sensitive code or text.
+
+## Recovery of unfinished requests
+
+Before dispatching a model request, DUDE stores the current user request in `.dude/pending_request.json`. On normal successful completion it removes the recovery marker. If the process crashes or a request fails, the marker remains. At startup the TUI warns about an interrupted request. Type `/recover` to put it back into the editable input (press Enter to retry), or `/recover discard` to remove the marker. No request is replayed automatically. A subsequent submitted request replaces the current pending marker; this is a recovery mechanism for the latest request, not a queue. Response chunks and partially completed tool work are not checkpointed. This is local persistence, not a separate/offsite backup.
