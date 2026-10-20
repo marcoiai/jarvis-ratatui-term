@@ -101,3 +101,19 @@ Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `qwen3:4b`); G
 If any Symphony stage errors, DUDE displays an error instead of silently treating partial results as a complete three-role answer. Shared tools are read-only, and each provider is limited to eight rounds of tool calls.
 
 **Validation status:** code committed, but integration and compilation must be run in your local development environment. In particular, check the Gemini model and credentials against your account's API quota.
+
+## API keys inside DUDE
+
+Cloud API keys can be entered without environment variables:
+
+```text
+/apikey
+/apikey gemini
+/apikey groq
+/apikey clear gemini
+/apikey clear groq
+```
+
+After `/apikey gemini` or `/apikey groq`, type the key into the **masked input** and press Enter. Esc cancels. Missing cloud keys also trigger this prompt before a request is sent. Secrets are never written to chat history, project memory or the repository. Saved credentials live in `~/.config/dude/gemini.key` or `~/.config/dude/groq.key` with owner-only permissions on Unix; existing environment variables take precedence. The current question needs to be sent again after saving a prompted missing key. `/cloud allow` remains separately required to authorize sending project context to external services.
+
+This stores keys in local restricted files, not the operating system's encrypted keychain; protect access to your home directory.
