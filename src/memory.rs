@@ -97,6 +97,49 @@ impl Memory {
         writeln!(file, "{line}").map_err(|e|e.to_string())?;
         file.sync_data().map_err(|e|e.to_string())
     }
+
+    /// Durable recovery marker for the in-flight user request. It is NOT curated learning.
+    pub fn save_pending(&self, question: &str) -> Result<(), String> {
+        if question.len() > 32_000 { return Err("Pending request too large".into()); }
+        let destination = self.dir.join("pending_request.json");
+        if destination.exists() && fs::symlink_metadata(&destination).map_err(|e|e.to_string())?.file_type().is_symlink() {
+            return Err("Refusing symlink pending file".into());
+        }
+        let tmp = self.dir.join(format!(".pending-{}.tmp", std::process::id()));
+        let data = serde_json::to_vec(&serde_json::json!({
+            "created_utc": chrono::Utc::now().to_rfc3339(),
+            "question": question,
+        })).map_err(|e|e.to_string())?;
+        let result = (|| -> Result<(), String> {
+            let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e|e.to_string())?;
+            file.write_all(&data).map_err(|e|e.to_string())?;
+            file.sync_all().map_err(|e|e.to_string())?;
+            fs::rename(&tmp,&destination).map_err(|e|e.to_string())
+        })();
+        if result.is_err() { let _=fs::remove_file(&tmp); }
+        result
+    }
+    pub fn pending(&self) -> Result<Option<String>, String> {
+        let path=self.dir.join("pending_request.json");
+        if !path.exists() { return Ok(None); }
+        if fs::symlink_metadata(&path).map_err(|e|e.to_string())?.file_type().is_symlink() {
+            return Err("Refusing symlink pending file".into());
+        }
+        let data=fs::read(path).map_err(|e|e.to_string())?;
+        if data.len()>40_000 {return Err("Pending request too large".into());}
+        let value:serde_json::Value=serde_json::from_slice(&data).map_err(|e|e.to_string())?;
+        Ok(value["question"].as_str().map(str::to_owned))
+    }
+    pub fn clear_pending(&self) -> Result<(),String> {
+        let path=self.dir.join("pending_request.json");
+        if path.exists() {
+            if fs::symlink_metadata(&path).map_err(|e|e.to_string())?.file_type().is_symlink() {
+                return Err("Refusing symlink pending file".into());
+            }
+            fs::remove_file(path).map_err(|e|e.to_string())?;
+        }
+        Ok(())
+    }
     pub fn recent(&self) -> Vec<Exchange> {
         let Ok(text)=fs::read_to_string(self.dir.join("history.jsonl")) else {return Vec::new()};
         text.lines().rev().take(8).filter_map(|line|serde_json::from_str(line).ok())
@@ -153,6 +196,17 @@ mod tests {
         let data = fs::read_to_string(restored.location().join("journal").join(format!("{day}.jsonl"))).unwrap();
         assert!(data.contains("investigue a rota"));
         assert!(!restored.context().contains("rota não localizada"));
+    }
+    #[test]
+    fn restores_unfinished_request_after_reopen() {
+        let fixture=Fixture::new();
+        let memory=Memory::open(&fixture.0).unwrap();
+        memory.save_pending("analise o projeto").unwrap();
+        drop(memory);
+        let restored=Memory::open(&fixture.0).unwrap();
+        assert_eq!(restored.pending().unwrap().as_deref(),Some("analise o projeto"));
+        restored.clear_pending().unwrap();
+        assert!(restored.pending().unwrap().is_none());
     }
     #[test]
     fn corrupted_history_line_does_not_lose_valid_entries() {
