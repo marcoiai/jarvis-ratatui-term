@@ -297,6 +297,10 @@ impl App {
             return;
         }
 
+        if self.roles.mode == "symphony" && !input.starts_with('!') {
+            self.output.push_str("Symphony is configured but not executable yet. Complete Gemini/Groq tool adapters and cloud consent gates first. Use /mode solo for now.\n");
+            return;
+        }
         self.busy = true;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
@@ -314,10 +318,27 @@ impl App {
             self.last_question = Some(input.clone());
             self.history.push(Message { role: "user".into(), content: input });
             let messages = self.history.clone();
-            let model = if self.provider == "groq" { self.groq_model.clone() } else { self.model.clone() };
-            let provider = self.provider.clone();
+            let selected = self.roles.selected_provider().to_string();
+            let provider = selected;
+            let model = if provider == "groq" { self.groq_model.clone() } else { self.model.clone() };
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
+            if !matches!(provider.as_str(), "ollama" | "groq") {
+                self.busy = false;
+                self.started_at = None;
+                self.history.pop();
+                self.last_question = None;
+                self.output.push_str(&format!("Provider '{}' is configured but its chat adapter is not ready. Change the role to ollama or groq.\n",provider));
+                return;
+            }
+            if provider == "groq" && env::var("GROQ_API_KEY").is_err() {
+                self.busy = false;
+                self.started_at = None;
+                self.history.pop();
+                self.last_question = None;
+                self.output.push_str("Missing GROQ_API_KEY. Cloud request blocked.\n");
+                return;
+            }
             tokio::spawn(async move {
                 let result = if provider == "groq" {
                     ask_groq(&client, &model, messages).await
