@@ -331,7 +331,7 @@ impl App {
             } else {
                 vec![roles.selected_provider()]
             };
-            if participants.iter().any(|p| *p != &"ollama") && !self.cloud_allowed {
+            if participants.iter().any(|p| *p != "ollama") && !self.cloud_allowed {
                 self.busy = false;
                 self.started_at = None;
                 self.history.pop();
