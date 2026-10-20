@@ -277,7 +277,7 @@ impl App {
             self.output.push_str(&format!("Checkpoint: {:?}\n",result));
             return;
         }
-        if !self.model_ready && self.provider == "ollama" {
+        if !self.model_ready && self.roles.mode == "solo" && self.roles.selected_provider() == "ollama" {
             self.output.push_str("Local model not ready. You can still use memory commands.\n");
             return;
         }
