@@ -59,6 +59,7 @@ struct App {
     output: String,
     history: Vec<Message>,
     scroll: u16,
+    follow_output: bool,
     busy: bool,
     model_ready: bool,
     model: String,
@@ -96,6 +97,7 @@ impl App {
                 ).into(),
             }],
             scroll: 0,
+            follow_output: true,
             busy: false,
             model_ready: false,
             workspace: env::var("DUDE_WORKSPACE").ok().and_then(|p| std::fs::canonicalize(p).ok()).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
@@ -117,7 +119,7 @@ impl App {
         }
         self.input.clear();
         self.output.push_str(&format!("\n> {input}\n"));
-        self.scroll = self.output.lines().count().saturating_sub(1).min(10_000) as u16;
+        self.follow_output = true;
 
         if let Some(model) = input.strip_prefix("/model ") {
             if !model.trim().is_empty() {
@@ -130,6 +132,7 @@ impl App {
             self.history.truncate(1);
             self.output.clear();
             self.scroll = 0;
+            self.follow_output = true;
             return;
         }
 
@@ -177,7 +180,7 @@ impl App {
                 }
             }
         }
-        self.scroll = self.output.lines().count().saturating_sub(1).min(10_000) as u16;
+        self.follow_output = true;
     }
 }
 
@@ -285,7 +288,7 @@ async fn run_command(command: String) -> Result<String, String> {
     }
 }
 
-fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &App) -> io::Result<()> {
+fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io::Result<()> {
     terminal.draw(|frame| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -301,6 +304,13 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &App) -> io::Res
         let output = Paragraph::new(app.output.as_str())
             .block(Block::default().title(if app.busy { "Answer (working...)" } else { "Answer" }).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
+        if app.follow_output {
+            let visible_rows = chunks[1].height.saturating_sub(2) as usize;
+            let available_width = chunks[1].width.saturating_sub(2).max(1);
+            let wrapped_rows = output.line_count(available_width);
+            // Keep the final lines in view, without scrolling into blank space.
+            app.scroll = wrapped_rows.saturating_sub(visible_rows).min(60_000) as u16;
+        }
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
 
         let footer = format!(
@@ -342,7 +352,7 @@ async fn run(
         while let Ok(result) = rx.try_recv() {
             app.complete(result);
         }
-        draw(terminal, &app)?;
+        draw(terminal, &mut app)?;
         if event::poll(Duration::from_millis(80))? {
             if let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
                 if kind != KeyEventKind::Press {
@@ -353,8 +363,8 @@ async fn run(
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Enter => app.submit(tx.clone(), client.clone()),
                     KeyCode::Backspace => { app.input.pop(); }
-                    KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
-                    KeyCode::Down => app.scroll = app.scroll.saturating_add(1),
+                    KeyCode::Up => { app.follow_output = false; app.scroll = app.scroll.saturating_sub(1); },
+                    KeyCode::Down => { app.follow_output = false; app.scroll = app.scroll.saturating_add(1).min(60_000); },
                     KeyCode::Char(c) => app.input.push(c),
                     _ => {}
                 }
