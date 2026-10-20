@@ -28,6 +28,7 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 - `!ls -la` executes a local program directly (no shell interpretation: pipes, globbing and redirects are unsupported).
 - `/model granite-code:latest` changes the model during the session.
 - `/clear` clears conversation and screen.
+- `/exit`, `/quit` or `/sair` exits the TUI cleanly (also Esc or Ctrl+C).
 - Up/Down scroll, ESC or Ctrl+C exits.
 
 DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
