@@ -57,6 +57,10 @@ pub struct CandidateDraft{
     #[serde(default)]
     pub evidence:Vec<String>,
 }
+/// Return the oldest reviewable candidate so the UI can request consent.
+pub fn next_pending(workspace:&Path)->Result<Option<Candidate>,String>{
+    Ok(load(workspace)?.into_iter().find(|c|c.status=="pending"))
+}
 pub fn list(workspace:&Path)->Result<String,String>{
     let entries=load(workspace)?;
     let pending:Vec<_>=entries.iter().filter(|e|e.status=="pending").collect();
