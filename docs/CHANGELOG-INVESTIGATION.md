@@ -97,3 +97,11 @@
 - Esta checagem NÃO valida semanticamente afirmações, caminhos nem citações; é um primeiro alerta determinístico e limitado. Evitar declarar parecer inteiramente validado.
 - Identidade visual e cabeçalho **DUDE**, incluindo nome e demais identificações existentes, preservados; mudanças limitadas à análise e à mensagem de auditoria.
 - Pendente: compilação e testes locais, filtro mais robusto de `<think>` e validação completa de referências de origem.
+
+## 2026-10-20 — Cabeçalho DUDE fixo na TUI
+
+- Identificação `D.U.D.E. — Demented Unified Development Entity` e subtítulo Enova/IA local separados do texto rolável, em duas linhas permanentes no topo.
+- A rolagem vertical afeta apenas o painel de respostas; `/clear` limpa somente o histórico visual, não o cabeçalho.
+- O texto de inicialização permanece no histórico inicial, sem duplicar o nome/subtítulo que agora são renderizados separadamente.
+- Painéis de entrada, ambiente e ajuda reposicionados sob o cabeçalho fixo.
+- Compilação e teste visual local pendentes.
