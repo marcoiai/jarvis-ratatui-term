@@ -138,3 +138,11 @@
 - Em `ask_ollama`, a resposta final só usa streaming quando existe consumidor de `ChatChunk` (`updates.is_some()`). Chamadas internas, como extração JSON de Knowledge, passam a usar resposta completa não-streaming.
 - A correção evita processamento de chunks desnecessários nesse segundo passe, mas **não prova** que a falha de transporte do Ollama esteja eliminada; validar novamente no Mac. Nenhum candidato é salvo sem parsing e validação de evidências.
 - Não altera o cabeçalho fixo, a análise Solo nem a necessidade de aprovação explícita de Knowledge.
+
+## 2026-10-20 — Auditoria leve de referências nos pareceres Solo
+
+- `EvidenceCache::has_supported_citation` verifica se ao menos uma referência `arquivo:linha` no parecer corresponde a uma linha realmente devolvida por `read_file` na investigação.
+- Em pedidos de visão geral de projeto, o DUDE sinaliza pareceres sem referência confirmada como **síntese preliminar**; não bloqueia a análise nem a substitui por uma resposta genérica.
+- O aviso chega ao streaming da TUI e à resposta gravada em memória operacional.
+- Teste de referências ampliado para citações aceitas, linhas não lidas e respostas sem citações.
+- Limitação importante: encontrar ao menos uma referência válida **não valida todas as afirmações**; a auditoria semântica por afirmação ainda está pendente. `cargo check` e `cargo test` precisam ser executados no Mac.
