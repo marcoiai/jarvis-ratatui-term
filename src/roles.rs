@@ -7,6 +7,10 @@ pub struct Roles {
     pub investigator: String,
     pub architect: String,
     pub reviewer: String,
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    #[serde(default = "default_solo_role")]
+    pub solo_role: String,
 }
 
 impl Default for Roles {
@@ -15,9 +19,14 @@ impl Default for Roles {
             investigator: "ollama".into(),
             architect: "gemini".into(),
             reviewer: "groq".into(),
+            mode: default_mode(),
+            solo_role: default_solo_role(),
         }
     }
 }
+
+fn default_mode() -> String { "solo".into() }
+fn default_solo_role() -> String { "investigator".into() }
 
 impl Roles {
     pub fn load(workspace: &Path) -> Result<Self, String> {
@@ -32,6 +41,8 @@ impl Roles {
         for value in [&roles.investigator, &roles.architect, &roles.reviewer] {
             if !Self::valid(value) { return Err(format!("Unknown provider in role configuration: {value}")); }
         }
+        if !matches!(roles.mode.as_str(), "solo" | "symphony") { return Err("Invalid mode".into()); }
+        if !matches!(roles.solo_role.as_str(), "investigator" | "architect" | "reviewer") { return Err("Invalid solo role".into()); }
         Ok(roles)
     }
 
@@ -50,6 +61,28 @@ impl Roles {
         Ok(())
     }
 
+    pub fn set_mode(&mut self, mode: &str) -> Result<(), String> {
+        match mode {
+            "solo" => self.mode = "solo".into(),
+            "symphony" | "symfony" => self.mode = "symphony".into(),
+            _ => return Err("Use solo or symphony".into()),
+        }
+        Ok(())
+    }
+    pub fn set_solo_role(&mut self, role: &str) -> Result<(), String> {
+        if !matches!(role, "investigator" | "architect" | "reviewer") {
+            return Err("Use investigator, architect or reviewer".into());
+        }
+        self.solo_role = role.into();
+        Ok(())
+    }
+    pub fn selected_provider(&self) -> &str {
+        match self.solo_role.as_str() {
+            "architect" => &self.architect,
+            "reviewer" => &self.reviewer,
+            _ => &self.investigator,
+        }
+    }
     pub fn save(&self, workspace: &Path) -> Result<(), String> {
         let dir = workspace.join(".dude");
         fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
@@ -85,6 +118,10 @@ mod tests {
         assert_eq!(roles.architect,"groq");
         assert!(roles.set("reviewer","invalid").is_err());
         assert!(roles.set("unknown","ollama").is_err());
+        assert!(roles.set_mode("symfony").is_ok());
+        assert_eq!(roles.mode, "symphony");
+        assert!(roles.set_solo_role("reviewer").is_ok());
+        assert_eq!(roles.selected_provider(),"groq");
     }
     #[test]
     fn serialized_roles_round_trip() {
