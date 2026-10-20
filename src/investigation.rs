@@ -8,6 +8,24 @@ fn setting(name: &str, default: usize, min: usize, max: usize) -> usize {
     env::var(name).ok().and_then(|v| v.parse::<usize>().ok())
         .filter(|v| (min..=max).contains(v)).unwrap_or(default)
 }
+/// Short follow-ups inherit technical investigation intent from the previous user turn.
+/// Do not expand casual messages or explicit new topics into project investigations.
+pub fn is_deep_followup(question: &str) -> bool {
+    let q = question.trim().to_lowercase();
+    q.chars().count() <= 110 && [
+        "mais profunda", "mais profundo", "aprofund", "investigue melhor",
+        "analise melhor", "análise melhor", "continue a análise",
+        "continue a investig", "continue investigando", "deep dive",
+        "dig deeper", "go deeper", "look deeper",
+    ].iter().any(|marker| q.contains(marker))
+}
+
+pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool {
+    is_technical(question) || (is_deep_followup(question)
+        && previous_user.is_some_and(|previous| is_technical(previous)
+            || needs_baseline(previous)))
+}
+
 pub fn context_size() -> usize { setting("OLLAMA_NUM_CTX", 16384, 4096, 131072) }
 pub fn tool_rounds() -> usize { setting("DUDE_TOOL_ROUNDS", 8, 1, 32) }
 
@@ -180,6 +198,13 @@ pub fn is_technical(question: &str) -> bool {
 #[cfg(test)]
 mod intent_tests {
     use super::*;
+    #[test]
+    fn deep_followups_inherit_prior_investigation() {
+        assert!(is_deep_followup("faça uma análise mais profunda"));
+        assert!(investigation_intent("faça uma análise mais profunda", Some("analise esse projeto")));
+        assert!(!investigation_intent("obrigado", Some("analise esse projeto")));
+        assert!(!investigation_intent("faça uma análise mais profunda", Some("bom dia")));
+    }
     #[test]
     fn conversation_does_not_trigger_investigation() {
         assert!(!is_technical("voce pode a partir de agora falar sempre em portugues?"));
