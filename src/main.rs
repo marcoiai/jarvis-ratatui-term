@@ -307,7 +307,11 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         if app.follow_output {
             let visible_rows = chunks[1].height.saturating_sub(2) as usize;
             let available_width = chunks[1].width.saturating_sub(2).max(1);
-            let wrapped_rows = output.line_count(available_width);
+            let width = available_width as usize;
+            let wrapped_rows: usize = app.output.lines().map(|line| {
+                let columns = line.chars().count();
+                if columns == 0 { 1 } else { columns.div_ceil(width) }
+            }).sum();
             // Keep the final lines in view, without scrolling into blank space.
             app.scroll = wrapped_rows.saturating_sub(visible_rows).min(60_000) as u16;
         }
