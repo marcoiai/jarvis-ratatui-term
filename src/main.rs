@@ -101,9 +101,9 @@ struct App {
 impl App {
     fn banner(&self) -> &'static str {
         if self.communication.language == "pt-BR" {
-            "D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local"
+            "D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\nTestes de sanidade: FALHARAM. | Diagnóstico NOVVS: EM ESPERA.\nDependência de café: CRÍTICA. | Deploys questionáveis: só com aprovação.\nE aí, buddy! O que vamos construir hoje?"
         } else {
-            "D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode"
+            "D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\nSanity checks: FAILED. | NOVVS diagnostics: STANDBY.\nCoffee dependency: CRITICAL. | Questionable deployments require approval.\nHey dude! What are we building today?"
         }
     }
 
@@ -136,9 +136,9 @@ impl App {
             input: String::new(),
             key_prompt: None,
             output: if communication.language == "pt-BR" {
-                String::from("DUDE inicializado.\nTestes de sanidade: FALHARAM.\nDiagnóstico NOVVS: EM ESPERA.\nDependência de café: CRÍTICA.\nPronto para deploys questionáveis (com sua aprovação).\n\nE aí, buddy! O que vamos construir hoje?\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
+                String::from("DUDE inicializado.\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
             } else {
-                String::from("DUDE initialized successfully.\nSanity checks: FAILED.\nNOVVS diagnostics: STANDBY.\nCoffee dependency: CRITICAL.\nReady to deploy questionable decisions (with your approval).\n\nHey dude! What are we building today?\nType a question, !command, /model NAME or /clear.\n")
+                String::from("DUDE initialized successfully.\nType a question, !command, /model NAME or /clear.\n")
             },
             history,
             scroll: 0,
@@ -969,7 +969,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(2), Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(5), Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
         // Permanent identity: separate from the scrollable transcript and /clear.
