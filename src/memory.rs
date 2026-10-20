@@ -72,6 +72,31 @@ impl Memory {
         writeln!(file,"{line}").map_err(|e|e.to_string())?;
         file.sync_data().map_err(|e|e.to_string())
     }
+    /// Raw operational journal, independent of approved Knowledge and summaries.
+    /// One JSONL file per UTC day; every completed exchange is flushed to disk.
+    pub fn journal_exchange(&self, user: &str, assistant: &str) -> Result<(), String> {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let dir = self.dir.join("journal");
+        fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
+        if fs::symlink_metadata(&dir).map_err(|e|e.to_string())?.file_type().is_symlink() {
+            return Err("Refusing symlink journal directory".into());
+        }
+        let path = dir.join(format!("{today}.jsonl"));
+        if path.exists() && fs::symlink_metadata(&path).map_err(|e|e.to_string())?.file_type().is_symlink() {
+            return Err("Refusing symlink journal file".into());
+        }
+        let entry = serde_json::json!({
+            "timestamp_utc": chrono::Utc::now().to_rfc3339(),
+            "kind": "conversation",
+            "user": user,
+            "assistant": assistant,
+        });
+        let line = serde_json::to_string(&entry).map_err(|e|e.to_string())?;
+        if line.len() > 128_000 { return Err("Journal entry too large".into()); }
+        let mut file = OpenOptions::new().create(true).append(true).open(path).map_err(|e|e.to_string())?;
+        writeln!(file, "{line}").map_err(|e|e.to_string())?;
+        file.sync_data().map_err(|e|e.to_string())
+    }
     pub fn recent(&self) -> Vec<Exchange> {
         let Ok(text)=fs::read_to_string(self.dir.join("history.jsonl")) else {return Vec::new()};
         text.lines().rev().take(8).filter_map(|line|serde_json::from_str(line).ok())
@@ -117,6 +142,18 @@ mod tests {
         assert!(restored.location().join("checkpoints.md").exists());
     }
 
+    #[test]
+    fn raw_journal_survives_restart_without_knowledge_approval() {
+        let fixture = Fixture::new();
+        let memory = Memory::open(&fixture.0).unwrap();
+        memory.journal_exchange("investigue a rota", "rota não localizada").unwrap();
+        drop(memory);
+        let restored = Memory::open(&fixture.0).unwrap();
+        let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let data = fs::read_to_string(restored.location().join("journal").join(format!("{day}.jsonl"))).unwrap();
+        assert!(data.contains("investigue a rota"));
+        assert!(!restored.context().contains("rota não localizada"));
+    }
     #[test]
     fn corrupted_history_line_does_not_lose_valid_entries() {
         let fixture=Fixture::new();
