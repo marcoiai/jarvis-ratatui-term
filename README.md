@@ -151,6 +151,16 @@ Every dispatched Solo/Symphony request records metadata in `.dude/metrics.jsonl`
 - read-only file-tool execution count, evidence-cache hit count and distinct cached evidence item count
 - overall success/error status
 
-Run `/metrics` to inspect the latest 8 raw JSONL records. Each model response includes a compact summary of these measurements. Trivial requests answered locally do not dispatch an AI request and do not produce metrics. Logs contain no prompt text, source code or API keys. This is **operational instrumentation**, not yet a benchmark of answer quality. Token counts are marked unavailable rather than estimated; exact provider token accounting and currency costs require additional integration.
+Run `/metrics` to inspect the latest 8 raw JSONL records. Each model response includes a compact summary of these measurements. Trivial requests answered locally do not dispatch an AI request and do not produce metrics. Logs contain no prompt text, source code or API keys. This is **operational instrumentation**, not yet a benchmark of answer quality. Token usage is recorded from responses that expose it: Ollama `prompt_eval_count`/`eval_count`, Groq `usage.prompt_tokens`/`completion_tokens`, and Gemini `usageMetadata.promptTokenCount`/`candidatesTokenCount`. Missing fields are not estimated, so counts may be incomplete (including failed HTTP calls). Monetary cost remains unimplemented because provider prices and quotas vary.
 
 Use the same engineering task in `solo: ...` and `symphony: ...` to compare latency and tool usage. Independently grade correctness against actual source lines before claiming Symphony improves quality.
+
+### Benchmark protocol (initial)
+
+1. Select a pinned workspace commit and a question with checkable expected observations; keep provider model names and role assignments unchanged.
+2. Run `solo: ...` and `symphony: ...` against that same repository state (use fresh sessions if previous answers could bias later results).
+3. Inspect `/metrics` for total and per-stage milliseconds, provider-reported input/output tokens, tool executions, and cache hits. Compare measured counts, not guessed financial charges.
+4. Manually grade correctness: supported claims, false claims, missed high-priority findings, and usefulness of recommendations. File citations are not proof until checked.
+5. Repeat across multiple tasks before drawing conclusions; no quality score is automatically generated from model output.
+
+Known limitation: the current UI includes the metrics summary in chat history; this may slightly increase later context size. Separating telemetry from model-facing history remains future cleanup.
