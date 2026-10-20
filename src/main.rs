@@ -685,7 +685,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         other => Err(format!("Unsupported provider: {other}")),
     }?;
     if require_project_evidence {
-        investigation::require_evidence_for_overview(evidence_for_gate.len())?;
+        investigation::require_evidence_for_overview(evidence_for_gate.source_read_count())?;
     }
     Ok(answer)
 }
