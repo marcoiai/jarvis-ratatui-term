@@ -187,3 +187,15 @@ Commands:
 Common explicit requests like `em português por favor`, `in english please`, `mais objetivo`, and `passo a passo` update the user's profile locally without an API request. The latest instruction for a particular task still takes precedence in the prompt. The implementation deliberately does not infer persistent preferences from every offhand utterance.
 
 Known limits: detection currently uses a conservative set of exact phrases; it is not natural-language preference extraction. Profiles store no identity, API keys or project secrets. Tests cover alignment validation and common triggers; compilation must be verified with Cargo.
+
+## Status bar icon themes
+
+The workspace status bar uses Nerd Fonts glyphs by default (requires a Nerd Font configured in the terminal, e.g. a MesloLGS NF or JetBrainsMono Nerd Font). DUDE cannot reliably detect terminal fonts. Set the icon style when launching the application:
+
+```sh
+cargo run                     # Nerd Fonts (default)
+DUDE_ICON_STYLE=unicode cargo run # previous emoji style
+DUDE_ICON_STYLE=ascii cargo run   # portable, no special font required
+```
+
+The status is refreshed on startup, after switching workspaces, and with `/env refresh`. Newer binary changes require restarting DUDE after `git pull` and recompilation.
