@@ -621,9 +621,13 @@ impl App {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
-                if let (Some(store), Some(user)) = (&self.memory, self.last_question.take())
-                    && let Err(err) = store.record(&user, &text) {
-                        self.output.push_str(&format!("Memory write warning: {err}\n"));
+                if let (Some(store), Some(user)) = (&self.memory, self.last_question.take()) {
+                    if let Err(err) = store.journal_exchange(&user, &text) {
+                        self.output.push_str(&format!("Journal write warning: {err}\\n"));
+                    }
+                    if let Err(err) = store.record(&user, &text) {
+                        self.output.push_str(&format!("History write warning: {err}\\n"));
+                    }
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
                 if self.streamed { self.output.push_str(&format!("\n\n{telemetry}\n")); }
