@@ -675,8 +675,10 @@ async fn ask_ollama(
         json!({"role": m.role, "content": m.content})
     }).collect();
     let rounds = if allow_tools { investigation::tool_rounds() } else { 0 };
+    let mut stalled_rounds = 0usize;
     for round in 0..=rounds {
-        let tools_enabled = allow_tools && round < rounds;
+        // Stop requesting more tools after two rounds without new observations.
+        let tools_enabled = allow_tools && round < rounds && stalled_rounds < 2;
         if allow_tools && !tools_enabled {
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,evidence.coverage())}));
         }
@@ -744,6 +746,7 @@ async fn ask_ollama(
             }})
         }).collect();
         conversation.push(json!({"role":"assistant","content":reply.message.content,"tool_calls": calls}));
+        let previous_evidence = evidence.len();
         for call in reply.message.tool_calls {
             let root = workspace.clone();
             let name = call.function.name;
@@ -754,6 +757,8 @@ async fn ask_ollama(
             }).await.map_err(|e| e.to_string())?;
             conversation.push(json!({"role":"tool","content":output}));
         }
+        if evidence.len() == previous_evidence { stalled_rounds += 1; }
+        else { stalled_rounds = 0; }
     }
     Err("Ollama ended without a final response".into())
 }
