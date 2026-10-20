@@ -187,6 +187,11 @@ impl App {
                 let _ = tx.send(ResultMessage::Shell(result));
             });
         } else {
+            if let Some(store) = &self.memory {
+                if self.history.len() > 1 && self.history[1].role == "system" {
+                    self.history[1].content = store.context();
+                }
+            }
             self.last_question = Some(input.clone());
             self.history.push(Message { role: "user".into(), content: input });
             let messages = self.history.clone();
