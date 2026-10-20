@@ -980,17 +980,17 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(3), Constraint::Length(11), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(11), Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
-        // Fixed introduction stays at its original position below input, outside scrollable transcript.
+        // Fixed ENOVA/DUDE identity above input, outside scrollable transcript.
         frame.render_widget(
             Paragraph::new(app.banner()).style(Style::default().fg(Color::Cyan)),
-            chunks[1],
+            chunks[0],
         );
 
         // Keep the input tail and the real terminal cursor visible.
-        let input_width = chunks[0].width.saturating_sub(2) as usize;
+        let input_width = chunks[1].width.saturating_sub(2) as usize;
         let mut visible = String::new();
         let mut visible_width = 0usize;
         for ch in app.input.chars().rev() {
@@ -1006,9 +1006,9 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let input = Paragraph::new(visible)
             .block(Block::default().title(if app.key_prompt.is_some() {"DUDE - secret API key"} else {"DUDE - input"}).borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
-        frame.render_widget(input, chunks[0]);
-        if input_width > 0 && chunks[0].height > 2 {
-            frame.set_cursor_position((chunks[0].x + 1 + visible_width as u16, chunks[0].y + 1));
+        frame.render_widget(input, chunks[1]);
+        if input_width > 0 && chunks[1].height > 2 {
+            frame.set_cursor_position((chunks[1].x + 1 + visible_width as u16, chunks[1].y + 1));
         }
 
         const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
