@@ -62,7 +62,7 @@ mod tests {
 /// Explicit fixed candidates avoid executing project code or following arbitrary paths.
 pub fn needs_baseline(question: &str) -> bool {
     let q = question.to_lowercase();
-    let project = ["projeto", "project", "codebase", "repositório", "repository"]
+    let project = ["projeto", "project", "codebase", "repositório", "repository", "sistema"]
         .iter().any(|word| q.contains(word));
     (project && ["entend", "understand", "analis", "anális", "analy", "arquitet", "architect", "review", "audit", "faz", "serve", "purpose"]
         .iter().any(|word| q.contains(word)))
@@ -137,6 +137,19 @@ mod baseline_tests {
         assert!(!needs_baseline("o que é Tokio?"));
     }
     #[test]
+    fn symfony_baseline_reads_application_configuration() {
+        let root = env::temp_dir().join(format!("dude-symfony-baseline-{}", std::process::id()));
+        fs::create_dir_all(root.join("apps/cliente/config")).unwrap();
+        fs::write(root.join("apps/cliente/config/app.yml"), "all:\\n  accepted_uploads: true\\n").unwrap();
+        fs::write(root.join("apps/cliente/config/security.yml"), "default:\\n  is_secure: true\\n").unwrap();
+        let evidence = crate::evidence::EvidenceCache::default();
+        let output = baseline(&root, &evidence);
+        assert!(output.contains("apps/cliente/config/app.yml"));
+        assert!(output.contains("accepted_uploads"));
+        assert!(output.contains("apps/cliente/config/security.yml"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn baseline_contains_real_source_and_evidence() {
         let root = env::temp_dir().join(format!("dude-baseline-{}", std::process::id()));
         fs::create_dir_all(root.join("src")).unwrap();
@@ -160,7 +173,7 @@ pub fn is_technical(question: &str) -> bool {
         "arquitet", "architect", "implement", "debug", "refator", "refactor",
         "função", "funcao", "function", "modulo", "módulo", "module",
         "test", "compil", "build", "query", "sql", "api", "dependenc", "dependênc",
-        "analise", "análise", "analis", "investig", "review", "audit"]
+        "analise", "análise", "analis", "investig", "review", "audit", "aprofund"]
         .iter().any(|word|q.contains(word))
 }
 
