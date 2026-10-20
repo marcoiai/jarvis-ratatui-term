@@ -572,7 +572,8 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let mut messages = messages;
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
-    let allow_tools = allow_tools && investigation::is_technical(question);
+    let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
+    let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")
