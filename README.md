@@ -72,22 +72,32 @@ Use `/workspace` to print the active workspace, or `/workspace ~/Projects/levelu
 
 Alternatively launch DUDE with `DUDE_WORKSPACE="$HOME/Projects/levelup" cargo run`. The directory must exist and be accessible. `/workspace` is a user command, not an LLM tool.
 
-## AI roles and modes (experimental)
 
-Role configuration lives in `.dude/roles.json`, separately for each workspace. Commands:
+## Provider roles and Symphony
 
-```text
+DUDE supports independent provider assignment to three roles in **both** modes:
+
+- Investigator: explores the workspace and gathers evidence.
+- Architect: organizes findings and develops proposals.
+- Reviewer: checks claims and prepares the final response.
+
+The selected providers are saved per workspace in \`.dude/roles.json\`. In **Solo**, DUDE uses only the selected role. In **Symphony**, DUDE invokes all three roles in order, sharing bounded intermediate findings and showing **only one final response** from the Reviewer (no intermediate agent transcript).
+
+\`\`\`text
 /roles
 /role investigator ollama
 /role architect gemini
 /role reviewer groq
 /mode solo
-/solo investigator
+/solo architect
 /mode symphony
-```
+/cloud allow
+\`\`\`
 
-`/mode symfony` is accepted as an alias for `/mode symphony`. **Solo** sends your next chat prompt to the provider configured for the selected role. Currently Ollama and Groq chats are available; Gemini and OpenAI role names may be configured but are not yet executable. The separate older `/provider` option is legacy and will be reconciled with role selection.
+\`/mode symfony\` is an alias. \`/cloud deny\` revokes cloud permission for the current session. Permission is **off on startup and after workspace changes**. A cloud role receives conversation history, project memory/context and results of explicitly requested read-only file tools; do not enable cloud for proprietary workspaces unless authorized. Shell commands (\`!command\`) remain explicitly user initiated.
 
-**Symphony** is the planned closed workflow: Investigator gathers evidence, Architect proposes and organizes, Reviewer challenges, then DUDE consolidates the answer. The configuration can now be stored, but the execution is intentionally blocked until adapters, unified tools and cloud data-consent controls are complete. It will not silently send project material to cloud providers.
+Supported runtime adapters: Ollama local (\`OLLAMA_MODEL\`, default \`qwen3:4b\`); Groq (\`GROQ_API_KEY\`, optional \`GROQ_MODEL\`, default \`openai/gpt-oss-120b\`); Gemini (\`GEMINI_API_KEY\` or \`GOOGLE_API_KEY\`, optional \`GEMINI_MODEL\`, default \`gemini-2.5-flash\`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
 
-Use `/mode solo` while Symphony is under construction.
+If any Symphony stage errors, DUDE displays an error instead of silently treating partial results as a complete three-role answer. Shared tools are read-only, and each provider is limited to eight rounds of tool calls.
+
+**Validation status:** code committed, but integration and compilation must be run in your local development environment. In particular, check the Gemini model and credentials against your account's API quota.
