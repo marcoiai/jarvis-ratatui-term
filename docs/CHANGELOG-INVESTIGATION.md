@@ -52,3 +52,13 @@
 - O DUDE agora informa explicitamente se novos candidatos foram criados, se não houve candidato válido, se a extração falhou ou se houve erro de gravação.
 - Candidatos pendentes continuam sendo apresentados para aprovação com o mecanismo existente `ask_next_knowledge()`; nenhuma memória é aprovada sem consentimento.
 - Pendente: melhorar robustez da extração em modelos locais, evitar segundo passe lento quando desnecessário, testar `cargo check` e `cargo test` localmente.
+
+## 2026-10-20 — Etapa 3: Laravel funcional e garantia de leitura real
+
+- Análise do IPTV Laravel expôs baseline superficial: 4 fontes (`README.md`, `composer.json`, `package.json`, `public/index.php`) em 229488 ms, sem fluxos funcionais.
+- `investigation::baseline` passa a incluir rotas, bootstrap, configuração de banco, controllers, models, services e teste representativo, quando existentes, mantendo o limite de amostragem e ferramentas read-only.
+- Arquivos Laravel funcionais recebem prioridade na composição do contexto limitado.
+- Teste unitário Laravel valida presença de conteúdo de rota/controller e evidência de linha.
+- Nova `EvidenceCache::source_read_count()` distingue leitura bem-sucedida de simples inventário; gate de análise ampla usa leituras reais.
+- Memória: `history.jsonl` registra conversas; `memory.md` não recebe candidatos sem aprovação; `knowledge_candidates.json` armazena propostas pendentes. Não há prova de aprovação/persistência de Knowledge nos logs do IPTV. Não declarar que memórias factuais já foram salvas.
+- Pendente: testes `cargo fmt --check`, `cargo check`, `cargo test` e execução end-to-end no Mac; investigação de custo do segundo passe de extração; seleção dinâmica de módulos por relevância.
