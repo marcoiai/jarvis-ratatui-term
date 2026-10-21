@@ -64,7 +64,15 @@ async fn groq_request_with_quota(
         let body = response.text().await.unwrap_or_default();
         // HTTP 413 with "Requested > Limit" is not solved by waiting:
         // the next call must be sliced. HTTP 429 may clear with time.
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && retries < 5 {
+        // Groq sometimes reports a depleted TPM window as HTTP 413.
+        // Only wait when the request itself fits the limit.
+        let fits_tpm = match (groq_error_number(&body, "Limit "), groq_error_number(&body, "Requested ")) {
+            (Some(limit), Some(requested)) => requested <= limit,
+            _ => false,
+        };
+        if (status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || (status == reqwest::StatusCode::PAYLOAD_TOO_LARGE && fits_tpm))
+            && retries < 5 {
             let wait = parse_retry_seconds(&body).or(retry_header).unwrap_or(60.0)
                 .ceil().clamp(1.0, 75.0) as u64;
             retries += 1;
@@ -202,6 +210,12 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
 }
 
 
+fn groq_error_number(body: &str, marker: &str) -> Option<u64> {
+    let value = body.split(marker).nth(1)?;
+    value.chars().take_while(|c| c.is_ascii_digit())
+        .collect::<String>().parse::<u64>().ok()
+}
+
 fn parse_retry_seconds(body: &str) -> Option<f64> {
     let start = body.find("Please try again in ")? + "Please try again in ".len();
     let suffix = &body[start..];
@@ -220,6 +234,12 @@ mod retry_tests {
         assert!(slices.len() > 1);
         assert!(slices.iter().all(|s| s.len() <= GROQ_SLICE_CHARS + 4));
         assert_eq!(slices.concat(), format!("\n--- user ---\n{}\n", long));
+    }
+    #[test]
+    fn reads_tpm_budget() {
+        let body = "Limit 8000, Requested 9821, please reduce your message size";
+        assert_eq!(groq_error_number(body,"Limit "),Some(8000));
+        assert_eq!(groq_error_number(body,"Requested "),Some(9821));
     }
     #[test]
     fn detects_retry_seconds() {
