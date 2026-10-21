@@ -447,13 +447,13 @@ impl App {
                     let evidence = evidence;
                     if dual_enabled && roles.mode == "solo" && roles.selected_provider() == "ollama" {
                     run_local_dual(&client, routed_messages, workspace, &url,
-                        &ollama_model, &reasoning_model, evidence).await
+                        &ollama_model, &reasoning_model, interpreted.needs_workspace, evidence).await
                 } else if roles.mode == "symphony" {
                     run_symphony(&client, &roles, routed_messages, workspace, &url,
-                        &ollama_model, &groq_model, &gemini_model, evidence).await
+                        &ollama_model, &groq_model, &gemini_model, interpreted.needs_workspace, evidence).await
                 } else {
                     query_provider(&client, roles.selected_provider(), routed_messages, workspace,
-                        &url, &ollama_model, &groq_model, &gemini_model, true, evidence).await
+                        &url, &ollama_model, &groq_model, &gemini_model, interpreted.needs_workspace, evidence).await
                     }
                 }.await;
                 let _ = tx.send(ResultMessage::Chat(result));
@@ -510,13 +510,13 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
 /// Local-only additive second opinion: the proven Solo answer is never replaced.
 async fn run_local_dual(
     client: &reqwest::Client, messages: Vec<Message>, workspace: PathBuf,
-    host: &str, code_model: &str, reasoning_model: &str,
+    host: &str, code_model: &str, reasoning_model: &str, needs_workspace: bool,
     evidence: evidence::EvidenceCache,
 ) -> Result<String,String> {
     let question = messages.iter().rev().find(|m| m.role == "user")
         .map(|m| m.content.clone()).unwrap_or_default();
     let primary = ask_ollama(client, host, code_model, messages, workspace,
-        true, evidence).await?;
+        needs_workspace, evidence).await?;
     // Avoid sending arbitrary-sized analysis to a second model.
     let planning = vec![
         Message { role: "system".into(), content: concat!(
@@ -546,7 +546,7 @@ async fn run_local_dual(
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
-    groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache) -> Result<String,String> {
+    groq_model: &str, gemini_model: &str, needs_workspace: bool, evidence: evidence::EvidenceCache) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
@@ -568,7 +568,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if shared.is_empty() {"(none)"} else {&shared}
         )});
         let response=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model,index == 0,evidence.clone()).await
+            local_model,groq_model,gemini_model,index == 0 && needs_workspace,evidence.clone()).await
             .map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {return Ok(response);}
         // Bound cost and payload sent to downstream providers.
