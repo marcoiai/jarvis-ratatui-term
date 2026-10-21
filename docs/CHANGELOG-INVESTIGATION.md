@@ -70,3 +70,11 @@ Known limitations:
 - No automated rescue call is performed after a failed `read_file`; the agent must choose `find_files`.
 - No actual code indexing/FTS, robust persistent evidence cache with invalidation, or structured Symphony collaboration yet.
 - No compile/test execution done here; run `cargo fmt --check && cargo check && cargo test` in the checkout, then benchmark same project/prompt/model against Continue.
+
+## 2026-10-21 — Fresh review provenance and Ollama errors
+
+- For explicit whole-project review requests, the Ollama route now adds a fresh bounded `project_map` overview from the current workspace. It labels the inventory as paths/declarations only, not proof that implementations were read. Past assistant exchanges must not be presented as fresh evidence.
+- Empty final replies are treated as errors and not recorded as successful responses.
+- Connection failures now report the Ollama host/model and whether reqwest classified the failure as a connection or timeout error.
+- The existing `App::complete` branch already removes the unanswered user message on errors and does not save a failed assistant reply; no fabricated fallback is introduced.
+- Still incomplete: explicit per-turn tool-evidence provenance in the UI, safe persistent cache invalidation, and adaptive recovery when Ollama becomes unreachable mid-investigation. No local cargo execution yet.
