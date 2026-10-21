@@ -205,3 +205,12 @@
 - Mostra os caminhos do repositório local para memória curada e fila de candidatos; quando vazio, esclarece que extração automática é best-effort.
 - Leitura de `memory.md` rejeita symlink, coerente com a proteção existente para os demais arquivos da memória.
 - Esta mudança melhora **diagnóstico e visibilidade**, não gera conhecimento automaticamente. Ainda é preciso validar no Linux/Mac com `cargo fmt --check`, `cargo check` e `cargo test`; melhorias da extração ficam como prioridade.
+
+## 2026-10-21 — Recuperação de Ollama remoto e Knowledge determinístico
+
+- Corrigida a mensagem enganosa de inicialização: falha em `/api/tags` agora informa o endpoint e sugere verificar host/rede, não presume que Ollama precise ser iniciado localmente.
+- Novos comandos no terminal: `/ollama` (mostra endpoint, modelo e status), `/ollama retry` (revalida sem reiniciar) e `/ollama host http://IP:11434` (troca o endpoint da sessão e testa modelo). Não persistimos endereço sem consentimento explícito.
+- **Evolução do Knowledge:** após uma investigação, a primeira tentativa extrai até seis declarações explícitas de `read_file` (`pub fn`, `pub struct`, `class` etc.), ligadas a referências `arquivo:linha` realmente observadas. A fila depende de revisão do usuário; não registra inferências como fatos.
+- Havendo candidatos inéditos, o Solo não realiza a segunda inferência de Knowledge, evitando latência e erros de transporte. Sem candidatos novos, a extração por LLM permanece como fallback best-effort.
+- Teste unitário adicionado para referências observadas, com declarações públicas e privadas em arquivo Rust de exemplo.
+- Limites: essa etapa captura *declarações sintáticas*, não entendimento semântico nem arquitetura. É uma fonte previsível de conhecimento revisável, e não substitui conhecimento conceitual. Nenhum teste local de compilação foi executado; validar `cargo fmt --check`, `cargo check` e `cargo test` em Linux/Mac.
