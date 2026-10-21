@@ -604,17 +604,25 @@ impl App {
                             let evidence_text = evidence.export();
                             let prompt = format!(
                                 "Extract up to 6 reusable, project-specific factual knowledge candidates from the answer below. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
-                                question.chars().take(1000).collect::<String>(),
-                                answer.chars().take(5500).collect::<String>(),
-                                evidence_text.chars().take(16000).collect::<String>()
+                                question.chars().take(500).collect::<String>(),
+                                answer.chars().take(3000).collect::<String>(),
+                                evidence_text.chars().take(5000).collect::<String>()
                             );
                             let extraction = vec![
                                 Message {role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into()},
                                 Message {role: "user".into(), content: prompt},
                             ];
-                            let discovered = query_provider(&client, &solo_provider, extraction, workspace.clone(),
-                                &url, &ollama_model, &groq_model, &gemini_model, false,
-                                evidence.clone(), metrics.clone(), None).await;
+                            // Best-effort secondary inference: never spend another full
+                            // investigation deadline extracting optional knowledge.
+                            let discovered = match tokio::time::timeout(
+                                Duration::from_secs(75),
+                                query_provider(&client, &solo_provider, extraction, workspace.clone(),
+                                    &url, &ollama_model, &groq_model, &gemini_model, false,
+                                    evidence.clone(), metrics.clone(), None),
+                            ).await {
+                                Ok(result) => result,
+                                Err(_) => Err("prazo de 75 s da extração excedido".into()),
+                            };
                             match discovered {
                                 Ok(raw) => {
                                     let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
