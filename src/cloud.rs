@@ -82,7 +82,16 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
             .json(&if tools_enabled { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents,"tools":[{"functionDeclarations":defs}]}) } else { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents}) })
             .send().await.map_err(|e|format!("Gemini connection: {e}"))?;
         let status=response.status();
-        if !status.is_success() {return Err(format!("Gemini HTTP {status}: {}",response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Err(format!(
+                    "Gemini model '{model}' is unavailable to this API key (404). Set GEMINI_MODEL=gemini-3.8-flash and restart DUDE. Details: {}",
+                    body.chars().take(300).collect::<String>()
+                ));
+            }
+            return Err(format!("Gemini HTTP {status}: {}",body.chars().take(600).collect::<String>()));
+        }
         let value:Value=response.json().await.map_err(|e|e.to_string())?;
         if let (Some(i),Some(o))=(value["usageMetadata"]["promptTokenCount"].as_u64(),value["usageMetadata"]["candidatesTokenCount"].as_u64()){ metrics.tokens("gemini",model,i,o); }
         let candidate=&value["candidates"][0]["content"];
