@@ -189,3 +189,11 @@
 - Removida a linha vazia entre logo e `business solutions`; painel fixo da logo reduzido de 7 para 6 linhas.
 - Mantida a ordem `logo → input → cabeçalho DUDE → conversa rolável`.
 - Aparência e compilação pendentes de validação no terminal Mac (`cargo fmt --check`, `cargo check`, `cargo test`).
+
+## 2026-10-21 — Reversão da compactação da marca e limite para Knowledge
+
+- Revertida somente a alteração de compactação da arte ENOVA que distorceu o lettering. Restauradas as formas originais de 5 linhas e o espaçamento antes do subtítulo; painel novamente com 7 linhas. A posição `logo → input → identidade DUDE → conversa` permanece.
+- Analisado o gargalo Solo observado: após finalizar o parecer, uma segunda chamada de extração de Knowledge enviava até 16 mil caracteres de observações, além da resposta, potencialmente consumindo o timeout geral do cliente.
+- Reduzidos os limites de entrada dessa etapa para 500 caracteres de pergunta, 3.000 da resposta e 5.000 de observações. Adicionado limite de 75 segundos **somente** para a extração secundária; ultrapassá-lo não descarta o parecer já produzido.
+- Mantida a aprovação explícita de candidatos; falhas de extração não geram conhecimento automaticamente.
+- Limitação: recortar observações pode omitir evidências de candidatos; não é garantia de sucesso nem substitui testes locais (`cargo fmt --check`, `cargo check`, `cargo test`). Uma otimização posterior deverá selecionar trechos relevantes, não apenas truncá-los.
