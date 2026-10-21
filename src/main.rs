@@ -628,14 +628,9 @@ async fn ask_ollama(
         for candidate in candidates {
             if workspace.join(candidate).is_file() {
                 let args = json!({"path":candidate,"start_line":1,"end_line":160});
-                let result = file_tools::execute(&workspace, "read_file", &args);
-                if result.is_ok() {
-                    let _ = evidence.execute(&workspace, "read_file", &args);
-                }
-                if let Ok(contents) = result {
-                    if !contents.is_empty() {
-                        verified.push(format!("FILE {candidate} (first 160 lines, read now):\n{contents}"));
-                    }
+                let contents = evidence.execute(&workspace, "read_file", &args);
+                if !contents.is_empty() && !contents.starts_with("Tool error:") {
+                    verified.push(format!("FILE {candidate} (first 160 lines, read now):\n{contents}"));
                 }
             }
             if verified.len() >= 4 { break; }
