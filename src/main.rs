@@ -61,7 +61,7 @@ struct ToolFunction { name: String, arguments: Value }
 fn is_simple_greeting(input: &str) -> bool {
     matches!(input.trim().to_lowercase().as_str(),
         "oi" | "olá" | "ola" | "opa" | "e aí" | "e ai" |
-        "bom dia" | "boa tarde" | "boa noite" | "hello" | "hi" | "hey")
+        "bom dia" | "boa tarde" | "boa noite" | "hello" | "hi" | "hey" | "ei")
 }
 
 enum ResultMessage {
@@ -917,7 +917,10 @@ mod solo_routing_tests {
         assert!(is_simple_greeting("Oi"));
         assert!(is_simple_greeting(" olá "));
         assert!(is_simple_greeting("BOM DIA"));
+        assert!(is_simple_greeting("ei"));
+        assert!(is_simple_greeting(" EI "));
         assert!(!is_simple_greeting("oi, analise este projeto"));
+        assert!(!is_simple_greeting("ei, analise o workspace"));
         assert!(!is_simple_greeting("review current project"));
     }
 }
