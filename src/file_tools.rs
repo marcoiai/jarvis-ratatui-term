@@ -8,6 +8,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type":"function","function":{"name":"list_files","description":"List files in a workspace directory (read-only).","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path, default ."}}}}}),
         json!({"type":"function","function":{"name":"read_file","description":"Read a text file, optionally limited to line range. Similar to sed -n, but read-only.","parameters":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer"},"end_line":{"type":"integer"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"find_files","description":"Find workspace files by basename or path fragment before attempting to read them. Use when a read fails or a location is uncertain.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Filename or path fragment, case-insensitive"}},"required":["query"]}}}),
         json!({"type":"function","function":{"name":"project_map","description":"Read-only compact repository map: paths and approximate Rust, PHP, Java, C++ and Python declarations; use before reading many source files.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path (default .)"}}}}}),
         json!({"type":"function","function":{"name":"search_text","description":"Search text in workspace files, like grep -n. No regex; case-sensitive literal search.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File or directory relative path, default ."},"pattern":{"type":"string"}},"required":["pattern"]}}})
     ]
@@ -61,6 +62,20 @@ fn read_limited(path: &Path) -> Result<String,String> {
 
 pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
     let relative = args.get("path").and_then(Value::as_str).unwrap_or(".");
+    if name == "find_files" {
+        let query = args.get("query").and_then(Value::as_str).ok_or("Missing query")?.trim();
+        if query.is_empty() || query.len() > 128 || query.contains('/') && query.starts_with('/') {
+            return Err("Invalid filename query".into());
+        }
+        let mut files = Vec::new();
+        scan(root, &mut files)?;
+        let query = query.to_lowercase();
+        let matches: Vec<String> = files.into_iter().filter_map(|p| {
+            let path = p.strip_prefix(root).ok()?.to_string_lossy().to_string();
+            (path.to_lowercase().contains(&query)).then_some(path)
+        }).take(40).collect();
+        return Ok(if matches.is_empty() { "No matching files in bounded workspace scan".into() } else { matches.join("\n") });
+    }
     let path = resolve(root, relative)?;
     match name {
         "list_files" => {
