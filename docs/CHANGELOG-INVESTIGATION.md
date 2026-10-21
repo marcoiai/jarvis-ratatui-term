@@ -197,3 +197,11 @@
 - Reduzidos os limites de entrada dessa etapa para 500 caracteres de pergunta, 3.000 da resposta e 5.000 de observações. Adicionado limite de 75 segundos **somente** para a extração secundária; ultrapassá-lo não descarta o parecer já produzido.
 - Mantida a aprovação explícita de candidatos; falhas de extração não geram conhecimento automaticamente.
 - Limitação: recortar observações pode omitir evidências de candidatos; não é garantia de sucesso nem substitui testes locais (`cargo fmt --check`, `cargo check`, `cargo test`). Uma otimização posterior deverá selecionar trechos relevantes, não apenas truncá-los.
+
+## 2026-10-21 — Visibilidade do Knowledge e memória persistente
+
+- O comando `/knowledge` agora mostra contagens separadas de candidatos pendentes, aprovados e rejeitados; destaca pendências com evidência não verificada ou classificadas como inferência.
+- Exibe também o número de entradas de fato presentes em `.dude/memory.md`, inclusive as adicionadas por `/remember`, para distinguir conhecimento retido de fila de propostas.
+- Mostra os caminhos do repositório local para memória curada e fila de candidatos; quando vazio, esclarece que extração automática é best-effort.
+- Leitura de `memory.md` rejeita symlink, coerente com a proteção existente para os demais arquivos da memória.
+- Esta mudança melhora **diagnóstico e visibilidade**, não gera conhecimento automaticamente. Ainda é preciso validar no Linux/Mac com `cargo fmt --check`, `cargo check` e `cargo test`; melhorias da extração ficam como prioridade.
