@@ -257,3 +257,10 @@
 - Teste unitário verifica preservação de `tool_call_id`, limite de tamanho e imutabilidade das observações originais.
 - Isso reduz significativamente o envio, mas não garante estar abaixo do TPM em toda situação nem controla o consumo agregado na janela de um minuto. A próxima etapa é um orçamento real de tokens e seleção semântica de evidências.
 - Necessário executar `cargo fmt --check`, `cargo check` e `cargo test` no Mac antes de considerar validado.
+
+## 2026-10-21 — Recuperação de contexto do pedido e redução do payload Groq
+
+- `pending_request.json` agora registra texto, configuração de papéis/modo, nome dos modelos Ollama/Groq/Gemini e se a execução tinha autorização de cloud. `/recover` restaura texto e configuração para edição/reenvio.
+- Por segurança, `/cloud allow` **não** é reativado automaticamente depois de reiniciar; recuperação avisa que é preciso autorizar novamente. Arquivos pendentes antigos contendo só a pergunta permanecem compatíveis. Testes de serialização/compatibilidade adicionados.
+- O Groq aplica seleção compacta de trechos de ferramenta tanto nas rodadas com ferramentas quanto na síntese final; palavras da pergunta original guiam prioridade. O cache de evidências local permanece intacto; seleção de arquivos e observações já existia antes deste ajuste.
+- Limitações: a compactação por correspondência lexical não é avaliação semântica aprofundada, e limite por caracteres não garante respeito ao orçamento real de tokens/TPM. Requer validação de `cargo fmt --check`, `cargo check`, `cargo test` e teste manual no Mac.
