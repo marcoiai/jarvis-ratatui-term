@@ -219,7 +219,7 @@ mod retry_tests {
         let slices = groq_slices(&convo);
         assert!(slices.len() > 1);
         assert!(slices.iter().all(|s| s.len() <= GROQ_SLICE_CHARS + 4));
-        assert_eq!(slices.concat(), format!("\\n--- user ---\\n{}\\n", long));
+        assert_eq!(slices.concat(), format!("\n--- user ---\n{}\n", long));
     }
     #[test]
     fn detects_retry_seconds() {
