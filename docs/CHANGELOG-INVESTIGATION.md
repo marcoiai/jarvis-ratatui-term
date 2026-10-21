@@ -171,3 +171,9 @@ Known limitations:
 - Cobertura de três comportamentos: `project_map -> read_file -> resposta`; `project_map -> resposta prematura -> read_file -> resposta`; e `resposta sem ferramentas -> resposta sem ferramentas -> erro`.
 - Asserções verificam o resumo efetivo de ferramentas e a recusa em aceitar texto fictício como análise do workspace.
 - **Ainda não validado em compilação nem execução:** indisponibilidade do toolchain Cargo no ambiente de edição; executar `cargo fmt --check && cargo test` no checkout antes de considerar aprovado.
+
+## 2026-10-21 — Source excerpt provenance
+
+- `read_file` now reports the file path, actual returned line interval, total line count, whether the entire file was read, and whether output was truncated by the result budget.
+- Added regression test for partial vs full file reads. The model must not treat a partial excerpt as the whole implementation.
+- **Not yet validated:** cargo check/test and live analysis with Qwen; this improves provenance but does not prevent unsupported synthesis.
