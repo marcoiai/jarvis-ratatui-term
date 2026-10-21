@@ -58,13 +58,6 @@ struct ToolCall { function: ToolFunction }
 #[derive(Deserialize)]
 struct ToolFunction { name: String, arguments: Value }
 
-fn is_simple_greeting(input: &str) -> bool {
-    matches!(input.trim().to_lowercase().as_str(),
-        "oi" | "olá" | "ola" | "opa" | "e aí" | "e ai" |
-        "bom dia" | "boa tarde" | "boa noite" | "hello" | "hi" | "hey" | "ei")
-}
-
-/// Recognize repository-analysis requests without tying them to one exact wording.
 enum ResultMessage {
     ModelReady(Result<String, String>),
     Chat(Result<String, String>),
@@ -434,7 +427,7 @@ impl App {
             }
             tokio::spawn(async move {
                 let result = async {
-                    let interpreted = interpret_request(&client, &url, &ollama_model, &messages).await?;
+                    let interpreted = interpret_request(&client, &url, &messages).await?;
                     let mut routed_messages = messages;
                     routed_messages.push(Message {
                         role: "system".into(),
@@ -615,10 +608,9 @@ struct InterpretedRequest {
 async fn interpret_request(
     client: &reqwest::Client,
     host: &str,
-    coder_model: &str,
     messages: &[Message],
 ) -> Result<InterpretedRequest, String> {
-    let model = env::var("DUDE_INTERPRETER_MODEL").unwrap_or_else(|_| coder_model.to_string());
+    let model = env::var("DUDE_INTERPRETER_MODEL").unwrap_or_else(|_| "qwen3:4b-instruct-2507-q4_K_M".to_string());
     let mut context: Vec<Value> = vec![json!({"role":"system","content":concat!(
         "You are DUDE's natural-language interpreter. Understand the latest user request ",
         "in the context of the recent conversation. Do not answer it and do not invent ",
@@ -925,21 +917,7 @@ mod ollama_answer_tests {
     }
 }
 
-#[cfg(test)]
-mod solo_routing_tests {
-    use super::is_simple_greeting;
-    #[test]
-    fn greeting_is_local_and_case_insensitive() {
-        assert!(is_simple_greeting("Oi"));
-        assert!(is_simple_greeting(" olá "));
-        assert!(is_simple_greeting("BOM DIA"));
-        assert!(is_simple_greeting("ei"));
-        assert!(is_simple_greeting(" EI "));
-        assert!(!is_simple_greeting("oi, analise este projeto"));
-        assert!(!is_simple_greeting("ei, analise o workspace"));
-        assert!(!is_simple_greeting("review current project"));
-    }
-}
+
 
 #[cfg(test)]
 mod workspace_shell_tests {
