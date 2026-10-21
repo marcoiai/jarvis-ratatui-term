@@ -436,12 +436,19 @@ impl App {
             tokio::spawn(async move {
                 let result = async {
                     let interpreted = interpret_request(&client, &url, &workspace, &messages).await?;
+                    // Workspace facts are checked by Rust, not inferred by the LLM.
+                    let workspace_entries = std::fs::read_dir(&workspace)
+                        .map_err(|e| format!("Cannot read selected workspace {}: {e}", workspace.display()))?
+                        .take(50)
+                        .filter_map(Result::ok)
+                        .filter_map(|entry| entry.file_name().into_string().ok())
+                        .collect::<Vec<_>>();
                     let mut routed_messages = messages;
                     routed_messages.push(Message {
                         role: "system".into(),
                         content: format!(
-                            "The DUDE core has selected workspace {} and provides actual local read-only tools to the Coder. Do not claim workspace access is unavailable. The interpreter reformulated the user's latest message. Use this as task guidance, NOT as file evidence. Always preserve the original user's wording and constraints.\nInterpreted task: {}\nNeeds workspace investigation: {}",
-                            workspace.display(), interpreted.task, interpreted.needs_workspace
+                            "Selected workspace: {}. Actual top-level entries (up to 50): {:?}. These entries are from Rust filesystem access, not LLM inference. Read-only tools are available during investigation. Never claim this workspace is missing or empty contrary to these facts. Interpreter task guidance (not verified source): {}. Needs source inspection: {}. Preserve the original user request.",
+                            workspace.display(), workspace_entries, interpreted.task, interpreted.needs_workspace
                         ),
                     });
                     let evidence = evidence;
@@ -636,7 +643,7 @@ async fn interpret_request(
         "task (a faithful, actionable reformulation preserving all user requirements, ",
         "or a faithful conversational intent) and needs_workspace (boolean; true only ",
         "if files or repository state need to be inspected). ",
-        "A compliment or greeting needs no workspace inspection. ",
+        "A compliment, greeting, or clarification that a selected workspace exists needs no source inspection. Set needs_workspace=true for requests to examine project files, explain project implementation, or review code. ",
         "Do not infer facts from previous assistant responses as verified code."
     )})];
     context.push(json!({"role":"system","content":format!("The DUDE core has a currently selected, accessible local workspace at {}. The Coder has real read-only filesystem tools for it. Never tell the user the workspace is inaccessible or ask for a path when the user says current workspace. Such a request requires needs_workspace=true.",workspace.display())}));
