@@ -249,3 +249,11 @@
 - Resposta HTTP 404 agora explica que o identificador/modelo está indisponível para aquela chave e aponta para a configuração.
 - **Importante:** este erro é independente do incidente anterior de respostas Ollama vazias (inclusive no Mac). Nenhuma das duas falhas demonstra por si só o comportamento do outro provedor.
 - Implementação commitada; compatibilidade do fluxo de chamadas Gemini, build e testes de ponta a ponta continuam pendentes de validação.
+
+## 2026-10-21 — Groq Solo: reduzir contexto enviado à API
+
+- Teste em Solo/Groq (`openai/gpt-oss-120b`) retornou HTTP 413: 16.220 tokens solicitados contra limite de 8.000 TPM. As 14 execuções de ferramenta e 13 leituras já tinham sido feitas; o erro ocorreu ao enviar o histórico acumulado para o provider.
+- Em `src/cloud.rs`, `groq_compact_messages` limita conteúdos de ferramentas a 850 caracteres e demais mensagens de texto a 4.200 caracteres por mensagem **somente no payload de saída**. Mantém roles, IDs de chamadas e histórico/evidências locais sem truncamento.
+- Teste unitário verifica preservação de `tool_call_id`, limite de tamanho e imutabilidade das observações originais.
+- Isso reduz significativamente o envio, mas não garante estar abaixo do TPM em toda situação nem controla o consumo agregado na janela de um minuto. A próxima etapa é um orçamento real de tokens e seleção semântica de evidências.
+- Necessário executar `cargo fmt --check`, `cargo check` e `cargo test` no Mac antes de considerar validado.
