@@ -78,3 +78,11 @@ Known limitations:
 - Connection failures now report the Ollama host/model and whether reqwest classified the failure as a connection or timeout error.
 - The existing `App::complete` branch already removes the unanswered user message on errors and does not save a failed assistant reply; no fabricated fallback is introduced.
 - Still incomplete: explicit per-turn tool-evidence provenance in the UI, safe persistent cache invalidation, and adaptive recovery when Ollama becomes unreachable mid-investigation. No local cargo execution yet.
+
+## 2026-10-21 — Solo parity with Continue Qwen 3.5 4B
+
+- Corrected the apples-to-apples comparison: Continue was running `qwen3.5:4b`, while DUDE defaulted to `qwen3:4b`. DUDE Alpha now defaults to `qwen3.5:4b` (still overridable by `OLLAMA_MODEL` or `/model`).
+- `ensure_model` no longer silently switches to the first unrelated installed model when a requested model cannot be pulled; returns the download error instead.
+- Simple standalone greetings such as `oi`, `olá`, and `bom dia` already bypass Ollama in commit `46b2c9f`. Deeper source review still uses model and read-only tools.
+- For reproducible testing, preload the model on the Mac: `ollama pull qwen3.5:4b`, check `curl http://MAC:11434/api/tags`, and set `OLLAMA_MODEL=qwen3.5:4b` on Linux.
+- Pending: run `cargo check`, `cargo test`, verify Ollama response and performance against Continue on identical workspace/prompt. No claim of model fine-tuning/training.
