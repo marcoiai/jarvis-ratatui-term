@@ -43,6 +43,14 @@ impl EvidenceCache {
         }
     }
 
+    /// Count actual, successful source-file reads. Maps and searches only discover paths.
+    pub fn successful_file_reads(&self) -> usize {
+        self.events.lock().map(|events| events.iter().filter(|event|
+            event["tool"] == "read_file"
+                && (event["status"] == "ok" || event["status"] == "cache_hit")
+        ).count()).unwrap_or(0)
+    }
+
     /// Events describe actual tool executions (or cache hits), never model-generated text.
     pub fn execution_summary(&self) -> String {
         let Ok(events) = self.events.lock() else { return String::new() };
@@ -94,6 +102,7 @@ mod tests {
         assert!(summary.contains("read_file(hello.rs) [ok]"));
         assert!(summary.contains("read_file(hello.rs) [cache_hit]"));
         assert!(summary.contains("read_file(missing.rs) [error]"));
+        assert_eq!(evidence.successful_file_reads(), 2);
         assert_eq!(evidence.len(), 1);
         assert!(evidence.export().contains("Evidence #1: read_file"));
         assert!(!evidence.export().contains("missing.rs"));
