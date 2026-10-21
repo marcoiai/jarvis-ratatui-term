@@ -168,6 +168,10 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let entries = fs::read_dir(path).map_err(|e| e.to_string())?;
             for item in entries.take(MAX_ENTRIES) {
                 let item = item.map_err(|e| e.to_string())?;
+                let name = item.file_name();
+                let name = name.to_string_lossy();
+                if matches!(name.as_ref(), ".git" | ".dude" | ".dudeignore" | ".env" | ".ssh" | ".aws" | ".config" | "id_rsa" | "id_ed25519")
+                    || name.starts_with(".env.") { continue; }
                 if ignored(root, &item.path(), item.file_type().map_err(|e| e.to_string())?.is_dir(), &rules) { continue; }
                 lines.push(format!("{}{}",item.file_name().to_string_lossy(),if item.file_type().map_err(|e| e.to_string())?.is_dir() { "/" } else { "" }));
             }
