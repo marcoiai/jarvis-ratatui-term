@@ -406,7 +406,21 @@ impl App {
             }
             self.last_question = Some(input.clone());
             self.history.push(Message { role: "user".into(), content: input });
-            let messages = self.history.clone();
+            let mut messages = self.history.clone();
+            // Give workspace-wide questions a cheap, deterministic orientation before
+            // any model makes tool calls. This is a clue map, not an architecture claim.
+            let question = self.last_question.as_deref().unwrap_or_default().to_lowercase();
+            let wants_overview = ["workspace", "projeto", "project", "arquitetura", "architecture",
+                "codebase", "repositório", "repository"].iter().any(|term| question.contains(term));
+            if wants_overview {
+                if let Ok(map) = file_tools::workspace_map(&self.workspace) {
+                    let index = messages.iter().position(|m| m.role == "user").unwrap_or(messages.len());
+                    messages.insert(index, Message {
+                        role: "system".into(),
+                        content: format!("Read-only local workspace reconnaissance (not verified implementation):\\n{map}\\nUse file tools to verify the actual code before claiming how it works."),
+                    });
+                }
+            }
             let roles = self.roles.clone();
             let evidence = evidence::EvidenceCache::default();
             let url = self.ollama_url.clone();
