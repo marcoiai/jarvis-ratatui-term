@@ -101,6 +101,16 @@ mod tests {
         assert!(strip_completed("<think>sem fechamento").is_err());
     }
     #[test]
+    fn final_response_can_be_empty_after_reasoning_is_removed() {
+        assert_eq!(strip_completed("<think>reasoning only</think>").unwrap(), "");
+        assert_eq!(strip_completed("hidden reasoning</think>  ").unwrap().trim(), "");
+    }
+    #[test]
+    fn final_response_remains_visible_without_thinking_tags() {
+        let answer="Project review: src/main.ts has an entrypoint.";
+        assert_eq!(strip_completed(answer).unwrap(),answer);
+    }
+    #[test]
     fn oversized_undelimited_text_is_rejected() {
         let mut f=ThinkingFilter::default();
         assert!(f.push(&"x".repeat(MAX_BUFFER+1)).is_err());
