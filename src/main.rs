@@ -613,6 +613,15 @@ struct InterpretedRequest {
 
 /// Local LLM language interpretation is deliberately separate from code exploration.
 /// This stage has no file tools: its output is task guidance, not evidence.
+fn parse_interpreted_request(content: &str) -> Result<InterpretedRequest, String> {
+    let result: InterpretedRequest = serde_json::from_str(content)
+        .map_err(|e| format!("invalid task JSON: {e}"))?;
+    if result.task.trim().is_empty() {
+        return Err("empty interpreted task".into());
+    }
+    Ok(result)
+}
+
 async fn interpret_request(
     client: &reqwest::Client,
     host: &str,
@@ -640,10 +649,8 @@ async fn interpret_request(
         return Err(format!("Interpreter {model} HTTP {status}: {}",response.text().await.unwrap_or_default()));
     }
     let reply: OllamaReply=response.json().await.map_err(|e|format!("Interpreter response invalid: {e}"))?;
-    let result: InterpretedRequest=serde_json::from_str(&visible_ollama_answer(&reply.message.content))
-        .map_err(|e|format!("Interpreter {model} returned invalid task JSON: {e}"))?;
-    if result.task.trim().is_empty() {return Err("Interpreter returned an empty task".into());}
-    Ok(result)
+    parse_interpreted_request(&visible_ollama_answer(&reply.message.content))
+        .map_err(|e| format!("Interpreter {model}: {e}"))
 }
 
 async fn ask_ollama(
@@ -941,3 +948,28 @@ mod workspace_shell_tests {
     }
 }
 
+
+#[cfg(test)]
+mod interpreter_contract_tests {
+    use super::parse_interpreted_request;
+
+    #[test]
+    fn accepts_workspace_investigation_and_conversation() {
+        let analysis = parse_interpreted_request(
+            r#"{"task":"Inspect the current project and explain its purpose","needs_workspace":true}"#
+        ).unwrap();
+        assert!(analysis.needs_workspace);
+        assert!(analysis.task.contains("current project"));
+        let compliment = parse_interpreted_request(
+            r#"{"task":"Acknowledge the compliment in Portuguese","needs_workspace":false}"#
+        ).unwrap();
+        assert!(!compliment.needs_workspace);
+    }
+
+    #[test]
+    fn rejects_incomplete_or_empty_interpretations() {
+        assert!(parse_interpreted_request(r#"{"task":"Review"}"#).is_err());
+        assert!(parse_interpreted_request(r#"{"task":" ","needs_workspace":true}"#).is_err());
+        assert!(parse_interpreted_request("not json").is_err());
+    }
+}
