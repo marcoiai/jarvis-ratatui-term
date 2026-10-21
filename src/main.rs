@@ -59,7 +59,7 @@ struct ToolCall { function: ToolFunction }
 #[derive(Deserialize)]
 struct ToolFunction { name: String, arguments: Value }
 
-const DUDE_LOGO: [&str; 11] = [
+const ENOVA_LOGO: [&str; 11] = [
     "      ___           ___           ___                        ___",
     "     /  /\\         /__/\\         /  /\\          ___         /  /\\",
     "    /  /:/_        \\  \\:\\       /  /::\\        /__/\\       /  /::\\",
@@ -74,19 +74,24 @@ const DUDE_LOGO: [&str; 11] = [
 ];
 
 fn greeting() -> String {
-    format!("{}\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType a question or /help for commands.\n", DUDE_LOGO.join("\n"))
+    format!("{}\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType a question or /help for commands.\n", ENOVA_LOGO.join("\n"))
 }
 
 fn styled_output(output: &str) -> Text<'_> {
-    if !output.starts_with(DUDE_LOGO[0]) { return Text::raw(output); }
+    if !output.starts_with(ENOVA_LOGO[0]) { return Text::raw(output); }
     let mut lines: Vec<Line<'_>> = Vec::new();
     for (i, line) in output.lines().enumerate() {
-        if i < DUDE_LOGO.len() {
-            // The last glyph block is the red accent; the rest remains white.
-            let split = line.char_indices().find(|(idx,_)| *idx >= 55).map(|(idx,_)| idx).unwrap_or(line.len());
+        if i < ENOVA_LOGO.len() {
+            // ENOVA is five letterforms. Highlight the second (N) in red.
+            // Keep the original ASCII glyphs unchanged and style by column.
+            const N_START: usize = 16;
+            const N_END: usize = 32;
+            let start = N_START.min(line.len());
+            let end = N_END.min(line.len());
             lines.push(Line::from(vec![
-                Span::styled(&line[..split], Style::default().fg(Color::White)),
-                Span::styled(&line[split..], Style::default().fg(Color::Red)),
+                Span::styled(&line[..start], Style::default().fg(Color::White)),
+                Span::styled(&line[start..end], Style::default().fg(Color::Red)),
+                Span::styled(&line[end..], Style::default().fg(Color::White)),
             ]));
         } else {
             lines.push(Line::raw(line));
