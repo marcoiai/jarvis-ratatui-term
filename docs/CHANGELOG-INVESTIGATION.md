@@ -109,3 +109,10 @@ Known limitations:
 - The prompt distinguishes the successfully read snippets from the heuristic discovery map and older chat memory; additional reading remains autonomous via tools.
 - If none of the candidate files can be read, review returns an explicit error instead of pretending to have inspected code.
 - **Remaining limitations:** this first read set is heuristic (fixed common filenames), cannot establish full architecture or eliminate hallucinations; no complete structured tool provenance, automatic continuation, or test on the user's workspace yet. Requires `cargo fmt --check`, `cargo check`, `cargo test` and Qwen 3.5 4B runtime benchmark.
+
+## 2026-10-21 — Shell workspace consistency
+
+- `!comando` passa a executar com `Command::current_dir(self.workspace)` capturado no momento da execução; `/workspace` controla tanto ferramentas de arquivo quanto diretório de trabalho dos subprocessos.
+- Não altera o current working directory global do processo DUDE; preserva isolamento e previsibilidade das tasks assíncronas.
+- Incluído teste assíncrono com `!pwd` equivalente. Executar `cargo test` no checkout para validar.
+- O parser atual separa argumentos por whitespace e não executa via shell; `!cd`, pipes e redirecionamentos não ganham semântica de shell com esta mudança.
