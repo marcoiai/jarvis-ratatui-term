@@ -96,3 +96,9 @@ Known limitations:
 - Added unit tests for glob matching, nested searches, and exclusion of `.dude` memory files.
 - This is **not** full Continue equivalence: regex-based grep, Git staged/untracked diff selection, streaming action feed, persistent search index and automatic path recovery remain pending.
 - GitHub file-edit environment does not run the Linux/Rust toolchain. Run `cargo fmt --check; cargo check; cargo test` before accepting these commits. Same workspace/model benchmark still required.
+
+## 2026-10-21 — SPEC: especialização de modelos e regressão Solo
+
+- Adicionada à SPEC a meta de criar pipeline futuro de dados/avaliação e fine-tuning local, estudando Hugging Face LLM Trainer (SFT, preferências, LoRA/QLoRA) com proteção de código e dados proprietários.
+- Fixados critérios explícitos para saudação `ei` não acionar investigação e para não confundir texto `project_map(path="")` com chamada real de ferramenta.
+- Reafirmada comparação justa com Continue usando a mesma versão do Qwen 3.5 4B e política de ferramentas; documentação não declara funcionalidade entregue.
