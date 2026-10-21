@@ -27,3 +27,9 @@
 - Falhas do segundo estágio preservam a resposta completa do primeiro. Um segundo modelo igual ao primeiro não dispara inferência duplicada.
 - Sem novos gates de citações, nenhuma alteração no Solo desligado, Symphony ou seleção de arquivos.
 - **Pendente**: `cargo fmt --check`, `cargo check`, `cargo test` e avaliação Mac/Linux contra o baseline de qualidade, incluindo impacto de latência.
+
+## 2026-10-21 — Ocultar blocos de raciocínio embutidos em respostas Ollama
+
+- Log de teste Dual-Local mostrou texto intermediário e marcador `</think>` antes do parecer. O processamento de `ask_ollama` agora remove blocos `<think>...</think>` da resposta exibida, inclusive saída com marcador de fechamento isolado.
+- Preserva conteúdo final após o fechamento e respostas normais, sem alterar a investigação ou adicionar critérios obrigatórios de citação. Testes unitários do filtro incluídos.
+- Sem validação de compilação/execução nesta ferramenta; testar `cargo check`, `cargo test` e execução real em Mac/Linux.
