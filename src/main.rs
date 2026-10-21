@@ -675,6 +675,7 @@ async fn ask_ollama(
             "Do not stop after an inventory when the user requests a deep review."
         )}));
     }
+    let mut demanded_tool_use = false;
     for _ in 0..(if allow_tools { 18 } else { 1 }) {
         let response = client
             .post(format!("{host}/api/chat"))
@@ -695,6 +696,22 @@ async fn ask_ollama(
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
         if reply.message.tool_calls.is_empty() {
+            // A workspace investigation without a single executed tool is not a
+            // verified investigation, no matter how confident the model sounds.
+            if allow_tools && evidence.len() == 0 {
+                if !demanded_tool_use {
+                    demanded_tool_use = true;
+                    conversation.push(json!({"role":"assistant","content":visible_ollama_answer(&reply.message.content)}));
+                    conversation.push(json!({"role":"system","content":concat!(
+                        "No workspace tool has executed in this turn. Your previous answer ",
+                        "is not evidence. Do not finalize yet: call project_map or list_files ",
+                        "with an actual structured tool_call, then inspect relevant source ",
+                        "files before answering. Do not write a tool invocation as plain text."
+                    )}));
+                    continue;
+                }
+                return Err("Investigation stopped: the Coder produced no structured tool calls, so no workspace files were inspected. No unverified report was saved.".into());
+            }
             let answer = visible_ollama_answer(&reply.message.content);
             if answer.trim().is_empty() {
                 return Err("Ollama returned no final answer; nothing was saved as a verified review".into());
