@@ -201,11 +201,20 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let content = read_limited(&path)?;
             let start = args.get("start_line").and_then(Value::as_u64).unwrap_or(1).clamp(1,100_000) as usize;
             let end = args.get("end_line").and_then(Value::as_u64).unwrap_or((start+199) as u64).clamp(start as u64,100_000) as usize;
-            let value = content.lines().enumerate()
+            let total_lines = content.lines().count();
+            let last_line = end.min(total_lines);
+            let excerpt = content.lines().enumerate()
                 .filter(|(i,_)| *i+1 >= start && *i+1 <= end)
                 .map(|(i,l)| format!("{}: {}",i+1,l))
                 .collect::<Vec<_>>().join("\n");
-            Ok(value.chars().take(MAX_BYTES).collect())
+            let visible: String = excerpt.chars().take(MAX_BYTES).collect();
+            let truncated = visible.chars().count() < excerpt.chars().count();
+            Ok(format!(
+                "SOURCE EXCERPT: {} | lines {}-{} of {} | complete_file={} | output_truncated={}\\n{}",
+                relative, start, last_line, total_lines,
+                start == 1 && end >= total_lines && !truncated,
+                truncated, visible
+            ))
         }
         "project_map" => {
             let mut files = Vec::new();
