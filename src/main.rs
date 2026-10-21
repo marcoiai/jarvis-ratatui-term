@@ -265,10 +265,22 @@ impl App {
         }
         if input == "/recover" {
             match self.memory.as_ref().map(|m|m.pending()).unwrap_or(Ok(None)) {
-                Ok(Some(question)) => {
-                    self.input=question;
-                    self.output.push_str("Pedido recuperado para edição. Pressione Enter para reenviar.\n");
-                }
+                Ok(Some(saved)) => {
+                    self.input = saved.question;
+                    if let Some(roles) = saved.roles {
+                        self.roles = roles;
+                    }
+                    if let Some(model) = saved.ollama_model { self.model = model; }
+                    if let Some(model) = saved.groq_model { self.groq_model = model; }
+                    if let Some(model) = saved.gemini_model { self.gemini_model = model; }
+                    self.output.push_str(&format!(
+                        "Pedido recuperado para edição. Modo: {} | Solo: {} | Ollama: {}. Pressione Enter para reenviar.\n",
+                        self.roles.mode, self.roles.selected_provider(), self.model
+                    ));
+                    if saved.cloud_was_allowed && !self.cloud_allowed {
+                        self.output.push_str("Esta execução usava cloud. Para reenviar, autorize novamente com /cloud allow.\n");
+                    }
+                },
                 Ok(None)=>self.output.push_str("Nenhum pedido pendente para recuperar.\n"),
                 Err(error)=>self.output.push_str(&format!("Erro ao recuperar: {error}\n")),
             }
@@ -597,7 +609,14 @@ impl App {
             }
             if let Some(store)=&self.memory {
                 if let Some(question)=self.last_question.as_deref() {
-                    if let Err(error)=store.save_pending(question) {
+                    if let Err(error)=store.save_pending(&memory::PendingRequest {
+                        question: question.to_owned(),
+                        roles: Some(roles.clone()),
+                        ollama_model: Some(ollama_model.clone()),
+                        groq_model: Some(groq_model.clone()),
+                        gemini_model: Some(gemini_model.clone()),
+                        cloud_was_allowed: self.cloud_allowed,
+                    }) {
                         self.output.push_str(&format!("Checkpoint error (request not dispatched): {error}\n"));
                         self.history.pop();
                         self.last_question=None;
