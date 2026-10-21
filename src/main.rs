@@ -1008,3 +1008,109 @@ mod interpreter_contract_tests {
         assert!(parse_interpreted_request("not json").is_err());
     }
 }
+
+#[cfg(test)]
+mod ollama_investigation_integration_tests {
+    use super::*;
+    use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+
+    // Minimal local Ollama HTTP fixture. It reads the full incoming request so
+    // consecutive calls exercise the actual ask_ollama HTTP/tool loop.
+    async fn fake_ollama(replies: Vec<Value>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for reply in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut received = Vec::new();
+                let mut buf = [0_u8; 4096];
+                let header_end;
+                loop {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0, "client disconnected before headers");
+                    received.extend_from_slice(&buf[..n]);
+                    if let Some(pos) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = pos + 4;
+                        break;
+                    }
+                }
+                let headers = String::from_utf8_lossy(&received[..header_end]).to_lowercase();
+                let length: usize = headers.lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap_or("0").trim().parse().unwrap();
+                while received.len() < header_end + length {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0, "client disconnected before body");
+                    received.extend_from_slice(&buf[..n]);
+                }
+                let request: Value = serde_json::from_slice(&received[header_end..header_end+length]).unwrap();
+                assert!(request["model"].is_string());
+                let payload = json!({"message":reply}).to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(), payload
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn fixture_workspace() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dude-ollama-fixture-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn actual_source() {}\n").unwrap();
+        dir
+    }
+
+    fn tool(name: &str, args: Value) -> Value {
+        json!({"content":"","tool_calls":[{"function":{"name":name,"arguments":args}}]})
+    }
+
+    fn request() -> Vec<Message> {
+        vec![Message { role:"user".into(), content:"Analise o workspace atual".into() }]
+    }
+
+    #[tokio::test]
+    async fn investigation_reads_real_source_after_project_map() {
+        let workspace = fixture_workspace();
+        let host = fake_ollama(vec![
+            tool("project_map",json!({"path":"."})),
+            tool("read_file",json!({"path":"src/main.rs"})),
+            json!({"content":"O arquivo contém fn actual_source().","tool_calls":[]}),
+        ]).await;
+        let evidence = evidence::EvidenceCache::default();
+        let answer = ask_ollama(&reqwest::Client::new(),&host,"fixture",request(),
+            workspace,true,evidence.clone()).await.unwrap();
+        assert!(answer.contains("actual_source"));
+        assert!(answer.contains("read_file(src/main.rs) [ok]"));
+        assert_eq!(evidence.successful_file_reads(),1);
+    }
+
+    #[tokio::test]
+    async fn map_only_answer_must_continue_to_read_file() {
+        let workspace = fixture_workspace();
+        let host = fake_ollama(vec![
+            tool("project_map",json!({"path":"."})),
+            json!({"content":"Invented source description","tool_calls":[]}),
+            tool("read_file",json!({"path":"src/main.rs"})),
+            json!({"content":"Actual source was inspected.","tool_calls":[]}),
+        ]).await;
+        let answer = ask_ollama(&reqwest::Client::new(),&host,"fixture",request(),
+            workspace,true,evidence::EvidenceCache::default()).await.unwrap();
+        assert!(answer.contains("Actual source was inspected"));
+        assert!(!answer.contains("Invented source description"));
+    }
+
+    #[tokio::test]
+    async fn zero_tool_hallucination_is_rejected() {
+        let workspace = fixture_workspace();
+        let host = fake_ollama(vec![
+            json!({"content":"Everything verified","tool_calls":[]}),
+            json!({"content":"Everything verified again","tool_calls":[]}),
+        ]).await;
+        let error = ask_ollama(&reqwest::Client::new(),&host,"fixture",request(),
+            workspace,true,evidence::EvidenceCache::default()).await.unwrap_err();
+        assert!(error.contains("no source file was read"));
+    }
+}
