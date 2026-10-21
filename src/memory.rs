@@ -225,6 +225,33 @@ mod tests {
         assert!(restored.pending().unwrap().is_none());
     }
     #[test]
+    fn pending_snapshot_restores_roles_and_old_format() {
+        let fixture = Fixture::new();
+        let memory = Memory::open(&fixture.0).unwrap();
+        let mut roles = crate::roles::Roles::default();
+        roles.set("investigator", "groq").unwrap();
+        let snapshot = PendingRequest {
+            question: "review current project".into(),
+            roles: Some(roles.clone()),
+            ollama_model: Some("qwen3:4b".into()),
+            groq_model: Some("openai/gpt-oss-120b".into()),
+            gemini_model: None,
+            cloud_was_allowed: true,
+        };
+        memory.save_pending(&snapshot).unwrap();
+        let recovered = memory.pending().unwrap().unwrap();
+        assert_eq!(recovered.roles.unwrap(), roles);
+        assert!(recovered.cloud_was_allowed);
+        memory.clear_pending().unwrap();
+        std::fs::write(memory.location().join("pending_request.json"),
+            r#"{"question":"legacy question","created_utc":"old"}"#).unwrap();
+        let legacy = memory.pending().unwrap().unwrap();
+        assert_eq!(legacy.question, "legacy question");
+        assert!(legacy.roles.is_none());
+        assert!(!legacy.cloud_was_allowed);
+    }
+
+    #[test]
     fn corrupted_history_line_does_not_lose_valid_entries() {
         let fixture=Fixture::new();
         let memory=Memory::open(&fixture.0).unwrap();
