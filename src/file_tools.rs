@@ -163,6 +163,16 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
 mod project_map_tests {
     use super::*;
     #[test]
+    fn finds_files_by_name_in_nested_directories() {
+        let root = std::env::temp_dir().join(format!("dude-find-{}-alpha", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("apps/recinto/config")).unwrap();
+        fs::write(root.join("apps/recinto/config/security.yml"), "security: true").unwrap();
+        let found = execute(&root, "find_files", &json!({"query":"security.yml"})).unwrap();
+        assert!(found.contains("apps/recinto/config/security.yml"));
+        let _ = fs::remove_dir_all(&root);
+    }
+    #[test]
     fn maps_rust_declarations_without_reading_hidden_state() {
         let root = std::env::temp_dir().join(format!("dude-map-{}-{}", std::process::id(), "alpha"));
         let _ = fs::remove_dir_all(&root);
