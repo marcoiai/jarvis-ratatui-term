@@ -809,6 +809,9 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     }?;
     if require_project_evidence {
         investigation::require_evidence_for_overview(evidence_for_gate.source_read_count())?;
+        if answer.trim().is_empty() {
+            return Err("The model produced no review text; investigation evidence was gathered but no conclusion was generated.".into());
+        }
         if !evidence_for_gate.has_supported_citation(&answer) {
             let warning = "\n\n⚠ DUDE: este parecer não apresenta referências arquivo:linha confirmadas nas leituras. É uma síntese preliminar, não uma verificação das afirmações.\n";
             if let Some(tx) = updates_for_audit {
@@ -955,6 +958,11 @@ async fn ask_ollama(
             if !tail.is_empty() {
                 answer.push_str(&tail);
                 if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(tail)); }
+            }
+            if answer.trim().is_empty() {
+                return Err(format!(
+                    "Ollama returned an empty visible answer after investigation (model: {model}).                      The response was not accepted as a project review.                      Try a different model or retry with a narrower request."
+                ));
             }
             if crate::claim_audit::unsupported_coverage_percentages(&answer) {
                 let warning = "\n\n⚠ Auditoria DUDE: percentual de cobertura mencionado pelo modelo não foi medido pelo runtime. Não o trate como evidência de verificação.\n";
