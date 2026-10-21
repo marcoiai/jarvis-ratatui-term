@@ -25,7 +25,9 @@ fn project_ignore(root: &Path) -> Result<Gitignore, String> {
         if fs::metadata(&file).map_err(|e| e.to_string())?.len() > 65_536 {
             return Err(".dudeignore exceeds 64 KiB".into());
         }
-        builder.add(&file).map_err(|e| format!("Invalid .dudeignore: {e}"))?;
+        if let Some(error) = builder.add(&file) {
+            return Err(format!("Invalid .dudeignore: {error}"));
+        }
     }
     builder.build().map_err(|e| format!("Invalid .dudeignore: {e}"))
 }
