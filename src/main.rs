@@ -236,6 +236,33 @@ impl App {
             // Do not hijack arbitrary input: other commands and questions remain available.
             self.pending_knowledge = None;
         }
+        if input == "/ollama" {
+            self.output.push_str(&format!("Ollama endpoint: {} | model: {} | ready: {}\nUse /ollama retry or /ollama host http://IP:11434\n",
+                self.ollama_url, self.model, self.model_ready));
+            return;
+        }
+        if input == "/ollama retry" || input.starts_with("/ollama host ") {
+            if let Some(host) = input.strip_prefix("/ollama host ") {
+                let host = host.trim().trim_end_matches('/');
+                if !(host.starts_with("http://") || host.starts_with("https://"))
+                    || host.contains(char::is_whitespace)
+                    || host.contains('?') || host.contains('#')
+                    || host.len() > 256 {
+                    self.output.push_str("Invalid Ollama URL. Example: /ollama host http://192.168.1.10:11434\n");
+                    return;
+                }
+                self.ollama_url = host.to_string();
+            }
+            self.model_ready = false;
+            self.output.push_str(&format!("Checking Ollama at {} for {}...\n", self.ollama_url, self.model));
+            let host=self.ollama_url.clone();
+            let model=self.model.clone();
+            tokio::spawn(async move {
+                let result=ensure_model(&client,&host,&model).await;
+                let _=tx.send(ResultMessage::ModelReady(result));
+            });
+            return;
+        }
         if input == "/recover" {
             match self.memory.as_ref().map(|m|m.pending()).unwrap_or(Ok(None)) {
                 Ok(Some(question)) => {
@@ -690,6 +717,7 @@ impl App {
                 self.output.push_str(&format!("{}: {model}\n", if self.communication.language == "pt-BR" {"Modelo pronto"} else {"Model ready"}));
             }
             ResultMessage::ModelReady(Err(error)) => {
+                self.model_ready = false;
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
@@ -957,7 +985,7 @@ async fn ask_ollama(
 
 async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> Result<String, String> {
     let response = client.get(format!("{host}/api/tags")).send().await
-        .map_err(|e| format!("Ollama unreachable: {e}. Start Ollama first."))?;
+        .map_err(|e| format!("Cannot contact Ollama at {host}: {e}. Check the endpoint and network, then use /ollama retry or /ollama host URL."))?;
     if !response.status().is_success() {
         return Err(format!("Ollama model list returned HTTP {}", response.status()));
     }
