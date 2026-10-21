@@ -175,7 +175,7 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             return Err("Invalid filename query".into());
         }
         let mut files = Vec::new();
-        scan(root, &mut files)?;
+        scan_deep(root, &mut files)?;
         let query = query.to_lowercase();
         let matches: Vec<String> = files.into_iter().filter_map(|p| {
             let path = p.strip_prefix(root).ok()?.to_string_lossy().to_string();
@@ -278,6 +278,28 @@ mod project_map_tests {
         let found = execute(&root, "find_files", &json!({"query":"security.yml"})).unwrap();
         assert!(found.contains("apps/recinto/config/security.yml"));
         let _ = fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn glob_and_grep_search_nested_sources() {
+        let root = std::env::temp_dir().join(format!("dude-search-{}-alpha",std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("apps/recinto/config")).unwrap();
+        fs::write(root.join("apps/recinto/config/security.yml"), "ROLE_ADMIN: true").unwrap();
+        fs::create_dir_all(root.join(".dude")).unwrap();
+        fs::write(root.join(".dude/secret.yml"), "ROLE_ADMIN: secret").unwrap();
+        let found = execute(&root,"glob_search",&json!({"pattern":"**/security.yml"})).unwrap();
+        assert!(found.contains("apps/recinto/config/security.yml"));
+        let text = execute(&root,"grep_search",&json!({"pattern":"role_admin"})).unwrap();
+        assert!(text.contains("apps/recinto/config/security.yml:1"));
+        assert!(!text.contains("secret"));
+        let _=fs::remove_dir_all(root);
+    }
+    #[test]
+    fn glob_matches_nested_and_root_files() {
+        assert!(glob_match("**/security.yml","security.yml"));
+        assert!(glob_match("**/security.yml","apps/x/security.yml"));
+        assert!(glob_match("**/*.rs","src/main.rs"));
+        assert!(!glob_match("**/*.rs","src/main.php"));
     }
     #[test]
     fn maps_rust_declarations_without_reading_hidden_state() {
