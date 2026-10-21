@@ -241,3 +241,11 @@
 - Validação: a branch possui workflow `Rust checks` para Linux/macOS em pull requests. Não foi observada execução do workflow para o commit mais recente no momento da consulta; `cargo check`, `cargo test` e ensaio de integração continuam não verificados.
 
 - Acrescentados testes unitários ao filtro cobrindo: raciocínio sem texto final visível, delimitador de fechamento sem abertura e parecer textual normal. A execução dos testes segue pendente de CI/ambiente Rust.
+
+## 2026-10-21 — Gemini 404 e separação dos incidentes por provedor
+
+- Teste Solo com Gemini mostrou HTTP 404 para `gemini-2.5-flash`: acesso a modelos 2.5 é restrito a usuários/projetos legados pela Google. O modelo sugerido pela própria API e pela documentação atual é `gemini-3.8-flash`.
+- Modelo Gemini padrão do DUDE atualizado para `gemini-3.8-flash`; variável `GEMINI_MODEL` continua podendo sobrescrever.
+- Resposta HTTP 404 agora explica que o identificador/modelo está indisponível para aquela chave e aponta para a configuração.
+- **Importante:** este erro é independente do incidente anterior de respostas Ollama vazias (inclusive no Mac). Nenhuma das duas falhas demonstra por si só o comportamento do outro provedor.
+- Implementação commitada; compatibilidade do fluxo de chamadas Gemini, build e testes de ponta a ponta continuam pendentes de validação.
