@@ -103,20 +103,21 @@ impl App {
     fn logo(&self) -> Text<'static> {
         // Terminal adaptation of the provided ENOVA Business Solutions reference:
         // the N is red, the other letters are neutral, and the tagline is gray.
-        const E: [&str; 5] = ["████ ", "█    ", "███  ", "█    ", "████ "];
-        const N: [&str; 5] = ["█  █ ", "██ █ ", "█ ██ ", "█  █ ", "█  █ "];
+        const E: [&str; 5] = ["█████ ", "█     ", "████  ", "█     ", "█████ "];
+        const N: [&str; 5] = ["█   █ ", "██  █ ", "█ █ █ ", "█  ██ ", "█   █ "];
         const OVA: [&str; 5] = [
-            " ███ █  █  ███ ",
-            "█   ██  █ █   █",
-            "█   ██  █ █████",
-            "█   █ ██  █   █",
-            " ███   █   █   █",
+            " ███  █   █   ███ ",
+            "█   █ █   █  █   █",
+            "█   █ █   █  █████",
+            "█   █  █ █   █   █",
+            " ███    █    █   █",
         ];
         let mut lines: Vec<Line<'static>> = (0..5).map(|i| Line::from(vec![
             Span::styled(E[i], Style::default().fg(Color::White)),
             Span::styled(N[i], Style::default().fg(Color::Red)),
             Span::styled(OVA[i], Style::default().fg(Color::White)),
         ])).collect();
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "business solutions",
             Style::default().fg(Color::Gray),
@@ -1004,7 +1005,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(6), Constraint::Length(3), Constraint::Length(4), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(7), Constraint::Length(3), Constraint::Length(4), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
             .split(frame.area());
 
         // ENOVA wordmark stays fixed above the input; only N is red.
