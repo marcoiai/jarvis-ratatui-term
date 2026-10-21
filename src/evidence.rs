@@ -94,6 +94,9 @@ mod tests {
         assert!(summary.contains("read_file(hello.rs) [ok]"));
         assert!(summary.contains("read_file(hello.rs) [cache_hit]"));
         assert!(summary.contains("read_file(missing.rs) [error]"));
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence.export().contains("Evidence #1: read_file"));
+        assert!(!evidence.export().contains("missing.rs"));
         let _ = fs::remove_dir_all(&root);
     }
 }
