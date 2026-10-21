@@ -86,3 +86,13 @@ Known limitations:
 - Simple standalone greetings such as `oi`, `olá`, and `bom dia` already bypass Ollama in commit `46b2c9f`. Deeper source review still uses model and read-only tools.
 - For reproducible testing, preload the model on the Mac: `ollama pull qwen3.5:4b`, check `curl http://MAC:11434/api/tags`, and set `OLLAMA_MODEL=qwen3.5:4b` on Linux.
 - Pending: run `cargo check`, `cargo test`, verify Ollama response and performance against Continue on identical workspace/prompt. No claim of model fine-tuning/training.
+
+## 2026-10-21 — Solo Agent tool parity, read-only explorer
+
+- Added **glob_search** with bounded recursive traversal (up to 4000 safe workspace files) and **grep_search** case-insensitive text matching, while preserving the original `search_text` for compatibility.
+- Added **view_subdirectory** for shallow tree navigation and **view_diff** for Git working-tree patch inspection (no shell execution; read-only Git subprocess).
+- Extended `find_files` to use the larger workspace traversal, removing the previous 150-file search cap. Existing sensitive directories, environment files, and symlinks are skipped.
+- Tool JSON definitions are provided automatically to Ollama through the existing agent handshake. No write or destructive tool permissions introduced.
+- Added unit tests for glob matching, nested searches, and exclusion of `.dude` memory files.
+- This is **not** full Continue equivalence: regex-based grep, Git staged/untracked diff selection, streaming action feed, persistent search index and automatic path recovery remain pending.
+- GitHub file-edit environment does not run the Linux/Rust toolchain. Run `cargo fmt --check; cargo check; cargo test` before accepting these commits. Same workspace/model benchmark still required.
