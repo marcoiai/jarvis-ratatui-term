@@ -166,3 +166,25 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
+
+
+#[cfg(test)]
+mod workspace_map_tests {
+    use super::*;
+    #[test]
+    fn discovers_entry_points_and_skips_secrets() {
+        let root = std::env::temp_dir().join(format!("dude-map-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join(".dude")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"example\"\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join(".dude/README.md"), "secret").unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let map = workspace_map(&canonical).unwrap();
+        assert!(map.contains("Cargo.toml"));
+        assert!(map.contains("src/main.rs"));
+        assert!(!map.contains(".dude"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+}
