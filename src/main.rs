@@ -337,13 +337,13 @@ impl App {
             return;
         }
         if input == "/dual" {
-            self.output.push_str(&format!("Dual-local: {} | Investigator: {} | Reasoning: {}\\n",
+            self.output.push_str(&format!("Dual-local: {} | Investigator: {} | Reasoning: {}\n",
                 if self.dual_enabled {"ON"} else {"OFF"}, self.model, self.reasoning_model));
             return;
         }
         if input == "/dual on" || input == "/dual off" {
             self.dual_enabled = input == "/dual on";
-            self.output.push_str(&format!("Dual-local {}. Original Solo remains available.\\n",
+            self.output.push_str(&format!("Dual-local {}. Original Solo remains available.\n",
                 if self.dual_enabled {"enabled"} else {"disabled"}));
             return;
         }
@@ -351,7 +351,7 @@ impl App {
             let model = model.trim();
             if !model.is_empty() {
                 self.reasoning_model = model.to_string();
-                self.output.push_str(&format!("Reasoning model: {model}\\n"));
+                self.output.push_str(&format!("Reasoning model: {model}\n"));
             }
             return;
         }
@@ -503,7 +503,7 @@ async fn run_local_dual(
             "anything genuinely useful, reply exactly NO_ADDITIONS."
         ).into() },
         Message { role: "user".into(), content: format!(
-            "Original request:\\n{}\\n\\nPrimary investigation:\\n{}",
+            "Original request:\n{}\n\nPrimary investigation:\n{}",
             question.chars().take(1200).collect::<String>(),
             primary.chars().take(10000).collect::<String>()
         ) },
@@ -514,9 +514,9 @@ async fn run_local_dual(
     match ask_ollama(client, host, reasoning_model, planning,
         std::path::PathBuf::new(), false, evidence::EvidenceCache::default()).await {
         Ok(extra) if !extra.trim().is_empty() && extra.trim() != "NO_ADDITIONS" =>
-            Ok(format!("{primary}\\n\\n---\\nComplemento do segundo modelo ({reasoning_model}):\\n{extra}")),
+            Ok(format!("{primary}\n\n---\nComplemento do segundo modelo ({reasoning_model}):\n{extra}")),
         Ok(_) => Ok(primary),
-        Err(error) => Ok(format!("{primary}\\n\\n[Complemento local indisponível: {error}]")),
+        Err(error) => Ok(format!("{primary}\n\n[Complemento local indisponível: {error}]")),
     }
 }
 
