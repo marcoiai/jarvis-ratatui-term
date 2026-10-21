@@ -139,3 +139,13 @@ Known limitations:
 - Todos esses acessos passam pelo `EvidenceCache`, aparecendo no resumo real das ferramentas.
 - Teste unitário de reconhecimento da intenção adicionado. **Compilação, testes e execução com Qwen ainda não validados no ambiente Linux do usuário.**
 - Limitação: essas buscas focadas são uma medida para a regressão observada e não garantem exatidão total. Continua pendente aprimorar seleção contextual de arquivos, recuperação após falha e verificação da qualidade do relatório.
+
+## 2026-10-21 — Interpreter LLM antes do Investigator
+
+- A interpretação de **toda entrada em linguagem natural** passou a ser feita por uma chamada local separada ao Ollama antes da chamada técnica, inclusive em Solo, Dual-Local e Symphony. Comandos explícitos `/` e `!` permanecem responsabilidade do core Rust.
+- Modelo Interpreter padrão: `qwen3:4b-instruct-2507-q4_K_M`, configurável com `DUDE_INTERPRETER_MODEL`; modelo Coder padrão permanece `qwen3.5:4b`.
+- O Interpreter usa histórico conversacional recente e retorna JSON `{task, needs_workspace}`. O pedido original continua no contexto; a interpretação passa como instrução, **não como evidência de arquivos**. O booleano controla se as ferramentas de investigação estão disponíveis ao estágio técnico.
+- Removidos o roteamento de revisão via palavras-chave, a leitura arbitrária de quatro arquivos e as buscas especiais por nomes de arquivos do próprio DUDE. Retirado também o bypass de saudações para que todas as mensagens naturais passem pelo Interpreter.
+- `/mode` sem argumento agora informa o modo atual; comandos `/` desconhecidos deixam de ser enviados ao modelo.
+- Testes do contrato JSON Interpreter adicionados. Não há fallback silencioso para roteamento por palavras-chave se o Interpreter falhar.
+- **Pendente:** executar `cargo fmt --check`, `cargo check`, `cargo test` e benchmark com os dois modelos disponíveis no Ollama do Mac; a qualidade e latência do novo ciclo não foram medidas ainda. O Interpreter pode classificar incorretamente a necessidade de ferramentas; isso requer teste real e telemetria.
