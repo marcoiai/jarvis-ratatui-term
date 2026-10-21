@@ -1,5 +1,6 @@
 use std::{fs, path::{Path, PathBuf}};
 use serde_json::{json, Value};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 const MAX_BYTES: usize = 32_768;
 const MAX_ENTRIES: usize = 150;
@@ -13,12 +14,42 @@ pub fn definitions() -> Vec<Value> {
     ]
 }
 
+/// Project-local gitignore-compatible exclusions; security exclusions still take precedence.
+fn project_ignore(root: &Path) -> Result<Gitignore, String> {
+    let mut builder = GitignoreBuilder::new(root);
+    let file = root.join(".dudeignore");
+    if file.is_file() {
+        if fs::symlink_metadata(&file).map_err(|e| e.to_string())?.file_type().is_symlink() {
+            return Err("Refusing symlink .dudeignore".into());
+        }
+        if fs::metadata(&file).map_err(|e| e.to_string())?.len() > 65_536 {
+            return Err(".dudeignore exceeds 64 KiB".into());
+        }
+        builder.add(&file).map_err(|e| format!("Invalid .dudeignore: {e}"))?;
+    }
+    builder.build().map_err(|e| format!("Invalid .dudeignore: {e}"))
+}
+
+fn ignored(root: &Path, target: &Path, is_dir: bool, rules: &Gitignore) -> bool {
+    if target == root { return false; }
+    let mut candidate = target;
+    loop {
+        let dir = if candidate == target { is_dir } else { true };
+        if rules.matched(candidate, dir).is_ignore() { return true; }
+        if candidate == root { break; }
+        let Some(parent) = candidate.parent() else { break };
+        if !parent.starts_with(root) { break; }
+        candidate = parent;
+    }
+    false
+}
+
 fn resolve(root: &Path, relative: &str) -> Result<PathBuf,String> {
     let p = Path::new(relative);
     if p.is_absolute() { return Err("Absolute paths are disabled".into()); }
     if p.components().any(|c| {
         let v = c.as_os_str().to_string_lossy();
-        v == ".env" || v.starts_with(".env.") || v == ".dude" || v == ".git" || v == ".ssh" ||
+        v == ".env" || v.starts_with(".env.") || v == ".dudeignore" || v == ".dude" || v == ".git" || v == ".ssh" ||
         v == ".aws" || v == ".config" || v == "id_rsa" || v == "id_ed25519"
     }) {
         return Err("Sensitive paths are blocked from AI tools".into());
@@ -28,8 +59,9 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf,String> {
     Ok(target)
 }
 
-fn scan(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+fn scan(root: &Path, path: &Path, files: &mut Vec<PathBuf>, rules: &Gitignore) -> Result<(), String> {
     if files.len() >= MAX_ENTRIES { return Ok(()); }
+    if ignored(root, path, path.is_dir(), rules) { return Ok(()); }
     if path.is_file() { files.push(path.to_owned()); return Ok(()); }
     if !path.is_dir() { return Err("Not a file or directory".into()); }
     let mut entries: Vec<_> = fs::read_dir(path).map_err(|e| e.to_string())?
@@ -39,13 +71,14 @@ fn scan(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
         if files.len() >= MAX_ENTRIES { break; }
         if entry.file_name().is_some_and(|n| {
             let v = n.to_string_lossy();
-            v == ".dude" || v == ".git" || v == "target" || v == "node_modules" || v == ".env" ||
+            v == ".dude" || v == ".dudeignore" || v == ".git" || v == "target" || v == "node_modules" || v == ".env" ||
             v.starts_with(".env.") || v == ".ssh" || v == ".aws" || v == ".config" ||
             v == "id_rsa" || v == "id_ed25519"
         }) { continue; }
         // Never recurse into symlinks or leave the workspace.
         if fs::symlink_metadata(&entry).map_err(|e| e.to_string())?.file_type().is_symlink() { continue; }
-        if entry.is_dir() { scan(&entry, files)?; }
+        if ignored(root, &entry, entry.is_dir(), rules) { continue; }
+        if entry.is_dir() { scan(root, &entry, files, rules)?; }
         else if entry.is_file() { files.push(entry); }
     }
     Ok(())
@@ -61,6 +94,7 @@ fn read_limited(path: &Path) -> Result<String,String> {
 
 /// Deterministic lightweight reconnaissance; no repository files are sent here.
 pub fn workspace_map(root: &Path) -> Result<String, String> {
+    let rules = project_ignore(root)?;
     const DEPTH: usize = 3;
     const MAX_ITEMS: usize = 400;
     const MARKERS: &[&str] = &[
@@ -90,10 +124,11 @@ pub fn workspace_map(root: &Path) -> Result<String, String> {
             let ty = match entry.file_type() { Ok(ty) => ty, Err(_) => continue };
             if ty.is_symlink() { continue; }
             let name = entry.file_name().to_string_lossy().to_string();
-            if matches!(name.as_str(), ".git" | ".dude" | "target" | "node_modules" | ".ssh" | ".aws" | ".config" | "vendor" | "dist" | "build")
+            if matches!(name.as_str(), ".git" | ".dude" | ".dudeignore" | "target" | "node_modules" | ".ssh" | ".aws" | ".config" | "vendor" | "dist" | "build")
                 || name == ".env" || name.starts_with(".env.") || name.starts_with(".git")
                 || name == "id_rsa" || name == "id_ed25519" { continue; }
             inspected += 1;
+            if ignored(root, &entry.path(), ty.is_dir(), &rules) { continue; }
             let rel = entry.path().strip_prefix(root).unwrap_or(root).display().to_string();
             if ty.is_dir() {
                 if depth < DEPTH {
@@ -122,6 +157,8 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
     if name == "workspace_map" { return workspace_map(root); }
     let relative = args.get("path").and_then(Value::as_str).unwrap_or(".");
     let path = resolve(root, relative)?;
+    let rules = project_ignore(root)?;
+    if ignored(root, &path, path.is_dir(), &rules) { return Err("Path excluded by .dudeignore".into()); }
     match name {
         "list_files" => {
             if !path.is_dir() { return Err("Not a directory".into()); }
@@ -129,6 +166,7 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let entries = fs::read_dir(path).map_err(|e| e.to_string())?;
             for item in entries.take(MAX_ENTRIES) {
                 let item = item.map_err(|e| e.to_string())?;
+                if ignored(root, &item.path(), item.file_type().map_err(|e| e.to_string())?.is_dir(), &rules) { continue; }
                 lines.push(format!("{}{}",item.file_name().to_string_lossy(),if item.file_type().map_err(|e| e.to_string())?.is_dir() { "/" } else { "" }));
             }
             lines.sort();
@@ -149,7 +187,7 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let pattern = args.get("pattern").and_then(Value::as_str).ok_or("Missing pattern")?;
             if pattern.is_empty() || pattern.len()>256 { return Err("Pattern must be 1-256 characters".into()); }
             let mut files=Vec::new();
-            scan(&path,&mut files)?;
+            scan(root,&path,&mut files,&rules)?;
             let mut lines=Vec::new();
             for file in files {
                 let Ok(content) = read_limited(&file) else { continue };
@@ -185,6 +223,31 @@ mod workspace_map_tests {
         assert!(map.contains("Cargo.toml"));
         assert!(map.contains("src/main.rs"));
         assert!(!map.contains(".dude"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod dudeignore_tests {
+    use super::*;
+    #[test]
+    fn ignores_directories_and_patterns_but_not_source() {
+        let root = std::env::temp_dir().join(format!("dude-ignore-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("generated")).unwrap();
+        fs::write(root.join(".dudeignore"), "generated/\n*.log\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("generated/main.rs"), "should be ignored").unwrap();
+        fs::write(root.join("app.log"), "should be ignored").unwrap();
+        let root = root.canonicalize().unwrap();
+        let map = workspace_map(&root).unwrap();
+        assert!(map.contains("src/main.rs"));
+        assert!(!map.contains("generated/"));
+        assert!(execute(&root, "read_file", &json!({"path":"generated/main.rs"})).is_err());
+        assert!(execute(&root, "read_file", &json!({"path":"app.log"})).is_err());
+        let result = execute(&root, "search_text", &json!({"pattern":"should be ignored"})).unwrap();
+        assert!(result.is_empty());
         fs::remove_dir_all(&root).unwrap();
     }
 }
