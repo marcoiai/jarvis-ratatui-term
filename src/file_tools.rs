@@ -1,14 +1,19 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{fs, path::{Path, PathBuf}, process::Command};
 use serde_json::{json, Value};
 
 const MAX_BYTES: usize = 32_768;
 const MAX_ENTRIES: usize = 150;
+const MAX_SEARCH_FILES: usize = 4000;
 
 pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type":"function","function":{"name":"list_files","description":"List files in a workspace directory (read-only).","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path, default ."}}}}}),
         json!({"type":"function","function":{"name":"read_file","description":"Read a text file, optionally limited to line range. Similar to sed -n, but read-only.","parameters":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer"},"end_line":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"find_files","description":"Find workspace files by basename or path fragment before attempting to read them. Use when a read fails or a location is uncertain.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Filename or path fragment, case-insensitive"}},"required":["query"]}}}),
+        json!({"type":"function","function":{"name":"glob_search","description":"Find files by glob pattern such as **/security.yml, **/*.php; searches up to 4000 safe workspace files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"]}}}),
+        json!({"type":"function","function":{"name":"grep_search","description":"Search text case-insensitively in workspace sources. Optional relative path, bounded results.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"]}}}),
+        json!({"type":"function","function":{"name":"view_diff","description":"Show tracked Git working-tree changes for a non-sensitive relative file or directory; read only.","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}),
+        json!({"type":"function","function":{"name":"view_subdirectory","description":"List one workspace directory and its immediate children.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"project_map","description":"Read-only compact repository map: paths and approximate Rust, PHP, Java, C++ and Python declarations; use before reading many source files.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path (default .)"}}}}}),
         json!({"type":"function","function":{"name":"search_text","description":"Search text in workspace files, like grep -n. No regex; case-sensitive literal search.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File or directory relative path, default ."},"pattern":{"type":"string"}},"required":["pattern"]}}})
     ]
@@ -52,6 +57,50 @@ fn scan(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+fn scan_deep(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    if files.len() >= MAX_SEARCH_FILES { return Ok(()); }
+    if path.is_file() { files.push(path.to_owned()); return Ok(()); }
+    let mut entries: Vec<_> = fs::read_dir(path).map_err(|e| e.to_string())?
+        .filter_map(Result::ok).map(|e|e.path()).collect();
+    entries.sort();
+    for entry in entries {
+        if files.len() >= MAX_SEARCH_FILES { break; }
+        let name = entry.file_name().unwrap_or_default().to_string_lossy().to_string();
+        if name == ".git" || name == ".dude" || name == "target"
+            || name == "node_modules" || name == ".ssh" || name == ".aws"
+            || name == ".config" || name == ".env" || name.starts_with(".env.")
+            || name == "id_rsa" || name == "id_ed25519" { continue; }
+        if fs::symlink_metadata(&entry).map_err(|e| e.to_string())?.file_type().is_symlink() { continue; }
+        if entry.is_dir() { scan_deep(&entry, files)?; }
+        else if entry.is_file() { files.push(entry); }
+    }
+    Ok(())
+}
+
+// Glob matching supports *, ?, and ** (including **/ meaning zero or more directories).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    fn walk(p: &[u8], t: &[u8], i: usize, j: usize, memo: &mut std::collections::HashMap<(usize,usize),bool>) -> bool {
+        if let Some(&result) = memo.get(&(i,j)) { return result; }
+        let result = if i == p.len() { j == t.len() }
+        else if p[i] == b'*' {
+            if i+1 < p.len() && p[i+1] == b'*' {
+                if i+2 < p.len() && p[i+2] == b'/' {
+                    walk(p,t,i+3,j,memo) || (j<t.len() && walk(p,t,i,j+1,memo))
+                } else {
+                    walk(p,t,i+2,j,memo) || (j<t.len() && walk(p,t,i,j+1,memo))
+                }
+            } else {
+                walk(p,t,i+1,j,memo) || (j<t.len() && t[j] != b'/' && walk(p,t,i,j+1,memo))
+            }
+        } else if j<t.len() && (p[i] == t[j] || (p[i] == b'?' && t[j]!=b'/')) {
+            walk(p,t,i+1,j+1,memo)
+        } else { false };
+        memo.insert((i,j),result);
+        result
+    }
+    walk(pattern.as_bytes(),text.as_bytes(),0,0,&mut std::collections::HashMap::new())
+}
+
 fn read_limited(path: &Path) -> Result<String,String> {
     let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
     if metadata.len() > 1024 * 1024 { return Err("File exceeds 1 MiB limit".into()); }
@@ -62,6 +111,64 @@ fn read_limited(path: &Path) -> Result<String,String> {
 
 pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
     let relative = args.get("path").and_then(Value::as_str).unwrap_or(".");
+    if name == "glob_search" {
+        let pattern = args.get("pattern").and_then(Value::as_str).ok_or("Missing pattern")?;
+        if pattern.is_empty() || pattern.len()>200 || pattern.starts_with('/')
+            || pattern.split('/').any(|part| matches!(part, ".." | ".git" | ".dude" | ".env" | ".ssh" | ".aws" | ".config")) {
+            return Err("Unsafe or invalid glob".into());
+        }
+        let mut files = Vec::new();
+        scan_deep(root,&mut files)?;
+        let matches: Vec<String> = files.iter()
+            .filter_map(|p|p.strip_prefix(root).ok())
+            .map(|p|p.to_string_lossy().to_string())
+            .filter(|p|glob_match(pattern,p)).take(100).collect();
+        return Ok(format!("Searched at most {MAX_SEARCH_FILES} files ({} visited).\n{}",files.len(), matches.join("\n")));
+    }
+    if name == "grep_search" {
+        let pattern = args.get("pattern").and_then(Value::as_str).ok_or("Missing pattern")?.trim();
+        if pattern.is_empty() || pattern.len() > 256 { return Err("Invalid search pattern".into()); }
+        let target = resolve(root, relative)?;
+        let mut files = Vec::new();
+        scan_deep(&target,&mut files)?;
+        let needle = pattern.to_lowercase();
+        let mut results = Vec::new();
+        for file in &files {
+            if let Ok(content) = read_limited(file) {
+                for (index,line) in content.lines().enumerate() {
+                    if line.to_lowercase().contains(&needle) {
+                        results.push(format!("{}:{}: {}",file.strip_prefix(root).unwrap_or(file).display(),index+1,line));
+                        if results.len()>=100 { break; }
+                    }
+                }
+            }
+            if results.len()>=100 { break; }
+        }
+        return Ok(format!("Searched {} files (cap {MAX_SEARCH_FILES}).\n{}",files.len(),results.join("\n")).chars().take(MAX_BYTES).collect());
+    }
+    if name == "view_diff" {
+        let path = resolve(root, relative)?;
+        let relative_path = path.strip_prefix(root).map_err(|e|e.to_string())?;
+        let output = Command::new("git").current_dir(root)
+            .args(["-c","core.pager=cat","diff","--no-ext-diff","--",relative_path.to_str().ok_or("Invalid path encoding")?])
+            .output().map_err(|e|format!("Cannot run git diff: {e}"))?;
+        if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).to_string()); }
+        return Ok(String::from_utf8_lossy(&output.stdout).chars().take(MAX_BYTES).collect());
+    }
+    if name == "view_subdirectory" {
+        let path = resolve(root, relative)?;
+        if !path.is_dir() { return Err("Not a directory".into()); }
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(path).map_err(|e|e.to_string())?.take(MAX_ENTRIES) {
+            let e = entry.map_err(|e|e.to_string())?;
+            let name = e.file_name().to_string_lossy().to_string();
+            if matches!(name.as_str(), ".git" | ".dude" | ".env" | ".ssh" | ".aws" | ".config" | "node_modules" | "target") || name.starts_with(".env.") { continue; }
+            if e.file_type().map_err(|e|e.to_string())?.is_symlink() { continue; }
+            entries.push(format!("{}{}",name,if e.path().is_dir(){"/"}else{""}));
+        }
+        entries.sort();
+        return Ok(entries.join("\n"));
+    }
     if name == "find_files" {
         let query = args.get("query").and_then(Value::as_str).ok_or("Missing query")?.trim();
         if query.is_empty() || query.len() > 128 || query.contains('/') && query.starts_with('/') {
