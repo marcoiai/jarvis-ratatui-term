@@ -554,6 +554,33 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     Err("Symphony ended without a review".into())
 }
 
+// Ollama may return reasoning as a separate field, or embed <think>...</think>
+// in content. Only the final answer belongs in the user-visible transcript.
+fn visible_ollama_answer(content: &str) -> String {
+    let mut answer = String::new();
+    let mut remaining = content;
+    loop {
+        if let Some(start) = remaining.find("<think>") {
+            answer.push_str(&remaining[..start]);
+            let thought = &remaining[start + "<think>".len()..];
+            if let Some(end) = thought.find("</think>") {
+                remaining = &thought[end + "</think>".len()..];
+                continue;
+            }
+            // Incomplete thought block: do not show partial internal content.
+            break;
+        }
+        if let Some(end) = remaining.find("</think>") {
+            // Some models omit the opening tag but still close the thought.
+            remaining = &remaining[end + "</think>".len()..];
+            continue;
+        }
+        answer.push_str(remaining);
+        break;
+    }
+    answer.trim().to_owned()
+}
+
 async fn ask_ollama(
     client: &reqwest::Client,
     host: &str,
@@ -585,7 +612,7 @@ async fn ask_ollama(
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
         if reply.message.tool_calls.is_empty() {
-            return Ok(reply.message.content);
+            return Ok(visible_ollama_answer(&reply.message.content));
         }
         if !allow_tools { return Err("Unexpected Ollama tool call in review-only stage".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
@@ -796,4 +823,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     result
+}
+
+#[cfg(test)]
+mod ollama_answer_tests {
+    use super::visible_ollama_answer;
+    #[test]
+    fn hides_thought_before_answer() {
+        assert_eq!(visible_ollama_answer("<think>private notes</think>Useful report"), "Useful report");
+        assert_eq!(visible_ollama_answer("private notes</think>Useful report"), "Useful report");
+        assert_eq!(visible_ollama_answer("Useful <think>ignore</think>report"), "Useful report");
+    }
+    #[test]
+    fn preserves_plain_answers() {
+        assert_eq!(visible_ollama_answer("Architecture summary"), "Architecture summary");
+        assert_eq!(visible_ollama_answer("<think>unfinished"), "");
+    }
 }
