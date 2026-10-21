@@ -33,3 +33,11 @@
 - Log de teste Dual-Local mostrou texto intermediário e marcador `</think>` antes do parecer. O processamento de `ask_ollama` agora remove blocos `<think>...</think>` da resposta exibida, inclusive saída com marcador de fechamento isolado.
 - Preserva conteúdo final após o fechamento e respostas normais, sem alterar a investigação ou adicionar critérios obrigatórios de citação. Testes unitários do filtro incluídos.
 - Sem validação de compilação/execução nesta ferramenta; testar `cargo check`, `cargo test` e execução real em Mac/Linux.
+
+## 2026-10-21 — Continue: Ollama estruturado e memória relevante
+
+- O adaptador Ollama agora aceita o campo separado `message.thinking`, solicita `think: false` nas chamadas de chat e remove marcadores `<think>` do histórico de chamadas com ferramentas, além da resposta exibida. Isso visa manter o canal visível limpo; o modelo ainda pode pensar internamente conforme sua implementação.
+- `Memory::context_for(question)` seleciona entradas **já aprovadas** em `memory.md` e `decisions.md` relacionadas a termos da pergunta e mantém o contexto de projeto administrado pelo usuário. Não modifica nem promove conhecimento automaticamente.
+- O refresh do contexto do projeto no envio de mensagens usa recuperação direcionada. Essa seleção é lexical, não vetorial; perguntas genéricas podem receber pouco conhecimento recuperado.
+- Não foi introduzido ainda índice estrutural (Tree-sitter/FTS) ou cache persistente com invalidação por hash; estes exigem desenho e teste dedicados.
+- Validação local pendente: `cargo fmt --check`, `cargo check`, `cargo test` e execução real com Qwen no Ollama do Mac e código no Linux.
