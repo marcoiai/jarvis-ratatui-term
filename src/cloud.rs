@@ -62,10 +62,9 @@ async fn groq_request_with_quota(
         let retry_header = response.headers().get("retry-after")
             .and_then(|h|h.to_str().ok()).and_then(|h|h.parse::<f64>().ok());
         let body = response.text().await.unwrap_or_default();
-        let quota_error = status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || (status == reqwest::StatusCode::PAYLOAD_TOO_LARGE
-                && (body.contains("tokens per minute") || body.contains("TPM")));
-        if quota_error && retries < 5 {
+        // HTTP 413 with "Requested > Limit" is not solved by waiting:
+        // the next call must be sliced. HTTP 429 may clear with time.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && retries < 5 {
             let wait = parse_retry_seconds(&body).or(retry_header).unwrap_or(60.0)
                 .ceil().clamp(1.0, 75.0) as u64;
             retries += 1;
@@ -213,6 +212,15 @@ fn parse_retry_seconds(body: &str) -> Option<f64> {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+    #[test]
+    fn slices_keep_all_content_in_order() {
+        let long = "abcdef 🦀".repeat(3000);
+        let convo = vec![json!({"role":"user","content":long})];
+        let slices = groq_slices(&convo);
+        assert!(slices.len() > 1);
+        assert!(slices.iter().all(|s| s.len() <= GROQ_SLICE_CHARS + 4));
+        assert_eq!(slices.concat(), format!("\\n--- user ---\\n{}\\n", long));
+    }
     #[test]
     fn detects_retry_seconds() {
         assert_eq!(parse_retry_seconds("Please try again in 12.1425s."), Some(12.1425));
