@@ -47,7 +47,7 @@ fn groq_compact_messages(messages: &[Value]) -> Vec<Value> {
     const MAX_TOOL_CHARS: usize = 1050;
     const MAX_OTHER_CHARS: usize = 2600;
     // Terms are derived from the most recent actual user request, not tool output.
-    let question = messages.iter().rev().find(|m| m["role"] == "user")
+    let question = messages.iter().find(|m| m["role"] == "user")
         .and_then(|m| m["content"].as_str()).unwrap_or("");
     let terms: Vec<String> = question.split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.chars().count() >= 4).take(20).map(str::to_lowercase).collect();
