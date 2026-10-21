@@ -116,3 +116,11 @@ Known limitations:
 - Não altera o current working directory global do processo DUDE; preserva isolamento e previsibilidade das tasks assíncronas.
 - Incluído teste assíncrono com `!pwd` equivalente. Executar `cargo test` no checkout para validar.
 - O parser atual separa argumentos por whitespace e não executa via shell; `!cd`, pipes e redirecionamentos não ganham semântica de shell com esta mudança.
+
+## 2026-10-21 — Solo: proveniência de ferramentas por execução
+
+- `EvidenceCache` passou a registrar eventos reais por chamada: nome da ferramenta, argumentos, `ok`, `error` ou `cache_hit`, com limite de 300 eventos.
+- Ao concluir uma resposta com ferramentas no Ollama, o DUDE anexa um resumo legível de até 25 ações reais executadas durante a solicitação, sem confundir texto gerado pelo modelo com execução de ferramentas.
+- Leituras iniciais de revisão agora passam pelo mesmo rastreamento sem releitura duplicada; cache continua restrito a uma solicitação, sem mudança na arquitetura de memória.
+- Teste unitário de leituras, cache hit e caminho ausente incluído. **Ainda requer** compilação/testes no checkout Linux e teste real com Qwen 3.5 4B.
+- Limites: erros de provider no meio da investigação ainda retornam erro sem resumo parcial de ações, a interface ainda não tem feed de eventos em tempo real, e o histórico de ferramentas não substitui avaliação factual do relatório.
