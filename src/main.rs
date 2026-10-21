@@ -381,8 +381,9 @@ impl App {
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
             let command = command.trim().to_owned();
+            let workspace = self.workspace.clone();
             tokio::spawn(async move {
-                let result = run_command(command).await;
+                let result = run_command(command, workspace).await;
                 let _ = tx.send(ResultMessage::Shell(result));
             });
         } else {
@@ -738,11 +739,12 @@ async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> 
     }
 }
 
-async fn run_command(command: String) -> Result<String, String> {
+async fn run_command(command: String, workspace: PathBuf) -> Result<String, String> {
     // Intentional: execute a program and arguments, never through a shell.
     let mut words = command.split_whitespace();
     let program = words.next().ok_or("Empty command")?;
     let output = Command::new(program)
+        .current_dir(workspace)
         .args(words)
         .output()
         .await
@@ -922,5 +924,19 @@ mod solo_routing_tests {
         assert!(!is_simple_greeting("oi, analise este projeto"));
         assert!(!is_simple_greeting("ei, analise o workspace"));
         assert!(!is_simple_greeting("review current project"));
+    }
+}
+
+#[cfg(test)]
+mod workspace_shell_tests {
+    use super::*;
+    #[tokio::test]
+    async fn shell_commands_use_selected_workspace_not_process_cwd() {
+        let workspace = std::env::temp_dir().join(format!("dude-shell-workspace-{}", std::process::id()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let expected = std::fs::canonicalize(&workspace).unwrap();
+        let actual = run_command("pwd".to_owned(), expected.clone()).await.unwrap();
+        assert_eq!(actual.trim(), expected.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 }
