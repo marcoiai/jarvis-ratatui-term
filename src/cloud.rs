@@ -51,6 +51,8 @@ async fn groq_request_with_quota(
         if allow_tools {
             body["tools"] = json!(file_tools::definitions());
             body["tool_choice"] = json!("auto");
+        } else {
+            body["tool_choice"] = json!("none");
         }
         let response = client.post("https://api.groq.com/openai/v1/chat/completions")
             .bearer_auth(key).json(&body).send().await
@@ -78,6 +80,24 @@ async fn groq_request_with_quota(
             retries += 1;
             tokio::time::sleep(Duration::from_secs(wait)).await;
             continue;
+        }
+        if !allow_tools && status == reqwest::StatusCode::BAD_REQUEST
+            && body.contains("tool_use_failed") {
+            // GPT-OSS occasionally attempts a tool call while summarizing read_file
+            // transcripts. Re-ask for text; preserve the original evidence slice.
+            let mut retry_messages = messages.to_vec();
+            retry_messages.push(json!({"role":"user","content":
+                "Return only a textual analysis of the supplied evidence. Do not invoke tools or output function calls."}));
+            let retry = client.post("https://api.groq.com/openai/v1/chat/completions")
+                .bearer_auth(key)
+                .json(&json!({"model":model,"messages":retry_messages,"stream":false,"tool_choice":"none"}))
+                .send().await.map_err(|e|format!("Groq text-only retry: {e}"))?;
+            let retry_status = retry.status();
+            if retry_status.is_success() {
+                return retry.json().await.map_err(|e|e.to_string());
+            }
+            return Err(format!("Groq text-only retry HTTP {retry_status}: {}",
+                retry.text().await.unwrap_or_default().chars().take(600).collect::<String>()));
         }
         return Err(format!("Groq HTTP {status}: {}", body.chars().take(600).collect::<String>()));
     }
