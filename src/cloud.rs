@@ -8,32 +8,138 @@ async fn tool(workspace: PathBuf, name: String, args: Value, evidence: EvidenceC
     }).await.map_err(|e| e.to_string())
 }
 
+
+const GROQ_SLICE_CHARS: usize = 6500;
+
+// Preserve every character of the conversation, including tool output, in ordered slices.
+// Each slice gets its own bounded Groq request; the original question is never clipped.
+fn groq_slices(convo: &[Value]) -> Vec<String> {
+    let mut source = String::new();
+    for entry in convo {
+        let role = entry["role"].as_str().unwrap_or("unknown");
+        source.push_str("\n--- ");
+        source.push_str(role);
+        source.push_str(" ---\n");
+        if let Some(content) = entry["content"].as_str() {
+            source.push_str(content);
+        }
+        if let Some(calls) = entry.get("tool_calls") {
+            source.push_str("\nTool calls: ");
+            source.push_str(&calls.to_string());
+        }
+        source.push('\n');
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for ch in source.chars() {
+        current.push(ch);
+        if current.len() >= GROQ_SLICE_CHARS {
+            chunks.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() { chunks.push(current); }
+    chunks
+}
+
+async fn groq_request_with_quota(
+    client: &reqwest::Client, key: &str, model: &str, messages: &[Value],
+    allow_tools: bool,
+) -> Result<Value, String> {
+    let mut retries = 0;
+    loop {
+        let mut body = json!({"model":model,"messages":messages,"stream":false});
+        if allow_tools {
+            body["tools"] = json!(file_tools::definitions());
+            body["tool_choice"] = json!("auto");
+        }
+        let response = client.post("https://api.groq.com/openai/v1/chat/completions")
+            .bearer_auth(key).json(&body).send().await
+            .map_err(|e|format!("Groq connection: {e}"))?;
+        let status = response.status();
+        if status.is_success() {
+            return response.json().await.map_err(|e|format!("Invalid Groq response: {e}"));
+        }
+        let retry_header = response.headers().get("retry-after")
+            .and_then(|h|h.to_str().ok()).and_then(|h|h.parse::<f64>().ok());
+        let body = response.text().await.unwrap_or_default();
+        let quota_error = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || (status == reqwest::StatusCode::PAYLOAD_TOO_LARGE
+                && (body.contains("tokens per minute") || body.contains("TPM")));
+        if quota_error && retries < 5 {
+            let wait = parse_retry_seconds(&body).or(retry_header).unwrap_or(60.0)
+                .ceil().clamp(1.0, 75.0) as u64;
+            retries += 1;
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            continue;
+        }
+        return Err(format!("Groq HTTP {status}: {}", body.chars().take(600).collect::<String>()));
+    }
+}
+
+// When a tool loop exceeds a single request's capacity, walk ALL previous
+// context in slices, collect findings, then resume the investigation with tools.
+// The chunks are processed sequentially, respecting TPM pressure.
+async fn groq_resume_sliced(
+    client: &reqwest::Client, key: &str, model: &str,
+    convo: &[Value],
+) -> Result<Vec<Value>, String> {
+    let chunks = groq_slices(convo);
+    let mut findings = String::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let context = vec![
+            json!({"role":"system","content":"You are DUDE's context reader. Extract relevant technical facts, file paths, uncertainties and results from this ordered slice. Do not invent facts. Preserve important identifiers. This is one piece of a larger investigation."}),
+            json!({"role":"user","content":format!("Evidence slice {} of {}:\n{}",i+1,chunks.len(),chunk)}),
+        ];
+        let value = groq_request_with_quota(client,key,model,&context,false).await?;
+        let extracted = value["choices"][0]["message"]["content"].as_str()
+            .ok_or("Groq returned no findings for evidence slice")?;
+        findings.push_str(&format!("\nSlice {} findings:\n{}\n",i+1,extracted));
+    }
+    // Distill the accumulated findings hierarchically if a huge workspace
+    // would otherwise reconstruct another over-limit request.
+    while findings.len() > GROQ_SLICE_CHARS {
+        let mut next = String::new();
+        let chunks = groq_slices(&[json!({"role":"user","content":findings})]);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let context = vec![
+                json!({"role":"system","content":"Consolidate these engineering findings faithfully into concise, evidence-grounded notes. Retain important identifiers, paths, caveats and the user's goal. Do not invent details."}),
+                json!({"role":"user","content":format!("Findings batch {} of {}:\n{}",i+1,chunks.len(),chunk)}),
+            ];
+            let value = groq_request_with_quota(client,key,model,&context,false).await?;
+            let part = value["choices"][0]["message"]["content"].as_str()
+                .ok_or("Groq returned no consolidated findings")?;
+            next.push_str(part);
+            next.push('\n');
+        }
+        // Guarantee termination even when the model fails to compress.
+        if next.len() >= findings.len() {
+            return Err("Groq could not consolidate sliced evidence within its context budget; evidence preserved in the current investigation".into());
+        }
+        findings = next;
+    }
+    let original = convo.iter().rev().find(|entry| entry["role"] == "user"
+        && entry.get("tool_call_id").is_none())
+        .and_then(|entry|entry["content"].as_str()).unwrap_or("");
+    Ok(vec![
+        json!({"role":"system","content":"You are DUDE, an engineering investigator. The following notes were gathered by examining ALL previous context slices, including file-tool results. Continue the original investigation, use file tools only when additional evidence is needed, and distinguish verified facts from hypotheses."}),
+        json!({"role":"user","content":format!("Original request:\n{}\n\nGathered technical findings:\n{}\n\nContinue investigating and respond to the request.",original,findings)}),
+    ])
+}
+
 pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
     for _ in 0..(if allow_tools { 8 } else { 1 }) {
-        // Rate limits are shared across all Groq calls, including other Symphony roles.
-        // Retry the exact same turn; never re-execute completed file tools.
-        let mut retries = 0;
-        let response = loop {
-            let response = client.post("https://api.groq.com/openai/v1/chat/completions")
-                .bearer_auth(&key)
-                .json(&if allow_tools { json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}) } else { json!({"model":model,"messages":convo,"stream":false}) })
-                .send().await.map_err(|e|format!("Groq connection: {e}"))?;
-            if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {break response;}
-            if retries >= 3 {break response;}
-            let retry_header = response.headers().get("retry-after")
-                .and_then(|h|h.to_str().ok())
-                .and_then(|h|h.parse::<f64>().ok());
-            let body = response.text().await.unwrap_or_default();
-            let suggested = parse_retry_seconds(&body).or(retry_header).unwrap_or(15.0);
-            let wait = suggested.ceil().clamp(1.0, 75.0) as u64;
-            retries += 1;
-            tokio::time::sleep(Duration::from_secs(wait)).await;
+        // A 413 can mean the accumulated tool conversation no longer fits.
+        // Recover by reading all evidence in sequential slices, not truncating it.
+        let value = match groq_request_with_quota(client,&key,model,&convo,allow_tools).await {
+            Ok(value) => value,
+            Err(error) if error.contains("413") || error.contains("Payload Too Large") => {
+                convo = groq_resume_sliced(client,&key,model,&convo).await?;
+                groq_request_with_quota(client,&key,model,&convo,allow_tools).await?
+            }
+            Err(error) => return Err(error),
         };
-        let status = response.status();
-        if !status.is_success() {return Err(format!("Groq HTTP {status}: {}", response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
-        let value: Value = response.json().await.map_err(|e|e.to_string())?;
         let msg = &value["choices"][0]["message"];
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
         if calls.is_empty() {return msg["content"].as_str().map(str::to_owned).ok_or_else(||"Groq returned no message".into());}
