@@ -642,7 +642,21 @@ async fn interpret_request(
         context.push(json!({"role":msg.role,"content":msg.content.chars().take(3500).collect::<String>()}));
     }
     let response = client.post(format!("{host}/api/chat"))
-        .json(&json!({"model":model,"messages":context,"stream":false,"think":false,"format":"json"}))
+        .json(&json!({
+            "model":model,
+            "messages":context,
+            "stream":false,
+            "think":false,
+            "format":{
+                "type":"object",
+                "properties":{
+                    "task":{"type":"string"},
+                    "needs_workspace":{"type":"boolean"}
+                },
+                "required":["task","needs_workspace"],
+                "additionalProperties":false
+            }
+        }))
         .send().await.map_err(|e|format!("Interpreter model {model} unavailable: {e}"))?;
     if !response.status().is_success() {
         let status=response.status();
