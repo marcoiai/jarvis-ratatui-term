@@ -62,7 +62,7 @@ impl EvidenceCache {
     }
 
     pub fn export(&self) -> String {
-        let Ok(cache) = self.0.lock() else { return "Evidence cache unavailable".into() };
+        let Ok(cache) = self.cache.lock() else { return "Evidence cache unavailable".into() };
         let mut text = String::new();
         for (index, item) in cache.values().enumerate() {
             let line = format!("Evidence #{}: {}({})\n{}\n\n",index+1,item["tool"].as_str().unwrap_or("unknown"),item["arguments"],item["result"].as_str().unwrap_or(""));
@@ -71,7 +71,7 @@ impl EvidenceCache {
         }
         text
     }
-    pub fn len(&self) -> usize { self.0.lock().map(|c|c.len()).unwrap_or(0) }
+    pub fn len(&self) -> usize { self.cache.lock().map(|c|c.len()).unwrap_or(0) }
 }
 
 #[cfg(test)]
