@@ -596,7 +596,17 @@ async fn ask_ollama(
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
     }).collect();
-    for _ in 0..(if allow_tools { 8 } else { 1 }) {
+    if allow_tools {
+        conversation.push(json!({"role":"system","content":concat!(
+            "Investigate the actual workspace, not just prior chat memory. ",
+            "For repository reviews, start with a compact map or file discovery, then open relevant ",
+            "implementations and configuration. Use find_files when a guessed path fails. ",
+            "Do not claim files were read unless tool results confirm it. ",
+            "Distinguish facts found in files from architectural inferences. ",
+            "Do not stop after an inventory when the user requests a deep review."
+        )}));
+    }
+    for _ in 0..(if allow_tools { 18 } else { 1 }) {
         let response = client
             .post(format!("{host}/api/chat"))
             .json(&json!({
@@ -637,7 +647,7 @@ async fn ask_ollama(
             conversation.push(json!({"role":"tool","content":output}));
         }
     }
-    Err("Too many tool calls in one request (limit 8 rounds).".into())
+    Err("Investigation reached tool round budget (18).".into())
 }
 
 async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> Result<String, String> {
