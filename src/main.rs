@@ -271,6 +271,10 @@ impl App {
             self.output.push_str(&format!("Role configuration: {result:?}\n"));
             return;
         }
+        if input == "/mode" {
+            self.output.push_str(&format!("Current mode: {}. Use /mode solo or /mode symphony.\n", self.roles.mode));
+            return;
+        }
         if let Some(mode) = input.strip_prefix("/mode ") {
             let mut updated = self.roles.clone();
             let result = updated.set_mode(mode.trim()).and_then(|_| updated.save(&self.workspace).map(|_| {
@@ -366,6 +370,10 @@ impl App {
             return;
         }
 
+        if input.starts_with('/') {
+            self.output.push_str("Unknown command. Use /mode, /roles, /workspace, /model, /dual, /cloud or /memory.\n");
+            return;
+        }
         self.busy = true;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
@@ -432,7 +440,7 @@ impl App {
                     routed_messages.push(Message {
                         role: "system".into(),
                         content: format!(
-                            "The interpreter reformulated the user's latest message. Use this as task guidance, NOT as file evidence. Always preserve the original user's wording and constraints.\\nInterpreted task: {}\\nNeeds workspace investigation: {}",
+                            "The interpreter reformulated the user's latest message. Use this as task guidance, NOT as file evidence. Always preserve the original user's wording and constraints.\nInterpreted task: {}\nNeeds workspace investigation: {}",
                             interpreted.task, interpreted.needs_workspace
                         ),
                     });
