@@ -149,3 +149,10 @@ Known limitations:
 - `/mode` sem argumento agora informa o modo atual; comandos `/` desconhecidos deixam de ser enviados ao modelo.
 - Testes do contrato JSON Interpreter adicionados. Não há fallback silencioso para roteamento por palavras-chave se o Interpreter falhar.
 - **Pendente:** executar `cargo fmt --check`, `cargo check`, `cargo test` e benchmark com os dois modelos disponíveis no Ollama do Mac; a qualidade e latência do novo ciclo não foram medidas ainda. O Interpreter pode classificar incorretamente a necessidade de ferramentas; isso requer teste real e telemetria.
+
+## 2026-10-21 — Solo: zero tool calls cannot pass as investigated
+
+- Regressão reproduzida pelo log do usuário: DUDE afirmou ter verificado código, mas finalizou com `Tools executed this turn: none` e fatos antigos (`qwen3:4b`, `memory.json`, `router.rs`).
+- No caminho Ollama com ferramentas habilitadas, o primeiro retorno sem execução de ferramenta solicita uma chamada estruturada efetiva e uma exploração do workspace; um segundo retorno sem leitura registrada encerra com erro explícito e não salva o relatório como se fosse verificado.
+- Sem mudanças na arquitetura Interpreter → Coder/Symphony. Ainda é necessário testar se o Interpreter classifica a solicitação com `needs_workspace=true` e se o modelo Coder suporta tool calls corretamente.
+- Compilação e testes locais pendentes.
