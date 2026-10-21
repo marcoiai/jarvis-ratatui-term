@@ -156,3 +156,11 @@ Known limitations:
 - No caminho Ollama com ferramentas habilitadas, o primeiro retorno sem execução de ferramenta solicita uma chamada estruturada efetiva e uma exploração do workspace; um segundo retorno sem leitura registrada encerra com erro explícito e não salva o relatório como se fosse verificado.
 - Sem mudanças na arquitetura Interpreter → Coder/Symphony. Ainda é necessário testar se o Interpreter classifica a solicitação com `needs_workspace=true` e se o modelo Coder suporta tool calls corretamente.
 - Compilação e testes locais pendentes.
+
+## 2026-10-21 — Project map alone is not a source review
+
+- The DUDE-on-DUDE regression showed a fictional Rust implementation reported after only `project_map(.) [ok]`. No source implementation was opened.
+- `EvidenceCache::successful_file_reads()` now counts successful `read_file` calls; search and maps do not qualify as source reads.
+- If the Coder attempts to finish a tool-enabled investigation without a successful source read, Ollama receives one explicit instruction to open relevant files. Repeated refusal returns an actionable error instead of saving a fictional report.
+- Added unit assertion for successful reads and cache hits. Tests and compilation have **not** been executed in the user's checkout.
+- Limit: a single source read does not certify all report claims; deeper investigation quality remains subject to benchmark.
