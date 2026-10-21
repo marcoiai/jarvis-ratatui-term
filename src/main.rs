@@ -616,11 +616,34 @@ async fn ask_ollama(
         || question.contains("análise") && question.contains("projeto")
     );
     if is_project_review {
-        // Seed a *fresh* workspace overview. Prior conversation is not evidence of this run.
+        // A map is discovery, NOT proof of inspecting implementations.
+        // Explicitly read a bounded, deterministic sample before allowing a review.
+        let candidates = [
+            "Cargo.toml", "README.md", "src/main.rs",
+            "package.json", "composer.json", "docker-compose.yml",
+            "pyproject.toml", "go.mod", "Makefile",
+        ];
+        let mut verified = Vec::new();
+        for candidate in candidates {
+            if workspace.join(candidate).is_file() {
+                let args = json!({"path":candidate,"start_line":1,"end_line":160});
+                let result = file_tools::execute(&workspace, "read_file", &args);
+                if let Ok(contents) = result {
+                    if !contents.is_empty() {
+                        verified.push(format!("FILE {candidate} (first 160 lines, read now):\n{contents}"));
+                    }
+                }
+            }
+            if verified.len() >= 4 { break; }
+        }
+        if verified.is_empty() {
+            return Err("Project review blocked: no source or manifest was successfully read from the workspace. Check DUDE_WORKSPACE.".into());
+        }
         let map = file_tools::execute(&workspace, "project_map", &json!({"path":"."}))
-            .unwrap_or_else(|e| format!("Project map unavailable: {e}"));
+            .unwrap_or_else(|e| format!("Map unavailable: {e}"));
         conversation.push(json!({"role":"system","content":format!(
-            "Fresh workspace inventory (generated for THIS request, not previously remembered):\\n{map}\\n\\nThis inventory identifies paths and candidate declarations only; it does NOT verify file implementations. Read important files using tools before asserting verified components. Earlier conversation answers are unverified background, not fresh evidence."
+            "FRESH VERIFIED READS (partial excerpts, not whole-file verification):\n{}\n\nDISCOVERY MAP (paths and approximate declarations, not verified implementations):\n{}\n\nUse the verified excerpts as facts, read additional files through tools when needed. Never fabricate code excerpts or claim uninspected modules were verified. Previous assistant messages are background, not evidence from this execution.",
+            verified.join("\n\n"), map
         )}));
     }
     if allow_tools {
