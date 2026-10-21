@@ -214,3 +214,11 @@
 - Havendo candidatos inéditos, o Solo não realiza a segunda inferência de Knowledge, evitando latência e erros de transporte. Sem candidatos novos, a extração por LLM permanece como fallback best-effort.
 - Teste unitário adicionado para referências observadas, com declarações públicas e privadas em arquivo Rust de exemplo.
 - Limites: essa etapa captura *declarações sintáticas*, não entendimento semântico nem arquitetura. É uma fonte previsível de conhecimento revisável, e não substitui conhecimento conceitual. Nenhum teste local de compilação foi executado; validar `cargo fmt --check`, `cargo check` e `cargo test` em Linux/Mac.
+
+## 2026-10-21 — Incidente: parecer vazio com aviso de evidência
+
+- Regressão observada ao investigar o workspace `always-video`: 3 leituras com sucesso (`README.md`, `package.json`, `src/main.ts`) e 920 tokens reportados pelo Ollama, mas somente um alerta de referências foi exibido.
+- Inspeção do fluxo confirma que resposta visível vazia era aceita por `ask_ollama`; o aviso emitia `ChatChunk` e `App::complete` omitia o texto final quando `streamed=true`.
+- Rejeitamos agora resposta vazia após o filtro com erro explícito e impedimos o gate de citações de aceitar relatório vazio. **Não se trata ainda da recuperação da resposta ausente**: a origem no modelo/stream continua a ser investigada.
+- Decisão de estabilização: priorizar testes de integração `read_file → Ollama → filtro → TUI`, diagnóstico de respostas sem `message.content` e regressões antes de ampliar o conjunto de funcionalidades.
+- Ainda não foi executada compilação/teste no ambiente Linux ou macOS; `cargo check` e `cargo test` são necessários.
