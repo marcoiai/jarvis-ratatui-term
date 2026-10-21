@@ -960,9 +960,35 @@ async fn ask_ollama(
                 if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(tail)); }
             }
             if answer.trim().is_empty() {
-                return Err(format!(
-                    "Ollama returned an empty visible answer after investigation (model: {model}).                      The response was not accepted as a project review.                      Try a different model or retry with a narrower request."
-                ));
+                // A successful tool investigation must not silently become an empty
+                // report. Retry the final synthesis once using a full JSON response.
+                // Keep the same observations and never repeat file tool calls.
+                let fallback = client.post(format!("{host}/api/chat"))
+                    .json(&json!({
+                        "model": model,
+                        "messages": conversation,
+                        "stream": false,
+                        "think": false,
+                        "options": { "num_ctx": investigation::context_size() },
+                        "tools": [],
+                    }))
+                    .send().await
+                    .map_err(|e| format!("Ollama produced an empty review; non-streaming retry failed: {e}"))?;
+                if !fallback.status().is_success() {
+                    return Err(format!("Ollama produced an empty review; retry HTTP {}", fallback.status()));
+                }
+                let reply: OllamaReply = fallback.json().await
+                    .map_err(|e| format!("Ollama empty-review retry returned invalid JSON: {e}"))?;
+                if !reply.message.tool_calls.is_empty() {
+                    return Err("Ollama requested tools during empty-review retry; no report was produced.".into());
+                }
+                answer = response_filter::strip_completed(&reply.message.content)?;
+                if answer.trim().is_empty() {
+                    return Err(format!("Ollama returned no visible review text for {model}, even after a non-streaming retry. Investigation reads remain recorded; no conclusions were fabricated."));
+                }
+                if let Some(sender)=&updates {
+                    let _=sender.send(ResultMessage::ChatChunk(answer.clone()));
+                }
             }
             if crate::claim_audit::unsupported_coverage_percentages(&answer) {
                 let warning = "\n\n⚠ Auditoria DUDE: percentual de cobertura mencionado pelo modelo não foi medido pelo runtime. Não o trate como evidência de verificação.\n";
