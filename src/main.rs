@@ -65,15 +65,6 @@ fn is_simple_greeting(input: &str) -> bool {
 }
 
 /// Recognize repository-analysis requests without tying them to one exact wording.
-fn is_project_review_request(question: &str) -> bool {
-    let q = question.to_lowercase();
-    let action = ["analis", "analys", "review", "revis", "explique", "explain", "entend", "understand", "investig"]
-        .iter().any(|word| q.contains(word));
-    let target = ["projeto", "project", "repositorio", "repositório", "repo", "workspace", "diretorio atual", "diretório atual", "codebase"]
-        .iter().any(|word| q.contains(word));
-    action && target
-}
-
 enum ResultMessage {
     ModelReady(Result<String, String>),
     Chat(Result<String, String>),
@@ -382,11 +373,6 @@ impl App {
             return;
         }
 
-        // A greeting requires no LLM round-trip and no workspace scan.
-        if is_simple_greeting(&input) {
-            self.output.push_str("Oi, buddy! DUDE pronto. O que vamos investigar?\n");
-            return;
-        }
         self.busy = true;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
@@ -447,16 +433,28 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
-                let result = if dual_enabled && roles.mode == "solo" && roles.selected_provider() == "ollama" {
-                    run_local_dual(&client, messages, workspace, &url,
+                let result = async {
+                    let interpreted = interpret_request(&client, &url, &ollama_model, &messages).await?;
+                    let mut routed_messages = messages;
+                    routed_messages.push(Message {
+                        role: "system".into(),
+                        content: format!(
+                            "The interpreter reformulated the user's latest message. Use this as task guidance, NOT as file evidence. Always preserve the original user's wording and constraints.\\nInterpreted task: {}\\nNeeds workspace investigation: {}",
+                            interpreted.task, interpreted.needs_workspace
+                        ),
+                    });
+                    let evidence = evidence;
+                    if dual_enabled && roles.mode == "solo" && roles.selected_provider() == "ollama" {
+                    run_local_dual(&client, routed_messages, workspace, &url,
                         &ollama_model, &reasoning_model, evidence).await
                 } else if roles.mode == "symphony" {
-                    run_symphony(&client, &roles, messages, workspace, &url,
+                    run_symphony(&client, &roles, routed_messages, workspace, &url,
                         &ollama_model, &groq_model, &gemini_model, evidence).await
                 } else {
-                    query_provider(&client, roles.selected_provider(), messages, workspace,
+                    query_provider(&client, roles.selected_provider(), routed_messages, workspace,
                         &url, &ollama_model, &groq_model, &gemini_model, true, evidence).await
-                };
+                    }
+                }.await;
                 let _ = tx.send(ResultMessage::Chat(result));
             });
         }
@@ -606,6 +604,48 @@ fn visible_ollama_answer(content: &str) -> String {
     answer.trim().to_owned()
 }
 
+#[derive(Deserialize)]
+struct InterpretedRequest {
+    task: String,
+    needs_workspace: bool,
+}
+
+/// Local LLM language interpretation is deliberately separate from code exploration.
+/// This stage has no file tools: its output is task guidance, not evidence.
+async fn interpret_request(
+    client: &reqwest::Client,
+    host: &str,
+    coder_model: &str,
+    messages: &[Message],
+) -> Result<InterpretedRequest, String> {
+    let model = env::var("DUDE_INTERPRETER_MODEL").unwrap_or_else(|_| coder_model.to_string());
+    let mut context: Vec<Value> = vec![json!({"role":"system","content":concat!(
+        "You are DUDE's natural-language interpreter. Understand the latest user request ",
+        "in the context of the recent conversation. Do not answer it and do not invent ",
+        "workspace facts. Return strictly JSON with two fields: ",
+        "task (a faithful, actionable reformulation preserving all user requirements, ",
+        "or a faithful conversational intent) and needs_workspace (boolean; true only ",
+        "if files or repository state need to be inspected). ",
+        "A compliment or greeting needs no workspace inspection. ",
+        "Do not infer facts from previous assistant responses as verified code."
+    )})];
+    for msg in messages.iter().filter(|m| m.role != "system").rev().take(7).collect::<Vec<_>>().into_iter().rev() {
+        context.push(json!({"role":msg.role,"content":msg.content.chars().take(3500).collect::<String>()}));
+    }
+    let response = client.post(format!("{host}/api/chat"))
+        .json(&json!({"model":model,"messages":context,"stream":false,"think":false,"format":"json"}))
+        .send().await.map_err(|e|format!("Interpreter model {model} unavailable: {e}"))?;
+    if !response.status().is_success() {
+        let status=response.status();
+        return Err(format!("Interpreter {model} HTTP {status}: {}",response.text().await.unwrap_or_default()));
+    }
+    let reply: OllamaReply=response.json().await.map_err(|e|format!("Interpreter response invalid: {e}"))?;
+    let result: InterpretedRequest=serde_json::from_str(&visible_ollama_answer(&reply.message.content))
+        .map_err(|e|format!("Interpreter {model} returned invalid task JSON: {e}"))?;
+    if result.task.trim().is_empty() {return Err("Interpreter returned an empty task".into());}
+    Ok(result)
+}
+
 async fn ask_ollama(
     client: &reqwest::Client,
     host: &str,
@@ -618,47 +658,6 @@ async fn ask_ollama(
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
     }).collect();
-    let question = conversation.iter().rev()
-        .find(|m| m["role"] == "user")
-        .and_then(|m| m["content"].as_str()).unwrap_or("");
-    let is_project_review = allow_tools && is_project_review_request(question);
-    if is_project_review {
-        // A map is discovery, NOT proof of inspecting implementations.
-        // Explicitly read a bounded, deterministic sample before allowing a review.
-        let candidates = [
-            "Cargo.toml", "README.md", "src/main.rs",
-            "package.json", "composer.json", "docker-compose.yml",
-            "pyproject.toml", "go.mod", "Makefile",
-        ];
-        let mut verified = Vec::new();
-        for candidate in candidates {
-            if workspace.join(candidate).is_file() {
-                let args = json!({"path":candidate,"start_line":1,"end_line":160});
-                let contents = evidence.execute(&workspace, "read_file", &args);
-                if !contents.is_empty() && !contents.starts_with("Tool error:") {
-                    verified.push(format!("FILE {candidate} (first 160 lines, read now):\n{contents}"));
-                }
-            }
-            if verified.len() >= 4 { break; }
-        }
-        if verified.is_empty() {
-            return Err("Project review blocked: no source or manifest was successfully read from the workspace. Check DUDE_WORKSPACE.".into());
-        }
-        // Query actual files for configuration and persistence facts that commonly
-        // become stale in the conversation history; evidence is from THIS workspace.
-        let mut config_facts = Vec::new();
-        for needle in ["OLLAMA_MODEL", "history.jsonl", "memory.json", "router.rs"] {
-            let result = evidence.execute(&workspace, "grep_search", &json!({"pattern":needle}));
-            if !result.starts_with("Tool error:") {
-                config_facts.push(format!("Search for {needle}:\n{result}"));
-            }
-        }
-        let map = evidence.execute(&workspace, "project_map", &json!({"path":"."}));
-        conversation.push(json!({"role":"system","content":format!(
-            "FRESH VERIFIED READS (partial excerpts, not whole-file verification):\n{}\n\nDISCOVERY MAP (paths and approximate declarations, not verified implementations):\n{}\n\nUse the verified excerpts as facts, read additional files through tools when needed. Never fabricate code excerpts or claim uninspected modules were verified. Previous assistant messages are background, not evidence from this execution.",
-            format!("{}\n\nFRESH CONFIGURATION SEARCHES (matches, not full implementation proof):\n{}", verified.join("\n\n"), config_facts.join("\n\n")), map
-        )}));
-    }
     if allow_tools {
         conversation.push(json!({"role":"system","content":concat!(
             "Investigate the actual workspace, not just prior chat memory. ",
@@ -956,19 +955,3 @@ mod workspace_shell_tests {
     }
 }
 
-#[cfg(test)]
-mod project_review_intent_tests {
-    use super::is_project_review_request;
-    #[test]
-    fn recognizes_portuguese_and_english_repository_reviews() {
-        for prompt in [
-            "analisar o projeto no diretorio atual e me explica o que ele faz",
-            "analise o projeto do workspace",
-            "review deeply current project at workspace",
-            "explique o que faz este repositório",
-        ] { assert!(is_project_review_request(prompt), "{prompt}"); }
-        for prompt in ["muito boa sua analise", "ei", "qual o modelo?", "analisar este erro"] {
-            assert!(!is_project_review_request(prompt), "{prompt}");
-        }
-    }
-}
