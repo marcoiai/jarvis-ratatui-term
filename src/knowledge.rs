@@ -73,8 +73,36 @@ pub fn next_pending(workspace:&Path)->Result<Option<Candidate>,String>{
 pub fn list(workspace:&Path)->Result<String,String>{
     let entries=load(workspace)?;
     let pending:Vec<_>=entries.iter().filter(|e|e.status=="pending").collect();
-    if pending.is_empty(){return Ok("No pending knowledge candidates.\n".into())}
-    Ok(pending.iter().map(|e|format!("#{} [{}] {}\n  Evidence: {}\n",e.id,e.classification,e.claim,e.evidence.join("; "))).collect::<Vec<_>>().join("\n"))
+    let approved=entries.iter().filter(|e|e.status=="approved").count();
+    let rejected=entries.iter().filter(|e|e.status=="rejected").count();
+    let blocked=pending.iter().filter(|e|!e.references_checked || e.classification=="inferred").count();
+    let memory_path=workspace.join(".dude/memory.md");
+    let retained=if memory_path.exists() {
+        if fs::symlink_metadata(&memory_path).map_err(|e|e.to_string())?.file_type().is_symlink(){
+            return Err("Refusing symlink memory file".into());
+        }
+        let source=fs::read_to_string(&memory_path).map_err(|e|e.to_string())?;
+        source.lines().filter(|line|line.starts_with("- ")).count()
+    } else {0};
+    let mut report=format!(
+        "Knowledge: {} pending ({} unverified), {} approved, {} rejected; {} retained memory entries.\\n",
+        pending.len(), blocked, approved, rejected, retained
+    );
+    if pending.is_empty(){
+        report.push_str("No pending candidates. Automatic extraction is best-effort; check the last analysis warning.\\n");
+    } else {
+        for item in pending {
+            report.push_str(&format!(
+                "#{} [{}{}] {}\\n  Evidence: {}\\n",
+                item.id,item.classification,
+                if item.references_checked {""} else {", references unverified"},
+                item.claim,
+                if item.evidence.is_empty() {"(none)".to_owned()} else {item.evidence.join("; ")}
+            ));
+        }
+    }
+    report.push_str("Approved memory: .dude/memory.md | Candidate queue: .dude/knowledge_candidates.json\\n");
+    Ok(report)
 }
 pub fn approve(workspace:&Path,id:u64,memory:&crate::memory::Memory)->Result<(),String>{
     let mut entries=load(workspace)?;
