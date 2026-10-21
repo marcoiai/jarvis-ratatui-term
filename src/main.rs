@@ -417,7 +417,7 @@ impl App {
                     let index = messages.iter().position(|m| m.role == "user").unwrap_or(messages.len());
                     messages.insert(index, Message {
                         role: "system".into(),
-                        content: format!("Read-only local workspace reconnaissance (not verified implementation):\\n{map}\\nUse file tools to verify the actual code before claiming how it works."),
+                        content: format!("Read-only local workspace reconnaissance (not verified implementation):\n{map}\nUse file tools to verify the actual code before claiming how it works."),
                     });
                 }
             }
