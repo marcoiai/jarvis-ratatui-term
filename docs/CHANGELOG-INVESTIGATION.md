@@ -102,3 +102,10 @@ Known limitations:
 - Adicionada à SPEC a meta de criar pipeline futuro de dados/avaliação e fine-tuning local, estudando Hugging Face LLM Trainer (SFT, preferências, LoRA/QLoRA) com proteção de código e dados proprietários.
 - Fixados critérios explícitos para saudação `ei` não acionar investigação e para não confundir texto `project_map(path="")` com chamada real de ferramenta.
 - Reafirmada comparação justa com Continue usando a mesma versão do Qwen 3.5 4B e política de ferramentas; documentação não declara funcionalidade entregue.
+
+## 2026-10-21 — Project reviews require real file reads
+
+- Fixed the observable regression where Qwen invented a plausible `src/main.rs` and described it as verified. `ask_ollama` now reads up to four existing, non-sensitive entrypoint/manifest files using the actual `read_file` implementation, with a bounded first-160-line excerpt, **before** sending a whole-project review to Ollama.
+- The prompt distinguishes the successfully read snippets from the heuristic discovery map and older chat memory; additional reading remains autonomous via tools.
+- If none of the candidate files can be read, review returns an explicit error instead of pretending to have inspected code.
+- **Remaining limitations:** this first read set is heuristic (fixed common filenames), cannot establish full architecture or eliminate hallucinations; no complete structured tool provenance, automatic continuation, or test on the user's workspace yet. Requires `cargo fmt --check`, `cargo check`, `cargo test` and Qwen 3.5 4B runtime benchmark.
