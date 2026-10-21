@@ -8,6 +8,25 @@ async fn tool(workspace: PathBuf, name: String, args: Value, evidence: EvidenceC
     }).await.map_err(|e| e.to_string())
 }
 
+// Bound Groq prompt size independently of the local evidence cache.
+// Preserve message roles and tool_call IDs; abbreviate bulky tool outputs.
+fn groq_compact_messages(messages: &[Value]) -> Vec<Value> {
+    const MAX_TOOL_CHARS: usize = 850;
+    const MAX_OTHER_CHARS: usize = 4200;
+    messages.iter().map(|original| {
+        let mut msg = original.clone();
+        let role = msg["role"].as_str().unwrap_or("");
+        let limit = if role == "tool" { MAX_TOOL_CHARS } else { MAX_OTHER_CHARS };
+        if let Some(content) = msg["content"].as_str() {
+            if content.chars().count() > limit {
+                let shortened: String = content.chars().take(limit).collect();
+                msg["content"] = json!(format!("{shortened}\n[truncated for Groq token budget; originals retained in local evidence]"));
+            }
+        }
+        msg
+    }).collect()
+}
+
 pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache, metrics: Metrics) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
@@ -20,10 +39,11 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
         // Rate limits are shared across all Groq calls, including other Symphony roles.
         // Retry the exact same turn; never re-execute completed file tools.
         let mut retries = 0;
+        let outgoing = groq_compact_messages(&convo);
         let response = loop {
             let response = client.post("https://api.groq.com/openai/v1/chat/completions")
                 .bearer_auth(&key)
-                .json(&if tools_enabled { json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}) } else { json!({"model":model,"messages":convo,"stream":false}) })
+                .json(&if tools_enabled { json!({"model":model,"messages":outgoing,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}) } else { json!({"model":model,"messages":convo,"stream":false}) })
                 .send().await.map_err(|e|format!("Groq connection: {e}"))?;
             if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {break response;}
             if retries >= 3 {break response;}
@@ -128,6 +148,14 @@ fn parse_retry_seconds(body: &str) -> Option<f64> {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+    #[test]
+    fn groq_compaction_retains_tool_identity() {
+        let messages = vec![json!({"role":"tool","tool_call_id":"call-1","content":"x".repeat(10000)})];
+        let compact = groq_compact_messages(&messages);
+        assert_eq!(compact[0]["tool_call_id"], "call-1");
+        assert!(compact[0]["content"].as_str().unwrap().len() < 1100);
+        assert_eq!(messages[0]["content"].as_str().unwrap().len(), 10000);
+    }
     #[test]
     fn detects_retry_seconds() {
         assert_eq!(parse_retry_seconds("Please try again in 12.1425s."), Some(12.1425));
