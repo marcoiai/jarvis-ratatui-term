@@ -310,7 +310,7 @@ impl App {
             }
             let provider = self.roles.selected_provider();
             match provider {
-                "ollama" => {self.model = requested.into(); self.model_ready = false;},
+                "ollama" => {self.model = requested.into();},
                 "groq" => self.groq_model = requested.into(),
                 "gemini" => self.gemini_model = requested.into(),
                 other => {self.output.push_str(&format!("No model selection for provider {other}\\n")); return;}
