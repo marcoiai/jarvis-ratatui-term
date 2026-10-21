@@ -47,6 +47,9 @@ struct MessageReply {
     content: String,
     #[serde(default)]
     tool_calls: Vec<ToolCall>,
+    #[serde(default)]
+    #[serde(rename = "thinking")]
+    _thinking: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -374,7 +377,7 @@ impl App {
         } else {
             if let Some(store) = &self.memory {
                 if self.history.len() > 1 && self.history[1].role == "system" {
-                    self.history[1].content = store.context();
+                    self.history[1].content = store.context_for(&input);
                 }
             }
             self.last_question = Some(input.clone());
@@ -600,6 +603,7 @@ async fn ask_ollama(
                 "model": model,
                 "messages": conversation,
                 "stream": false,
+                "think": false,
                 "tools": if allow_tools { file_tools::definitions() } else { Vec::new() },
             }))
             .send()
@@ -621,7 +625,7 @@ async fn ask_ollama(
                 "arguments": call.function.arguments
             }})
         }).collect();
-        conversation.push(json!({"role":"assistant","content":reply.message.content,"tool_calls": calls}));
+        conversation.push(json!({"role":"assistant","content":visible_ollama_answer(&reply.message.content),"tool_calls": calls}));
         for call in reply.message.tool_calls {
             let root = workspace.clone();
             let name = call.function.name;
