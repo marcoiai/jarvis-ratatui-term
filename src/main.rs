@@ -735,7 +735,7 @@ async fn ask_ollama(
             }
             let answer = visible_ollama_answer(&reply.message.content);
             if allow_tools && !demanded_final_answer && evidence.successful_file_reads() > 0
-                && (answer.trim_end().ends_with("vou analisar") || answer.contains("Agora vou ver"))
+                && answer.trim().chars().count() < 180
             {
                 demanded_final_answer = true;
                 conversation.push(json!({"role":"assistant","content":answer}));
