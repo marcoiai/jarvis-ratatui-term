@@ -222,3 +222,11 @@
 - Rejeitamos agora resposta vazia após o filtro com erro explícito e impedimos o gate de citações de aceitar relatório vazio. **Não se trata ainda da recuperação da resposta ausente**: a origem no modelo/stream continua a ser investigada.
 - Decisão de estabilização: priorizar testes de integração `read_file → Ollama → filtro → TUI`, diagnóstico de respostas sem `message.content` e regressões antes de ampliar o conjunto de funcionalidades.
 - Ainda não foi executada compilação/teste no ambiente Linux ou macOS; `cargo check` e `cargo test` são necessários.
+
+## 2026-10-21 — Recuperação do parecer vazio sem repetir ferramentas
+
+- Sintoma observado em `always-video`: três arquivos inspecionados, conclusão visível vazia, somente aviso de referências no painel.
+- O Solo agora faz **uma única tentativa de síntese não-streaming** quando a finalização streaming produz texto visível vazio. Reutiliza a mesma conversa com observações já coletadas, envia `tools: []`, não repete operações no workspace e não inventa conclusões.
+- Se a recuperação produzir texto, transmite-o ao painel e prossegue com a auditoria de citações. Se falhar ou continuar vazia, informa erro explícito.
+- Limitações: a nova tentativa implica inferência e latência adicional apenas no caso de falha; não corrige um Ollama indisponível, nem garante que a resposta tenha qualidade ou citações válidas.
+- A implementação foi revisada estaticamente, mas **não foi compilada nem testada end-to-end** no Linux/macOS; validar especificamente `review current project` e o caso de conteúdo vazio.
