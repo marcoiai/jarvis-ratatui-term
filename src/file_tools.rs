@@ -210,7 +210,7 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let visible: String = excerpt.chars().take(MAX_BYTES).collect();
             let truncated = visible.chars().count() < excerpt.chars().count();
             Ok(format!(
-                "SOURCE EXCERPT: {} | lines {}-{} of {} | complete_file={} | output_truncated={}\\n{}",
+                "SOURCE EXCERPT: {} | lines {}-{} of {} | complete_file={} | output_truncated={}\n{}",
                 relative, start, last_line, total_lines,
                 start == 1 && end >= total_lines && !truncated,
                 truncated, visible
@@ -324,5 +324,25 @@ mod project_map_tests {
         assert!(output.contains("pub fn run"));
         assert!(!output.contains("private"));
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod source_excerpt_contract_tests {
+    use super::*;
+    #[test]
+    fn distinguishes_partial_read_from_complete_file() {
+        let root=std::env::temp_dir().join(format!("dude-excerpt-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("test.rs"),"line1\nline2\nline3\n").unwrap();
+        let partial=execute(&root,"read_file",&json!({"path":"test.rs","start_line":1,"end_line":2})).unwrap();
+        assert!(partial.contains("lines 1-2 of 3"));
+        assert!(partial.contains("complete_file=false"));
+        assert!(!partial.contains("3: line3"));
+        let whole=execute(&root,"read_file",&json!({"path":"test.rs","start_line":1,"end_line":10})).unwrap();
+        assert!(whole.contains("complete_file=true"));
+        assert!(whole.contains("3: line3"));
+        let _=std::fs::remove_dir_all(&root);
     }
 }
