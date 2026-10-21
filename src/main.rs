@@ -629,6 +629,9 @@ async fn ask_ollama(
             if workspace.join(candidate).is_file() {
                 let args = json!({"path":candidate,"start_line":1,"end_line":160});
                 let result = file_tools::execute(&workspace, "read_file", &args);
+                if result.is_ok() {
+                    let _ = evidence.execute(&workspace, "read_file", &args);
+                }
                 if let Ok(contents) = result {
                     if !contents.is_empty() {
                         verified.push(format!("FILE {candidate} (first 160 lines, read now):\n{contents}"));
@@ -680,6 +683,9 @@ async fn ask_ollama(
             let answer = visible_ollama_answer(&reply.message.content);
             if answer.trim().is_empty() {
                 return Err("Ollama returned no final answer; nothing was saved as a verified review".into());
+            }
+            if allow_tools {
+                return Ok(format!("{answer}\n\n---\n{}", evidence.execution_summary()));
             }
             return Ok(answer);
         }
