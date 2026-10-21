@@ -230,3 +230,12 @@
 - Se a recuperação produzir texto, transmite-o ao painel e prossegue com a auditoria de citações. Se falhar ou continuar vazia, informa erro explícito.
 - Limitações: a nova tentativa implica inferência e latência adicional apenas no caso de falha; não corrige um Ollama indisponível, nem garante que a resposta tenha qualidade ou citações válidas.
 - A implementação foi revisada estaticamente, mas **não foi compilada nem testada end-to-end** no Linux/macOS; validar especificamente `review current project` e o caso de conteúdo vazio.
+
+## 2026-10-21 — Estabilização do Solo: resposta final atômica
+
+- Teste em `always-video` confirmou repetição do incidente: 3 leituras, tokens do Ollama registrados, parecer final vazio na TUI, com somente aviso de referências; ocorreu em modo Solo, mesmo após `/cloud allow`.
+- Desativado streaming **apenas no caminho de inferência final do Ollama** em `ask_ollama`: respostas completas passam pelo filtro de raciocínio e só então são exibidas pela TUI, evitando que avisos isolados mascarem ausência de conteúdo.
+- Removido `ChatChunk` antecipado do gate de referências. O alerta permanece anexado ao texto final, quando houver parecer.
+- Implementada tentativa adicional para **respostas não-streaming vazias**, com instrução explícita de conclusão legível. Não repete as chamadas `read_file`; se continuar vazia, retorna erro honesto, sem fabricar relatório.
+- Tradeoff: a síntese final passa a aparecer de uma só vez; a barra de atividade e o tempo decorrido continuam ativos. Esta é uma escolha temporária de estabilização; streaming só deve voltar após testes de regressão.
+- Validação: a branch possui workflow `Rust checks` para Linux/macOS em pull requests. Não foi observada execução do workflow para o commit mais recente no momento da consulta; `cargo check`, `cargo test` e ensaio de integração continuam não verificados.
