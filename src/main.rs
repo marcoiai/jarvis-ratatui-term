@@ -20,6 +20,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
+    text::{Line, Span, Text},
     style::{Color, Style},
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
@@ -57,6 +58,42 @@ struct ToolCall { function: ToolFunction }
 
 #[derive(Deserialize)]
 struct ToolFunction { name: String, arguments: Value }
+
+const DUDE_LOGO: [&str; 11] = [
+    "      ___           ___           ___                        ___",
+    "     /  /\\         /__/\\         /  /\\          ___         /  /\\",
+    "    /  /:/_        \\  \\:\\       /  /::\\        /__/\\       /  /::\\",
+    "   /  /:/ /\\        \\  \\:\\     /  /:/\\:\\       \\  \\:\\     /  /:/\\:\\",
+    "  /  /:/ /:/_   _____\\__\\:\\   /  /:/  \\:\\       \\  \\:\\   /  /:/~/::\\",
+    " /__/:/ /:/ /\\ /__/::::::::\\ /__/:/ \\__\\:\\  ___  \\__\\:\\ /__/:/ /:/\\:\\",
+    " \\  \\:\\/:/ /:/ \\  \\:\\~~\\~~\\/ \\  \\:\\ /  /:/ /__/\\ |  |:| \\  \\:\\/:/__\\/",
+    "  \\  \\::/ /:/   \\  \\:\\  ~~~   \\  \\:\\  /:/  \\  \\:\\|  |:|  \\  \\::/",
+    "   \\  \\:\\/:/     \\  \\:\\        \\  \\:\\/:/    \\  \\:\\__|:|   \\  \\:\\",
+    "    \\  \\::/       \\  \\:\\        \\  \\::/      \\__\\::::/     \\  \\:\\",
+    "     \\__\\/         \\__\\/         \\__\\/           ~~~~       \\__\\/"
+];
+
+fn greeting() -> String {
+    format!("{}\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType a question or /help for commands.\n", DUDE_LOGO.join("\n"))
+}
+
+fn styled_output(output: &str) -> Text<'_> {
+    if !output.starts_with(DUDE_LOGO[0]) { return Text::raw(output); }
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    for (i, line) in output.lines().enumerate() {
+        if i < DUDE_LOGO.len() {
+            // The last glyph block is the red accent; the rest remains white.
+            let split = line.char_indices().find(|(idx,_)| *idx >= 55).map(|(idx,_)| idx).unwrap_or(line.len());
+            lines.push(Line::from(vec![
+                Span::styled(&line[..split], Style::default().fg(Color::White)),
+                Span::styled(&line[split..], Style::default().fg(Color::Red)),
+            ]));
+        } else {
+            lines.push(Line::raw(line));
+        }
+    }
+    Text::from(lines)
+}
 
 enum ResultMessage {
     ModelReady(Result<String, String>),
@@ -113,17 +150,7 @@ impl App {
         Self {
             input: String::new(),
             key_prompt: None,
-            output: String::from(concat!(
-                "D.U.D.E. — Demented Unified Development Entity\n",
-                "Enova Engineering Assistant | Local AI Mode\n\n",
-                "DUDE initialized successfully.\n",
-                "Sanity checks: FAILED.\n",
-                "NOVVS diagnostics: STANDBY.\n",
-                "Coffee dependency: CRITICAL.\n",
-                "Ready to deploy questionable decisions (with your approval).\n\n",
-                "Hey dude! What are we building today?\n",
-                "Type a question or /help for model and provider commands.\n"
-            )),
+            output: greeting(),
             history,
             scroll: 0,
             follow_output: true,
@@ -771,7 +798,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         } else {
             "Answer · Ready".to_owned()
         };
-        let output = Paragraph::new(app.output.as_str())
+        let output = Paragraph::new(styled_output(&app.output))
             .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         if app.follow_output {
