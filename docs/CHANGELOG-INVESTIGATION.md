@@ -131,3 +131,11 @@ Known limitations:
 - Expandido teste do `EvidenceCache` para cobrir `len()` e `export()`, além do registro de execução real, erro e cache hit.
 - Benchmark Ghost Player: usuário confirmou Vue + Tauri e integrações YouTube, Google Custom Search, Gemini e Google Cast, corroborando descobertas do DUDE. Resposta conversacional a elogio também foi adequada. Falta observar telemetria real das ferramentas para avaliar proveniência.
 - **Validação pendente:** `cargo fmt --check`, `cargo check`, `cargo test`, execução Solo com Qwen 3.5 4B. Não classificar como aprovado sem isso.
+
+## 2026-10-21 — Solo: intenção de revisão e fatos atuais do workspace
+
+- Corrigido o reconhecimento de revisão de projeto para incluir a frase real do benchmark: `analisar o projeto no diretorio atual e me explica o que ele faz`, além de português/inglês equivalente; elogios e conversas normais não disparam esse caminho.
+- A revisão executa `grep_search` no workspace atual para os identificadores `OLLAMA_MODEL`, `history.jsonl`, `memory.json`, `router.rs`, além das leituras iniciais e mapa, fornecendo ao LLM correspondências atuais e origem em arquivos (uma busca vazia não comprova inexistência).
+- Todos esses acessos passam pelo `EvidenceCache`, aparecendo no resumo real das ferramentas.
+- Teste unitário de reconhecimento da intenção adicionado. **Compilação, testes e execução com Qwen ainda não validados no ambiente Linux do usuário.**
+- Limitação: essas buscas focadas são uma medida para a regressão observada e não garantem exatidão total. Continua pendente aprimorar seleção contextual de arquivos, recuperação após falha e verificação da qualidade do relatório.
