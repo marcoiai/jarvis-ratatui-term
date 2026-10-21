@@ -73,3 +73,27 @@ impl EvidenceCache {
     }
     pub fn len(&self) -> usize { self.0.lock().map(|c|c.len()).unwrap_or(0) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[test]
+    fn records_real_reads_cache_hits_and_errors() {
+        let root = std::env::temp_dir().join(format!("dude-evidence-{}-alpha", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("hello.rs"), "fn hello() {}").unwrap();
+        let evidence = EvidenceCache::default();
+        let args = json!({"path":"hello.rs"});
+        assert!(evidence.execute(&root,"read_file",&args).contains("hello"));
+        assert!(evidence.execute(&root,"read_file",&args).contains("hello"));
+        assert!(evidence.execute(&root,"read_file",&json!({"path":"missing.rs"})).starts_with("Tool error:"));
+        let summary = evidence.execution_summary();
+        assert!(summary.contains("1 successful, 1 errors, 1 cache hits"));
+        assert!(summary.contains("read_file(hello.rs) [ok]"));
+        assert!(summary.contains("read_file(hello.rs) [cache_hit]"));
+        assert!(summary.contains("read_file(missing.rs) [error]"));
+        let _ = fs::remove_dir_all(&root);
+    }
+}
