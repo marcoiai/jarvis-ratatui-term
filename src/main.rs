@@ -596,6 +596,22 @@ async fn ask_ollama(
     let mut conversation: Vec<Value> = messages.into_iter().map(|m| {
         json!({"role": m.role, "content": m.content})
     }).collect();
+    let question = conversation.iter().rev()
+        .find(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_str()).unwrap_or("").to_lowercase();
+    let is_project_review = allow_tools && (
+        question.contains("review") && question.contains("project")
+        || question.contains("analise") && question.contains("projeto")
+        || question.contains("análise") && question.contains("projeto")
+    );
+    if is_project_review {
+        // Seed a *fresh* workspace overview. Prior conversation is not evidence of this run.
+        let map = file_tools::execute(&workspace, "project_map", &json!({"path":"."}))
+            .unwrap_or_else(|e| format!("Project map unavailable: {e}"));
+        conversation.push(json!({"role":"system","content":format!(
+            "Fresh workspace inventory (generated for THIS request, not previously remembered):\\n{map}\\n\\nThis inventory identifies paths and candidate declarations only; it does NOT verify file implementations. Read important files using tools before asserting verified components. Earlier conversation answers are unverified background, not fresh evidence."
+        )}));
+    }
     if allow_tools {
         conversation.push(json!({"role":"system","content":concat!(
             "Investigate the actual workspace, not just prior chat memory. ",
@@ -618,7 +634,7 @@ async fn ask_ollama(
             }))
             .send()
             .await
-            .map_err(|e| format!("Cannot reach Ollama: {e}"))?;
+            .map_err(|e| format!("Ollama request failed (host={host}, model={model}; connect={}, timeout={}): {e}", e.is_connect(), e.is_timeout()))?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -626,7 +642,11 @@ async fn ask_ollama(
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
         if reply.message.tool_calls.is_empty() {
-            return Ok(visible_ollama_answer(&reply.message.content));
+            let answer = visible_ollama_answer(&reply.message.content);
+            if answer.trim().is_empty() {
+                return Err("Ollama returned no final answer; nothing was saved as a verified review".into());
+            }
+            return Ok(answer);
         }
         if !allow_tools { return Err("Unexpected Ollama tool call in review-only stage".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
