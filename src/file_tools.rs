@@ -143,3 +143,23 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
+
+#[cfg(test)]
+mod project_map_tests {
+    use super::*;
+    #[test]
+    fn maps_rust_declarations_without_reading_hidden_state() {
+        let root = std::env::temp_dir().join(format!("dude-map-{}-{}", std::process::id(), "alpha"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Engine;\nimpl Engine {\n    pub fn run(&self) {}\n}\n").unwrap();
+        fs::create_dir_all(root.join(".dude")).unwrap();
+        fs::write(root.join(".dude/secret.rs"), "pub fn private() {}").unwrap();
+        let output = execute(&root, "project_map", &json!({"path": "."})).unwrap();
+        assert!(output.contains("src/lib.rs:"));
+        assert!(output.contains("pub struct Engine"));
+        assert!(output.contains("pub fn run"));
+        assert!(!output.contains("private"));
+        let _ = fs::remove_dir_all(&root);
+    }
+}
