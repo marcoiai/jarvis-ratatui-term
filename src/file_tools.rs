@@ -8,6 +8,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type":"function","function":{"name":"list_files","description":"List files in a workspace directory (read-only).","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path, default ."}}}}}),
         json!({"type":"function","function":{"name":"read_file","description":"Read a text file, optionally limited to line range. Similar to sed -n, but read-only.","parameters":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer"},"end_line":{"type":"integer"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"project_map","description":"Read-only compact repository map: paths and approximate Rust, PHP, Java, C++ and Python declarations; use before reading many source files.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path (default .)"}}}}}),
         json!({"type":"function","function":{"name":"search_text","description":"Search text in workspace files, like grep -n. No regex; case-sensitive literal search.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File or directory relative path, default ."},"pattern":{"type":"string"}},"required":["pattern"]}}})
     ]
 }
@@ -83,6 +84,43 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
                 .map(|(i,l)| format!("{}: {}",i+1,l))
                 .collect::<Vec<_>>().join("\n");
             Ok(value.chars().take(MAX_BYTES).collect())
+        }
+        "project_map" => {
+            let mut files = Vec::new();
+            scan(&path, &mut files)?;
+            let mut lines = Vec::new();
+            for file in files {
+                let rel = file.strip_prefix(root).unwrap_or(&file);
+                let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if !matches!(ext, "rs" | "php" | "java" | "cpp" | "hpp" | "h" | "py" | "js" | "ts") { continue; }
+                lines.push(format!("{}:", rel.display()));
+                if let Ok(source) = read_limited(&file) {
+                    for (i, line) in source.lines().enumerate() {
+                        let declaration = line.trim_start();
+                        let is_signature = match ext {
+                            "rs" => declaration.starts_with("pub fn ")
+                                || declaration.starts_with("fn ")
+                                || declaration.starts_with("pub struct ")
+                                || declaration.starts_with("struct ")
+                                || declaration.starts_with("pub enum ")
+                                || declaration.starts_with("enum ")
+                                || declaration.starts_with("impl ")
+                                || declaration.starts_with("pub trait "),
+                            "py" => declaration.starts_with("def ") || declaration.starts_with("class ")
+                                || declaration.starts_with("async def "),
+                            _ => declaration.starts_with("class ") || declaration.starts_with("interface ")
+                                || declaration.starts_with("function ") || declaration.starts_with("public class ")
+                                || declaration.starts_with("export function ") || declaration.starts_with("export class "),
+                        };
+                        if is_signature {
+                            lines.push(format!("  {}: {}", i + 1, declaration.chars().take(140).collect::<String>()));
+                        }
+                        if lines.len() >= 650 { break; }
+                    }
+                }
+                if lines.len() >= 650 { break; }
+            }
+            Ok(lines.join("\n").chars().take(MAX_BYTES).collect())
         }
         "search_text" => {
             let pattern = args.get("pattern").and_then(Value::as_str).ok_or("Missing pattern")?;
