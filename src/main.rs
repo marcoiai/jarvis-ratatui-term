@@ -800,7 +800,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
     let evidence_for_gate = evidence.clone();
-    let updates_for_audit = updates.clone();
+
     let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
@@ -814,9 +814,6 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         }
         if !evidence_for_gate.has_supported_citation(&answer) {
             let warning = "\n\n⚠ DUDE: este parecer não apresenta referências arquivo:linha confirmadas nas leituras. É uma síntese preliminar, não uma verificação das afirmações.\n";
-            if let Some(tx) = updates_for_audit {
-                let _ = tx.send(ResultMessage::ChatChunk(warning.to_owned()));
-            }
             return Ok(format!("{answer}{warning}"));
         }
     }
@@ -901,7 +898,9 @@ async fn ask_ollama(
         }
         // Internal extraction has no UI consumer: request one complete JSON response.
         // Streaming is only useful when sending ChatChunk updates to the TUI.
-        let stream_final = !tools_enabled && updates.is_some();
+        // Stability first: receive final synthesis as one complete response.
+        // This prevents an audit warning from being the only streamed content.
+        let stream_final = false;
         let request_start = Instant::now();
         let response = client
             .post(format!("{host}/api/chat"))
@@ -1003,7 +1002,33 @@ async fn ask_ollama(
         metrics.stage("ollama_http","ollama",request_start,true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
-            return response_filter::strip_completed(&reply.message.content);
+            let answer = response_filter::strip_completed(&reply.message.content)?;
+            if !answer.trim().is_empty() {
+                return Ok(answer);
+            }
+            if tools_enabled {
+                return Err("Ollama returned an empty response while tools were enabled.".into());
+            }
+            // The original completion can consume tokens without producing any
+            // visible text. Retry once, with no tools and explicit user-facing output.
+            let mut retry_messages = conversation.clone();
+            retry_messages.push(json!({"role":"user","content":
+                "Your previous response was empty. Provide the final answer now in ordinary visible text. Do not use thinking tags. Cite source lines only when observed; state uncertainty otherwise."}));
+            let retry = client.post(format!("{host}/api/chat"))
+                .json(&json!({
+                    "model":model,"messages":retry_messages,"stream":false,"think":false,
+                    "options":{"num_ctx": investigation::context_size()},"tools":[]
+                })).send().await.map_err(|e|format!("Empty Ollama reply and retry failed: {e}"))?;
+            if !retry.status().is_success() {
+                return Err(format!("Empty Ollama reply; retry HTTP {}",retry.status()));
+            }
+            let second: OllamaReply = retry.json().await
+                .map_err(|e|format!("Invalid Ollama retry response: {e}"))?;
+            let answer = response_filter::strip_completed(&second.message.content)?;
+            if answer.trim().is_empty() {
+                return Err("Ollama generated tokens but no visible review, even on retry. No conclusions were fabricated.".into());
+            }
+            return Ok(answer);
         }
         if !tools_enabled { return Err("Ollama requested tools during final synthesis; try another model or a narrower request.".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
