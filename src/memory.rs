@@ -5,6 +5,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Exchange { pub user: String, pub assistant: String }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingRequest {
+    pub question: String,
+    #[serde(default)]
+    pub roles: Option<crate::roles::Roles>,
+    #[serde(default)]
+    pub ollama_model: Option<String>,
+    #[serde(default)]
+    pub groq_model: Option<String>,
+    #[serde(default)]
+    pub gemini_model: Option<String>,
+    #[serde(default)]
+    pub cloud_was_allowed: bool,
+}
+
 pub struct Memory { dir: PathBuf }
 
 impl Memory {
@@ -99,17 +114,15 @@ impl Memory {
     }
 
     /// Durable recovery marker for the in-flight user request. It is NOT curated learning.
-    pub fn save_pending(&self, question: &str) -> Result<(), String> {
+    pub fn save_pending(&self, pending: &PendingRequest) -> Result<(), String> {
+        let question = &pending.question;
         if question.len() > 32_000 { return Err("Pending request too large".into()); }
         let destination = self.dir.join("pending_request.json");
         if destination.exists() && fs::symlink_metadata(&destination).map_err(|e|e.to_string())?.file_type().is_symlink() {
             return Err("Refusing symlink pending file".into());
         }
         let tmp = self.dir.join(format!(".pending-{}.tmp", std::process::id()));
-        let data = serde_json::to_vec(&serde_json::json!({
-            "created_utc": chrono::Utc::now().to_rfc3339(),
-            "question": question,
-        })).map_err(|e|e.to_string())?;
+        let data = serde_json::to_vec(pending).map_err(|e|e.to_string())?;
         let result = (|| -> Result<(), String> {
             let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e|e.to_string())?;
             file.write_all(&data).map_err(|e|e.to_string())?;
@@ -119,7 +132,7 @@ impl Memory {
         if result.is_err() { let _=fs::remove_file(&tmp); }
         result
     }
-    pub fn pending(&self) -> Result<Option<String>, String> {
+    pub fn pending(&self) -> Result<Option<PendingRequest>, String> {
         let path=self.dir.join("pending_request.json");
         if !path.exists() { return Ok(None); }
         if fs::symlink_metadata(&path).map_err(|e|e.to_string())?.file_type().is_symlink() {
@@ -127,8 +140,8 @@ impl Memory {
         }
         let data=fs::read(path).map_err(|e|e.to_string())?;
         if data.len()>40_000 {return Err("Pending request too large".into());}
-        let value:serde_json::Value=serde_json::from_slice(&data).map_err(|e|e.to_string())?;
-        Ok(value["question"].as_str().map(str::to_owned))
+        let value:PendingRequest=serde_json::from_slice(&data).map_err(|e|e.to_string())?;
+        Ok(Some(value))
     }
     pub fn clear_pending(&self) -> Result<(),String> {
         let path=self.dir.join("pending_request.json");
@@ -201,10 +214,13 @@ mod tests {
     fn restores_unfinished_request_after_reopen() {
         let fixture=Fixture::new();
         let memory=Memory::open(&fixture.0).unwrap();
-        memory.save_pending("analise o projeto").unwrap();
+        memory.save_pending(&PendingRequest {
+            question:"analise o projeto".into(), roles: None,
+            ollama_model:None, groq_model:None, gemini_model:None, cloud_was_allowed:false,
+        }).unwrap();
         drop(memory);
         let restored=Memory::open(&fixture.0).unwrap();
-        assert_eq!(restored.pending().unwrap().as_deref(),Some("analise o projeto"));
+        assert_eq!(restored.pending().unwrap().unwrap().question,"analise o projeto");
         restored.clear_pending().unwrap();
         assert!(restored.pending().unwrap().is_none());
     }
