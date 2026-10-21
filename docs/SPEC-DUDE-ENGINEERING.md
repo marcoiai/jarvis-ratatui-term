@@ -63,3 +63,27 @@ Separar os subsistemas sem dependência da TUI:
 - Mudanças sempre pequenas, versionadas com changelog, testes e avaliação. Evitar marcar como concluído apenas porque houve commit.
 - **Não transformar citação por linha em gate de qualidade**: nunca bloquear, descartar ou rebaixar um parecer tecnicamente útil pela ausência de referências `path:linha`. Avaliar compreensão, correção, profundidade e utilidade em primeiro lugar. Referências pontuais são opcionais e devem ser precisas quando fornecidas.
 - Nunca resetar/regravar branches ativas sem preservar histórico ou decisão explícita.
+
+
+## 7. Meta evolutiva: especialização de modelos (fine-tuning)
+
+**Objetivo de longo prazo:** permitir que o DUDE prepare, avalie e execute localmente modelos pequenos especializados em engenharia de software e nos papéis do Symphony. Referência para estudo: [Hugging Face LLM Trainer](https://huggingface.co/spaces/hf-skills/llm-trainer), com métodos como SFT, treinamento por preferências (DPO), LoRA/QLoRA e eventual treinamento por recompensa, apenas quando demonstrar vantagem. Isso é **meta**, não funcionalidade implementada.
+
+Caminho exigido antes de treinar:
+1. Estabilizar Solo, ferramentas, memória, índice e avaliação; fine-tuning **não** substitui um tool handshake correto nem resolve bugs de integração.
+2. Instrumentar traces estruturados *opt-in*: modelo e configuração, tarefa, sequência de chamadas/resultados de ferramentas, erros, evidência de origem, decisão final, duração e avaliações de qualidade.
+3. Separar dados públicos/sintéticos de código, credenciais e informações proprietárias. **Nunca enviar workspace NOVVS/Enova, memória privada ou traces sensíveis à nuvem sem autorização explícita e política de tratamento aprovada**. Preferir testes locais e sanitização verificável.
+4. Construir conjunto de treinamento e um **holdout** independente, com cenários de navegação, recuperação de caminho, comportamento sem alucinações, revisão de código e colaboração Investigator/Architect/Reviewer.
+5. Comparar modelo original vs. modelo ajustado no mesmo hardware, modelo-base, tarefas e políticas de ferramentas; medir fatos corretos, profundidade, tool use, latência, regressões, privacidade e custo. Rejeitar treinamento que reduza qualidade ou confiabilidade.
+6. Se o desempenho justificar, exportar pesos/adaptador em formato compatível com execução local (por exemplo, GGUF/Ollama conforme suporte real do modelo) e manter rollback e identificação exata do modelo.
+
+O DUDE deve continuar **agnóstico ao fornecedor e ao modelo**; Qwen 3.5 4B é baseline atual para comparação com Continue, não dependência permanente.
+
+## 8. Requisitos de interação e testes de regressão do Solo
+
+- **Intenção leve ≠ investigação:** saudações isoladas (`oi`, `ola`, `olá`, `hey`, `ei` etc.) devem responder imediatamente sem solicitar mapa do projeto, abrir arquivos, fazer chamada ao Ollama ou acionar Dual/Symphony. A regra precisa distinguir `ei` de `ei, analisa o projeto`. Não usar roteamento pesado apenas para conversar.
+- **Chamada de ferramenta ≠ resposta textual:** o agente executa exclusivamente chamadas estruturadas do tool handshake. Se o modelo escrever `project_map(path="")` em texto/Markdown sem `tool_calls`, isso **não comprova que a ferramenta foi executada**; deve haver distinção clara entre texto gerado e ações reais.
+- **Proveniência por execução:** relatar de modo verificável ferramentas realmente executadas, arquivos efetivamente abertos e conhecimento recuperado da memória; não classificar texto anterior como inspeção nova. Erros de conexão não devem produzir relatórios ficticiamente verificados.
+- **Comparação justa com Continue:** mesmo `qwen3.5:4b` (confirmar tag e quantização), mesmo workspace, tarefa e limites relevantes; comparar sequência real de ferramentas e qualidade, não apenas aparência da resposta.
+- **Segurança:** leitura automática dentro das permissões e limites do workspace; escrita, execução potencialmente mutável e envio à nuvem requerem política explícita e aprovação conforme risco.
+- **Aceite de regressão de saudação:** `oi`, `ola`, `hey`, `ei` não devem invocar o Ollama; `review deeply current project at workspace` deve investigar e mostrar evidências reais. Validar ambos em Linux com Ollama remoto no Mac.
