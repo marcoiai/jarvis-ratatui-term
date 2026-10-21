@@ -52,3 +52,21 @@
 - TODO before alpha acceptance: run `cargo check`, `cargo test`, compare Qwen Solo before/after on the same workspace and question, record tool calls, elapsed time and answer quality.
 - Symphony remains an experimental separate mode; do not claim mature shared-state multi-agent orchestration until validated.
 - Codex fork intentionally **not performed**: OpenAI Codex is a distinct Apache-2.0 Rust agent; assess as independent experimental downstream before adopting its runtime/security and contribution obligations.
+
+## 2026-10-21 — Corrective engineering pass against Continue reference
+
+Reference implementation inspected:
+- Continue `core/llm/llms/Ollama.ts` separates thinking/content/tool calls and maintains provider tool compatibility.
+- Continue `core/context/providers/SearchContextProvider.ts` delegates exact workspace search to an IDE search implementation.
+
+DUDE changes:
+- Added `find_files(query)` as a bounded, read-only workspace path lookup to recover from mistaken relative paths; validated with a nested `apps/recinto/config/security.yml` fixture.
+- Updated Ollama investigation instructions to prefer workspace-based discoveries over old conversation assumptions, start with map/discovery for repository reviews, open relevant implementations, and retry wrong paths via `find_files`.
+- Increased the maximum tool iterations from 8 to 18 for tool-enabled requests. **This is a provisional bound, not mature planning or guaranteed depth.**
+- Existing `project_map`, `context_for`, and separate Ollama `thinking` field remain in the alpha.
+
+Known limitations:
+- `scan` bounds search to the first 150 files, so `find_files` may miss files in a large repo; reporting 'not found' is not proof of absence.
+- No automated rescue call is performed after a failed `read_file`; the agent must choose `find_files`.
+- No actual code indexing/FTS, robust persistent evidence cache with invalidation, or structured Symphony collaboration yet.
+- No compile/test execution done here; run `cargo fmt --check && cargo check && cargo test` in the checkout, then benchmark same project/prompt/model against Continue.
