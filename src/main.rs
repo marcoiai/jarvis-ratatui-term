@@ -58,6 +58,12 @@ struct ToolCall { function: ToolFunction }
 #[derive(Deserialize)]
 struct ToolFunction { name: String, arguments: Value }
 
+fn is_simple_greeting(input: &str) -> bool {
+    matches!(input.trim().to_lowercase().as_str(),
+        "oi" | "olá" | "ola" | "opa" | "e aí" | "e ai" |
+        "bom dia" | "boa tarde" | "boa noite" | "hello" | "hi" | "hey")
+}
+
 enum ResultMessage {
     ModelReady(Result<String, String>),
     Chat(Result<String, String>),
@@ -366,6 +372,11 @@ impl App {
             return;
         }
 
+        // A greeting requires no LLM round-trip and no workspace scan.
+        if is_simple_greeting(&input) {
+            self.output.push_str("Oi, buddy! DUDE pronto. O que vamos investigar?\n");
+            return;
+        }
         self.busy = true;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
@@ -872,5 +883,18 @@ mod ollama_answer_tests {
     fn preserves_plain_answers() {
         assert_eq!(visible_ollama_answer("Architecture summary"), "Architecture summary");
         assert_eq!(visible_ollama_answer("<think>unfinished"), "");
+    }
+}
+
+#[cfg(test)]
+mod solo_routing_tests {
+    use super::is_simple_greeting;
+    #[test]
+    fn greeting_is_local_and_case_insensitive() {
+        assert!(is_simple_greeting("Oi"));
+        assert!(is_simple_greeting(" olá "));
+        assert!(is_simple_greeting("BOM DIA"));
+        assert!(!is_simple_greeting("oi, analise este projeto"));
+        assert!(!is_simple_greeting("review current project"));
     }
 }
