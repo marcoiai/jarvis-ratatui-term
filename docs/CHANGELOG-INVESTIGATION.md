@@ -124,3 +124,10 @@ Known limitations:
 - Leituras iniciais de revisão agora passam pelo mesmo rastreamento sem releitura duplicada; cache continua restrito a uma solicitação, sem mudança na arquitetura de memória.
 - Teste unitário de leituras, cache hit e caminho ausente incluído. **Ainda requer** compilação/testes no checkout Linux e teste real com Qwen 3.5 4B.
 - Limites: erros de provider no meio da investigação ainda retornam erro sem resumo parcial de ações, a interface ainda não tem feed de eventos em tempo real, e o histórico de ferramentas não substitui avaliação factual do relatório.
+
+## 2026-10-21 — Regressão encontrada ao revisar o Solo
+
+- Corrigido erro de compilação em `EvidenceCache::export` e `EvidenceCache::len`: após a mudança de tupla para campos nomeados, os dois métodos ainda usavam `self.0`; agora usam `self.cache`.
+- Expandido teste do `EvidenceCache` para cobrir `len()` e `export()`, além do registro de execução real, erro e cache hit.
+- Benchmark Ghost Player: usuário confirmou Vue + Tauri e integrações YouTube, Google Custom Search, Gemini e Google Cast, corroborando descobertas do DUDE. Resposta conversacional a elogio também foi adequada. Falta observar telemetria real das ferramentas para avaliar proveniência.
+- **Validação pendente:** `cargo fmt --check`, `cargo check`, `cargo test`, execução Solo com Qwen 3.5 4B. Não classificar como aprovado sem isso.
