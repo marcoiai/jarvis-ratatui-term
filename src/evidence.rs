@@ -214,12 +214,27 @@ mod tests {
         let evidence = EvidenceCache::default();
         evidence.execute(&root, "read_file", &json!({"path":"example.rs","start_line":2,"end_line":2}));
         assert!(evidence.observed_reference("example.rs:2"));
+        assert!(evidence.declaration_drafts(6).is_empty());
         assert!(evidence.has_supported_citation("Implementação em example.rs:2"));
         assert!(!evidence.has_supported_citation("Implementação em example.rs:1"));
         assert!(!evidence.has_supported_citation("Sem referências"));
         assert!(!evidence.observed_reference("example.rs:1"));
         assert!(!evidence.observed_reference("other.rs:2"));
         assert!(!evidence.observed_reference("example.rs"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn declaration_drafts_require_actual_read_file_lines() {
+        let root=std::env::temp_dir().join(format!("dude-decl-{}",std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("sample.rs"),"pub struct Agent;\nfn private() {}\npub fn run() {}\n").unwrap();
+        let evidence=EvidenceCache::default();
+        evidence.execute(&root,"read_file",&json!({"path":"sample.rs"}));
+        let drafts=evidence.declaration_drafts(6);
+        assert_eq!(drafts.len(),2);
+        assert_eq!(drafts[0].evidence,vec!["sample.rs:1"]);
+        assert_eq!(drafts[1].evidence,vec!["sample.rs:3"]);
+        assert!(drafts.iter().all(|d|evidence.observed_reference(&d.evidence[0])));
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
