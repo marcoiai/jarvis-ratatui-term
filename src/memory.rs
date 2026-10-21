@@ -37,6 +37,32 @@ impl Memory {
             self.read("memory.md", 5000),
             self.read("decisions.md", 3500))
     }
+    /// Reuse relevant approved project knowledge instead of flooding each turn
+    /// with the complete memory. Never auto-promote chat/history as knowledge.
+    pub fn context_for(&self, question: &str) -> String {
+        let keywords: Vec<String> = question
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|term| term.chars().count() >= 4)
+            .map(|term| term.to_lowercase())
+            .collect();
+        let knowledge = self.read("memory.md", 20000);
+        let decisions = self.read("decisions.md", 14000);
+        let relevant = |text: &str| -> String {
+            let mut scored: Vec<_> = text.lines().enumerate()
+                .filter(|(_, line)| !line.trim().is_empty() && !line.starts_with('#'))
+                .filter_map(|(i, line)| {
+                    let lower = line.to_lowercase();
+                    let hits = keywords.iter().filter(|word| lower.contains(word.as_str())).count();
+                    (hits > 0).then_some((i, hits, line))
+                }).collect();
+            scored.sort_by(|a,b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            scored.into_iter().take(12).map(|(_,_,line)| line)
+                .collect::<Vec<_>>().join("\n")
+        };
+        format!("Project context (user-maintained):\n{}\nRelevant approved knowledge:\n{}\nRelevant decisions:\n{}",
+            self.read("context.md", 3500), relevant(&knowledge), relevant(&decisions))
+    }
+
     fn append(&self, file: &str, text: &str) -> Result<(), String> {
         if text.trim().is_empty() || text.len() > 4000 { return Err("Entry must be 1-4000 bytes".into()); }
         let path = self.dir.join(file);
@@ -117,6 +143,16 @@ mod tests {
         assert!(restored.location().join("checkpoints.md").exists());
     }
 
+    #[test]
+    fn contextual_memory_only_retrieves_matching_entries() {
+        let fixture = Fixture::new();
+        let memory = Memory::open(&fixture.0).unwrap();
+        memory.remember("Frete calculado no serviço de transporte").unwrap();
+        memory.remember("Relatório de estoque usa outra consulta").unwrap();
+        let context = memory.context_for("onde calculamos frete?");
+        assert!(context.contains("Frete calculado"));
+        assert!(!context.contains("Relatório de estoque"));
+    }
     #[test]
     fn corrupted_history_line_does_not_lose_valid_entries() {
         let fixture=Fixture::new();
