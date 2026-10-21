@@ -145,7 +145,7 @@ impl App {
             cloud_allowed: false,
             dual_enabled: env::var("DUDE_DUAL_LOCAL").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             reasoning_model: env::var("OLLAMA_REASONING_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".into()),
-            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
+            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3.5:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
                 .trim_end_matches('/')
@@ -709,9 +709,9 @@ async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> 
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            installed.first().cloned().ok_or_else(|| format!("Model pull failed (HTTP {status}): {body}"))
+            Err(format!("Required model {preferred} could not be downloaded (HTTP {status}): {body}"))
         }
-        Err(error) => installed.first().cloned().ok_or(error),
+        Err(error) => Err(error),
     }
 }
 
