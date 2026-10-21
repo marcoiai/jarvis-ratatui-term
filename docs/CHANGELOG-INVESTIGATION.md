@@ -41,3 +41,14 @@
 - O refresh do contexto do projeto no envio de mensagens usa recuperação direcionada. Essa seleção é lexical, não vetorial; perguntas genéricas podem receber pouco conhecimento recuperado.
 - Não foi introduzido ainda índice estrutural (Tree-sitter/FTS) ou cache persistente com invalidação por hash; estes exigem desenho e teste dedicados.
 - Validação local pendente: `cargo fmt --check`, `cargo check`, `cargo test` e execução real com Qwen no Ollama do Mac e código no Linux.
+
+## 2026-10-21 — Alpha Continue-inspired (branch feat/dude-alpha-continue)
+
+- Isolated experimental alpha from the tested Solo checkpoint; preserves the existing Solo and opt-in Dual-local configurations.
+- New read-only `project_map` tool exports a bounded, approximate map of source declarations and paths for Rust, Python, and select Java/PHP/C++/JavaScript/TypeScript forms. Built using the existing safe workspace scan; respects exclusion of `.dude`, `.git`, secrets, and dependency directories.
+- The map is a heuristic *on-demand* overview; it is not yet Tree-sitter, full-text indexing, a persistent hash-invalidation cache, or automatic semantic retrieval. Its purpose is to provide a cheap exploration step for Qwen.
+- Retains earlier Ollama structured-response changes and per-question retrieval of approved project memory.
+- Tests added for map extraction and memory-directory exclusion, alongside existing memory and think-tag tests.
+- TODO before alpha acceptance: run `cargo check`, `cargo test`, compare Qwen Solo before/after on the same workspace and question, record tool calls, elapsed time and answer quality.
+- Symphony remains an experimental separate mode; do not claim mature shared-state multi-agent orchestration until validated.
+- Codex fork intentionally **not performed**: OpenAI Codex is a distinct Apache-2.0 Rust agent; assess as independent experimental downstream before adopting its runtime/security and contribution obligations.
