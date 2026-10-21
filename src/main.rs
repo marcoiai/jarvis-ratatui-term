@@ -435,13 +435,13 @@ impl App {
             }
             tokio::spawn(async move {
                 let result = async {
-                    let interpreted = interpret_request(&client, &url, &messages).await?;
+                    let interpreted = interpret_request(&client, &url, &workspace, &messages).await?;
                     let mut routed_messages = messages;
                     routed_messages.push(Message {
                         role: "system".into(),
                         content: format!(
-                            "The interpreter reformulated the user's latest message. Use this as task guidance, NOT as file evidence. Always preserve the original user's wording and constraints.\nInterpreted task: {}\nNeeds workspace investigation: {}",
-                            interpreted.task, interpreted.needs_workspace
+                            "The DUDE core has selected workspace {} and provides actual local read-only tools to the Coder. Do not claim workspace access is unavailable. The interpreter reformulated the user's latest message. Use this as task guidance, NOT as file evidence. Always preserve the original user's wording and constraints.\nInterpreted task: {}\nNeeds workspace investigation: {}",
+                            workspace.display(), interpreted.task, interpreted.needs_workspace
                         ),
                     });
                     let evidence = evidence;
@@ -625,6 +625,7 @@ fn parse_interpreted_request(content: &str) -> Result<InterpretedRequest, String
 async fn interpret_request(
     client: &reqwest::Client,
     host: &str,
+    workspace: &std::path::Path,
     messages: &[Message],
 ) -> Result<InterpretedRequest, String> {
     let model = env::var("DUDE_INTERPRETER_MODEL").unwrap_or_else(|_| "qwen3:4b-instruct-2507-q4_K_M".to_string());
@@ -638,6 +639,7 @@ async fn interpret_request(
         "A compliment or greeting needs no workspace inspection. ",
         "Do not infer facts from previous assistant responses as verified code."
     )})];
+    context.push(json!({"role":"system","content":format!("The DUDE core has a currently selected, accessible local workspace at {}. The Coder has real read-only filesystem tools for it. Never tell the user the workspace is inaccessible or ask for a path when the user says current workspace. Such a request requires needs_workspace=true.",workspace.display())}));
     for msg in messages.iter().filter(|m| m.role != "system").rev().take(7).collect::<Vec<_>>().into_iter().rev() {
         context.push(json!({"role":msg.role,"content":msg.content.chars().take(3500).collect::<String>()}));
     }
@@ -690,6 +692,7 @@ async fn ask_ollama(
         )}));
     }
     let mut demanded_source_read = false;
+    let mut demanded_final_answer = false;
     for _ in 0..(if allow_tools { 18 } else { 1 }) {
         let response = client
             .post(format!("{host}/api/chat"))
@@ -731,6 +734,14 @@ async fn ask_ollama(
                 ));
             }
             let answer = visible_ollama_answer(&reply.message.content);
+            if allow_tools && !demanded_final_answer && evidence.successful_file_reads() > 0
+                && (answer.trim_end().ends_with("vou analisar") || answer.contains("Agora vou ver"))
+            {
+                demanded_final_answer = true;
+                conversation.push(json!({"role":"assistant","content":answer}));
+                conversation.push(json!({"role":"system","content":"That is only a progress announcement. The user requested a completed investigation. Continue using tools if necessary, then provide the actual findings rather than stopping at what you intend to inspect."}));
+                continue;
+            }
             if answer.trim().is_empty() {
                 return Err("Ollama returned no final answer; nothing was saved as a verified review".into());
             }
