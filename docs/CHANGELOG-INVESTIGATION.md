@@ -164,3 +164,10 @@ Known limitations:
 - If the Coder attempts to finish a tool-enabled investigation without a successful source read, Ollama receives one explicit instruction to open relevant files. Repeated refusal returns an actionable error instead of saving a fictional report.
 - Added unit assertion for successful reads and cache hits. Tests and compilation have **not** been executed in the user's checkout.
 - Limit: a single source read does not certify all report claims; deeper investigation quality remains subject to benchmark.
+
+## 2026-10-21 — Testes HTTP do ciclo real Solo/Ollama
+
+- Adicionado servidor HTTP Ollama simulado em testes de `src/main.rs` (sem dependências novas), exercitando `ask_ollama` de ponta a ponta.
+- Cobertura de três comportamentos: `project_map -> read_file -> resposta`; `project_map -> resposta prematura -> read_file -> resposta`; e `resposta sem ferramentas -> resposta sem ferramentas -> erro`.
+- Asserções verificam o resumo efetivo de ferramentas e a recusa em aceitar texto fictício como análise do workspace.
+- **Ainda não validado em compilação nem execução:** indisponibilidade do toolchain Cargo no ambiente de edição; executar `cargo fmt --check && cargo test` no checkout antes de considerar aprovado.
