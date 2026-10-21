@@ -122,7 +122,7 @@ impl App {
                 "Coffee dependency: CRITICAL.\n",
                 "Ready to deploy questionable decisions (with your approval).\n\n",
                 "Hey dude! What are we building today?\n",
-                "Type a question, !command, /model NAME or /clear.\n"
+                "Type a question or /help for model and provider commands.\n"
             )),
             history,
             scroll: 0,
@@ -139,7 +139,7 @@ impl App {
             cloud_allowed: false,
             dual_enabled: env::var("DUDE_DUAL_LOCAL").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             reasoning_model: env::var("OLLAMA_REASONING_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".into()),
-            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
+            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3.5:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
                 .trim_end_matches('/')
@@ -287,6 +287,37 @@ impl App {
             self.output.push_str(&format!("Solo role: {result:?}\n"));
             return;
         }
+        if input == "/help" {
+            self.output.push_str("/provider NAME    select provider for current Solo role (ollama/groq/gemini)\n/model NAME       select model for the active provider\n/model            show active provider and models\n/providers        list providers and role assignments\n/roles            show role assignments\n/mode solo|symphony\n/dual on|off     optional second local model\n");
+            return;
+        }
+        if input == "/model" || input == "/provider" {
+            let provider = self.roles.selected_provider();
+            let current = match provider {
+                "ollama" => &self.model,
+                "groq" => &self.groq_model,
+                "gemini" => &self.gemini_model,
+                _ => &self.model,
+            };
+            self.output.push_str(&format!("Provider: {provider} | Active model: {current}\\nOllama: {} | Groq: {} | Gemini: {}\\n",self.model,self.groq_model,self.gemini_model));
+            return;
+        }
+        if let Some(requested) = input.strip_prefix("/model ") {
+            let requested = requested.trim();
+            if requested.is_empty() {
+                self.output.push_str("Usage: /model MODEL_NAME\\n");
+                return;
+            }
+            let provider = self.roles.selected_provider();
+            match provider {
+                "ollama" => {self.model = requested.into(); self.model_ready = false;},
+                "groq" => self.groq_model = requested.into(),
+                "gemini" => self.gemini_model = requested.into(),
+                other => {self.output.push_str(&format!("No model selection for provider {other}\\n")); return;}
+            }
+            self.output.push_str(&format!("Selected {provider} model: {requested}\\n"));
+            return;
+        }
         if input == "/providers" {
             self.output.push_str("Providers: ollama (local), gemini (GEMINI_API_KEY/GOOGLE_API_KEY), groq (GROQ_API_KEY), openai (planned).\n");
             self.output.push_str(&self.roles.summary());
@@ -332,13 +363,6 @@ impl App {
             return;
         }
 
-        if let Some(model) = input.strip_prefix("/model ") {
-            if !model.trim().is_empty() {
-                self.model = model.trim().to_string();
-                self.output.push_str(&format!("Model set to {}\n", self.model));
-            }
-            return;
-        }
         if input == "/dual" {
             self.output.push_str(&format!("Dual-local: {} | Investigator: {} | Reasoning: {}\n",
                 if self.dual_enabled {"ON"} else {"OFF"}, self.model, self.reasoning_model));
@@ -750,7 +774,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
 
         let footer = format!(
-            "Mode: {} | Solo: {} ({}) | /roles /role /mode /cloud | ESC",
+            "Mode: {} | Solo: {} ({}) | /model /provider /help | ESC",
             app.roles.mode, app.roles.solo_role, app.roles.selected_provider()
         );
         frame.render_widget(
