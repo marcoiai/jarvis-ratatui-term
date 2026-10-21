@@ -94,6 +94,39 @@ impl EvidenceCache {
                 })
         })
     }
+    /// Collect declaration candidates exclusively from numbered read_file source lines.
+    /// This is a syntax observation, not proof of runtime behavior.
+    pub fn declaration_drafts(&self, limit: usize) -> Vec<crate::knowledge::CandidateDraft> {
+        let Ok(observations) = self.observations.lock() else { return Vec::new(); };
+        let mut drafts = Vec::new();
+        let mut seen = BTreeSet::new();
+        for item in observations.iter() {
+            if item["tool"] != "read_file" { continue; }
+            let Some(path) = item["arguments"]["path"].as_str() else { continue; };
+            if !(path.ends_with(".rs") || path.ends_with(".java")
+                || path.ends_with(".php") || path.ends_with(".py")) { continue; }
+            let Some(content) = item["result"].as_str() else { continue; };
+            for row in content.lines() {
+                let Some((number, line)) = row.split_once(": ") else { continue; };
+                let Ok(number) = number.parse::<usize>() else { continue; };
+                if number == 0 { continue; }
+                let declaration = line.trim();
+                let is_declaration = ["pub fn ", "pub async fn ", "pub struct ", "pub enum ",
+                    "pub trait ", "class ", "def ", "async def ", "public class ",
+                    "public interface "].iter().any(|prefix| declaration.starts_with(prefix));
+                if !is_declaration || declaration.len() > 180 { continue; }
+                let reference = format!("{path}:{number}");
+                if !seen.insert(reference.clone()) { continue; }
+                drafts.push(crate::knowledge::CandidateDraft {
+                    classification: "documented".into(),
+                    claim: format!("Source declaration in {path}: {}", declaration),
+                    evidence: vec![reference],
+                });
+                if drafts.len() >= limit { return drafts; }
+            }
+        }
+        drafts
+    }
     pub fn read_manifest(&self) -> String {
         let Ok(events) = self.events.lock() else { return "Source-read manifest unavailable".into(); };
         let mut paths = BTreeSet::new();
