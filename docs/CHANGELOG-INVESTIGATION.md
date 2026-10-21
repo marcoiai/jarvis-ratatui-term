@@ -239,3 +239,5 @@
 - Implementada tentativa adicional para **respostas não-streaming vazias**, com instrução explícita de conclusão legível. Não repete as chamadas `read_file`; se continuar vazia, retorna erro honesto, sem fabricar relatório.
 - Tradeoff: a síntese final passa a aparecer de uma só vez; a barra de atividade e o tempo decorrido continuam ativos. Esta é uma escolha temporária de estabilização; streaming só deve voltar após testes de regressão.
 - Validação: a branch possui workflow `Rust checks` para Linux/macOS em pull requests. Não foi observada execução do workflow para o commit mais recente no momento da consulta; `cargo check`, `cargo test` e ensaio de integração continuam não verificados.
+
+- Acrescentados testes unitários ao filtro cobrindo: raciocínio sem texto final visível, delimitador de fechamento sem abertura e parecer textual normal. A execução dos testes segue pendente de CI/ambiente Rust.
