@@ -1,3 +1,10 @@
+## Groq: recuperação por fatias (21/10/2026)
+
+- HTTP 413 por contexto acima do limite passa a acionar leitura sequencial do histórico completo, inclusive resultados de ferramentas, em blocos de até aproximadamente 6,5 KB. O pedido original é mantido na reconstrução.
+- Cada bloco é analisado separadamente, suas observações são consolidadas por etapas e o DUDE retoma o loop de ferramentas. Ferramentas já executadas continuam disponíveis no cache de evidências durante essa investigação.
+- HTTP 429 e HTTP 413 com requisição individual dentro do limite TPM recebem espera limitada antes de nova tentativa; HTTP 413 com requisição maior que o limite aciona divisão.
+- **Limitação atual:** a síntese de blocos pode perder detalhes semânticos e, caso a recuperação inteira falhe ou a aplicação seja fechada, a execução ainda não possui checkpoint persistente para retomar automaticamente. Validar com `cargo test` e investigação real no Groq antes de considerar concluído.
+
 # Investigation checkpoint changelog
 
 ## 2026-10-21 — Restore build of Symphony checkpoint 901506a
