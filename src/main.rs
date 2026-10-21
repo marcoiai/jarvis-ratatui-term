@@ -74,6 +74,8 @@ struct App {
     model: String,
     ollama_url: String,
     groq_model: String,
+    dual_enabled: bool,
+    reasoning_model: String,
     gemini_model: String,
     cloud_allowed: bool,
     workspace: PathBuf,
@@ -132,6 +134,8 @@ impl App {
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into()),
             cloud_allowed: false,
+            dual_enabled: env::var("DUDE_DUAL_LOCAL").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            reasoning_model: env::var("OLLAMA_REASONING_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".into()),
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
@@ -332,6 +336,25 @@ impl App {
             }
             return;
         }
+        if input == "/dual" {
+            self.output.push_str(&format!("Dual-local: {} | Investigator: {} | Reasoning: {}\\n",
+                if self.dual_enabled {"ON"} else {"OFF"}, self.model, self.reasoning_model));
+            return;
+        }
+        if input == "/dual on" || input == "/dual off" {
+            self.dual_enabled = input == "/dual on";
+            self.output.push_str(&format!("Dual-local {}. Original Solo remains available.\\n",
+                if self.dual_enabled {"enabled"} else {"disabled"}));
+            return;
+        }
+        if let Some(model) = input.strip_prefix("/reason-model ") {
+            let model = model.trim();
+            if !model.is_empty() {
+                self.reasoning_model = model.to_string();
+                self.output.push_str(&format!("Reasoning model: {model}\\n"));
+            }
+            return;
+        }
         if input == "/clear" {
             self.history.truncate(if self.memory.is_some() { 2 } else { 1 });
             self.output.clear();
@@ -362,6 +385,8 @@ impl App {
             let url = self.ollama_url.clone();
             let workspace = self.workspace.clone();
             let ollama_model = self.model.clone();
+            let reasoning_model = self.reasoning_model.clone();
+            let dual_enabled = self.dual_enabled;
             let groq_model = self.groq_model.clone();
             let gemini_model = self.gemini_model.clone();
             let participants: Vec<&str> = if roles.mode == "symphony" {
@@ -397,7 +422,10 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
-                let result = if roles.mode == "symphony" {
+                let result = if dual_enabled && roles.mode == "solo" && roles.selected_provider() == "ollama" {
+                    run_local_dual(&client, messages, workspace, &url,
+                        &ollama_model, &reasoning_model, evidence).await
+                } else if roles.mode == "symphony" {
                     run_symphony(&client, &roles, messages, workspace, &url,
                         &ollama_model, &groq_model, &gemini_model, evidence).await
                 } else {
@@ -452,6 +480,43 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence).await,
         other => Err(format!("Unsupported provider: {other}")),
+    }
+}
+
+/// Local-only additive second opinion: the proven Solo answer is never replaced.
+async fn run_local_dual(
+    client: &reqwest::Client, messages: Vec<Message>, workspace: PathBuf,
+    host: &str, code_model: &str, reasoning_model: &str,
+    evidence: evidence::EvidenceCache,
+) -> Result<String,String> {
+    let question = messages.iter().rev().find(|m| m.role == "user")
+        .map(|m| m.content.clone()).unwrap_or_default();
+    let primary = ask_ollama(client, host, code_model, messages, workspace,
+        true, evidence).await?;
+    // Avoid sending arbitrary-sized analysis to a second model.
+    let planning = vec![
+        Message { role: "system".into(), content: concat!(
+            "You are a second local engineering analyst. The first model already investigated ",
+            "the workspace. Do not replace, rewrite or summarize its report. Add only ",
+            "concrete new technical insights, risks or planning suggestions grounded in ",
+            "its findings. Do not claim to have read files yourself. If you cannot add ",
+            "anything genuinely useful, reply exactly NO_ADDITIONS."
+        ).into() },
+        Message { role: "user".into(), content: format!(
+            "Original request:\\n{}\\n\\nPrimary investigation:\\n{}",
+            question.chars().take(1200).collect::<String>(),
+            primary.chars().take(10000).collect::<String>()
+        ) },
+    ];
+    if code_model == reasoning_model {
+        return Ok(primary);
+    }
+    match ask_ollama(client, host, reasoning_model, planning,
+        std::path::PathBuf::new(), false, evidence::EvidenceCache::default()).await {
+        Ok(extra) if !extra.trim().is_empty() && extra.trim() != "NO_ADDITIONS" =>
+            Ok(format!("{primary}\\n\\n---\\nComplemento do segundo modelo ({reasoning_model}):\\n{extra}")),
+        Ok(_) => Ok(primary),
+        Err(error) => Ok(format!("{primary}\\n\\n[Complemento local indisponível: {error}]")),
     }
 }
 
