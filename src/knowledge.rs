@@ -85,15 +85,15 @@ pub fn list(workspace:&Path)->Result<String,String>{
         source.lines().filter(|line|line.starts_with("- ")).count()
     } else {0};
     let mut report=format!(
-        "Knowledge: {} pending ({} unverified), {} approved, {} rejected; {} retained memory entries.\\n",
+        "Knowledge: {} pending ({} unverified), {} approved, {} rejected; {} retained memory entries.\n",
         pending.len(), blocked, approved, rejected, retained
     );
     if pending.is_empty(){
-        report.push_str("No pending candidates. Automatic extraction is best-effort; check the last analysis warning.\\n");
+        report.push_str("No pending candidates. Automatic extraction is best-effort; check the last analysis warning.\n");
     } else {
         for item in pending {
             report.push_str(&format!(
-                "#{} [{}{}] {}\\n  Evidence: {}\\n",
+                "#{} [{}{}] {}\n  Evidence: {}\n",
                 item.id,item.classification,
                 if item.references_checked {""} else {", references unverified"},
                 item.claim,
@@ -101,7 +101,7 @@ pub fn list(workspace:&Path)->Result<String,String>{
             ));
         }
     }
-    report.push_str("Approved memory: .dude/memory.md | Candidate queue: .dude/knowledge_candidates.json\\n");
+    report.push_str("Approved memory: .dude/memory.md | Candidate queue: .dude/knowledge_candidates.json\n");
     Ok(report)
 }
 pub fn approve(workspace:&Path,id:u64,memory:&crate::memory::Memory)->Result<(),String>{
