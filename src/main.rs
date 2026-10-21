@@ -64,6 +64,16 @@ fn is_simple_greeting(input: &str) -> bool {
         "bom dia" | "boa tarde" | "boa noite" | "hello" | "hi" | "hey" | "ei")
 }
 
+/// Recognize repository-analysis requests without tying them to one exact wording.
+fn is_project_review_request(question: &str) -> bool {
+    let q = question.to_lowercase();
+    let action = ["analis", "analys", "review", "revis", "explique", "explain", "entend", "understand", "investig"]
+        .iter().any(|word| q.contains(word));
+    let target = ["projeto", "project", "repositorio", "repositório", "repo", "workspace", "diretorio atual", "diretório atual", "codebase"]
+        .iter().any(|word| q.contains(word));
+    action && target
+}
+
 enum ResultMessage {
     ModelReady(Result<String, String>),
     Chat(Result<String, String>),
@@ -610,12 +620,8 @@ async fn ask_ollama(
     }).collect();
     let question = conversation.iter().rev()
         .find(|m| m["role"] == "user")
-        .and_then(|m| m["content"].as_str()).unwrap_or("").to_lowercase();
-    let is_project_review = allow_tools && (
-        question.contains("review") && question.contains("project")
-        || question.contains("analise") && question.contains("projeto")
-        || question.contains("análise") && question.contains("projeto")
-    );
+        .and_then(|m| m["content"].as_str()).unwrap_or("");
+    let is_project_review = allow_tools && is_project_review_request(question);
     if is_project_review {
         // A map is discovery, NOT proof of inspecting implementations.
         // Explicitly read a bounded, deterministic sample before allowing a review.
@@ -638,11 +644,19 @@ async fn ask_ollama(
         if verified.is_empty() {
             return Err("Project review blocked: no source or manifest was successfully read from the workspace. Check DUDE_WORKSPACE.".into());
         }
-        let map = file_tools::execute(&workspace, "project_map", &json!({"path":"."}))
-            .unwrap_or_else(|e| format!("Map unavailable: {e}"));
+        // Query actual files for configuration and persistence facts that commonly
+        // become stale in the conversation history; evidence is from THIS workspace.
+        let mut config_facts = Vec::new();
+        for needle in ["OLLAMA_MODEL", "history.jsonl", "memory.json", "router.rs"] {
+            let result = evidence.execute(&workspace, "grep_search", &json!({"pattern":needle}));
+            if !result.starts_with("Tool error:") {
+                config_facts.push(format!("Search for {needle}:\n{result}"));
+            }
+        }
+        let map = evidence.execute(&workspace, "project_map", &json!({"path":"."}));
         conversation.push(json!({"role":"system","content":format!(
             "FRESH VERIFIED READS (partial excerpts, not whole-file verification):\n{}\n\nDISCOVERY MAP (paths and approximate declarations, not verified implementations):\n{}\n\nUse the verified excerpts as facts, read additional files through tools when needed. Never fabricate code excerpts or claim uninspected modules were verified. Previous assistant messages are background, not evidence from this execution.",
-            verified.join("\n\n"), map
+            format!("{}\n\nFRESH CONFIGURATION SEARCHES (matches, not full implementation proof):\n{}", verified.join("\n\n"), config_facts.join("\n\n")), map
         )}));
     }
     if allow_tools {
@@ -939,5 +953,22 @@ mod workspace_shell_tests {
         let actual = run_command("pwd".to_owned(), expected.clone()).await.unwrap();
         assert_eq!(actual.trim(), expected.to_string_lossy());
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+}
+
+#[cfg(test)]
+mod project_review_intent_tests {
+    use super::is_project_review_request;
+    #[test]
+    fn recognizes_portuguese_and_english_repository_reviews() {
+        for prompt in [
+            "analisar o projeto no diretorio atual e me explica o que ele faz",
+            "analise o projeto do workspace",
+            "review deeply current project at workspace",
+            "explique o que faz este repositório",
+        ] { assert!(is_project_review_request(prompt), "{prompt}"); }
+        for prompt in ["muito boa sua analise", "ei", "qual o modelo?", "analisar este erro"] {
+            assert!(!is_project_review_request(prompt), "{prompt}");
+        }
     }
 }
