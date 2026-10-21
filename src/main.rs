@@ -74,7 +74,7 @@ const ENOVA_LOGO: [&str; 11] = [
 ];
 
 fn greeting() -> String {
-    format!("{}\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType a question or /help for commands.\n", ENOVA_LOGO.join("\n"))
+    format!("{}\n                        business solutions\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType a question or /help for commands.\n", ENOVA_LOGO.join("\n"))
 }
 
 fn styled_output(output: &str) -> Text<'_> {
@@ -93,6 +93,8 @@ fn styled_output(output: &str) -> Text<'_> {
                 Span::styled(&line[start..end], Style::default().fg(Color::Red)),
                 Span::styled(&line[end..], Style::default().fg(Color::White)),
             ]));
+        } else if i == ENOVA_LOGO.len() {
+            lines.push(Line::styled(line, Style::default().fg(Color::White)));
         } else {
             lines.push(Line::raw(line));
         }
