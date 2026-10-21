@@ -181,7 +181,7 @@ impl App {
             pending_knowledge: None,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
-            gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into()),
+            gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
             cloud_allowed: false,
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
