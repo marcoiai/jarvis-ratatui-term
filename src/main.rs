@@ -392,6 +392,11 @@ impl App {
                 .unwrap_or_else(|e|format!("Evidence Store error: {e}\n")));
             return;
         }
+        if input == "/knowledge export" {
+            self.output.push_str(&knowledge::export_approved(&self.workspace)
+                .unwrap_or_else(|e|format!("Knowledge export error: {e}\n")));
+            return;
+        }
         if input == "/knowledge" {
             self.output.push_str(&knowledge::list(&self.workspace).unwrap_or_else(|e|format!("Knowledge error: {e}")));
             self.output.push_str("Review: /knowledge approve ID | /knowledge reject ID\n");
