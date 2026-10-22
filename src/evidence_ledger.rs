@@ -6,6 +6,7 @@ use crate::evidence::EvidenceCache;
 pub struct Audit {
     pub unchecked_references: Vec<String>,
     pub coverage_conflict: bool,
+    pub falsely_unread: Vec<String>,
 }
 
 fn references(answer: &str) -> Vec<String> {
@@ -44,12 +45,33 @@ pub fn audit(answer: &str, evidence: &EvidenceCache) -> Audit {
         "código base completo precisa ser carregado",
     ].iter().any(|phrase| lower.contains(phrase));
     let coverage_conflict = denial && evidence.read_manifest().starts_with("READ SOURCE EXCERPTS");
-    Audit { unchecked_references, coverage_conflict }
+    let manifest = evidence.read_manifest();
+    let read_paths: Vec<String> = manifest.lines().skip(1)
+        .filter_map(|line|line.split_once(": ").map(|(path,_)|path.trim().to_lowercase()))
+        .collect();
+    let mut falsely_unread = std::collections::BTreeSet::new();
+    for line in answer.lines() {
+        let normalized = line.to_lowercase();
+        let unread = ["não lido","não leido","não foi lido","nao lido","nao leido",
+                      "not read","not accessed"].iter().any(|phrase|normalized.contains(phrase));
+        if !unread {continue;}
+        for path in &read_paths {
+            // Check only declarations of unread files, not paragraphs discussing
+            // why another report's unread declarations were mistaken.
+            if normalized.trim_start().starts_with(['-', '*', '|'])
+                && normalized.contains(path)
+                && !normalized.contains("incorreto")
+                && !normalized.contains("falso") {
+                falsely_unread.insert(path.clone());
+            }
+        }
+    }
+    Audit { unchecked_references, coverage_conflict, falsely_unread: falsely_unread.into_iter().collect() }
 }
 
 pub fn notice(answer: &str, evidence: &EvidenceCache) -> String {
     let report = audit(answer, evidence);
-    if report.unchecked_references.is_empty() && !report.coverage_conflict {
+    if report.unchecked_references.is_empty() && !report.coverage_conflict && report.falsely_unread.is_empty() {
         return String::new();
     }
     let mut lines = vec!["\n\n⚠️ EvidenceLedger (checagem automática, sem validação semântica):".to_owned()];
@@ -59,6 +81,9 @@ pub fn notice(answer: &str, evidence: &EvidenceCache) -> String {
     if !report.unchecked_references.is_empty() {
         lines.push(format!("- Referências arquivo:linha NÃO observadas nesta execução: {}",
             report.unchecked_references.join(", ")));
+    }
+    if !report.falsely_unread.is_empty() {
+        lines.push(format!("- Arquivos incorretamente declarados como não lidos: {}",report.falsely_unread.join(", ")));
     }
     lines.push(format!("- Manifesto do runtime: {}", evidence.coverage()));
     lines.join("\n")
@@ -90,6 +115,7 @@ mod tests {
         assert!(audit("Workspace vazio. Nenhum arquivo foi lido.", &evidence).coverage_conflict);
         assert!(!audit("Apenas parte dos arquivos foi lida.", &evidence).coverage_conflict);
         assert!(audit("Até agora, apenas snippets e README foram acessíveis.", &evidence).coverage_conflict);
+        assert_eq!(audit("- \`sample.rs\`: NÃO LIDO", &evidence).falsely_unread, vec!["sample.rs"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
