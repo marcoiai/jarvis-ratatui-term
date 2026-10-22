@@ -407,6 +407,27 @@ impl App {
             }
             return;
         }
+        if input == "/evidence list" {
+            self.output.push_str(&evidence_store::list(&self.workspace)
+                .unwrap_or_else(|e|format!("Evidence error: {e}\n")));
+            return;
+        }
+        if let Some(id)=input.strip_prefix("/evidence show ") {
+            let result=id.trim().parse::<usize>().map_err(|e|e.to_string())
+                .and_then(|id|evidence_store::show(&self.workspace,id));
+            self.output.push_str(&result.unwrap_or_else(|e|format!("Evidence error: {e}\n")));
+            return;
+        }
+        if let Some(term)=input.strip_prefix("/evidence search ") {
+            self.output.push_str(&evidence_store::search(&self.workspace,term)
+                .unwrap_or_else(|e|format!("Evidence error: {e}\n")));
+            return;
+        }
+        if input == "/evidence export" {
+            self.output.push_str(&evidence_store::export_current(&self.workspace)
+                .unwrap_or_else(|e|format!("Evidence error: {e}\n")));
+            return;
+        }
         if input == "/evidence" {
             self.output.push_str(&evidence_store::status(&self.workspace)
                 .unwrap_or_else(|e|format!("Evidence Store error: {e}\n")));
