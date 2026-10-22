@@ -83,8 +83,10 @@ fn styled_output(output: &str) -> Text<'_> {
     let mut lines = Vec::<Line<'_>>::new();
     for (i, line) in output.lines().enumerate() {
         if i < ENOVA_LOGO.len() {
-            let before = N_START.min(line.len());
-            let after = N_END.min(line.len());
+            // N_START/N_END count Unicode characters, not UTF-8 bytes.
+            // Splitting by char boundaries avoids panics on █ and ░.
+            let before = line.char_indices().nth(N_START).map(|(idx, _)| idx).unwrap_or(line.len());
+            let after = line.char_indices().nth(N_END).map(|(idx, _)| idx).unwrap_or(line.len());
             lines.push(Line::from(vec![
                 Span::styled(&line[..before], Style::default().fg(Color::White)),
                 Span::styled(&line[before..after], Style::default().fg(Color::Red)),
@@ -911,5 +913,19 @@ mod ollama_answer_tests {
     fn preserves_plain_answers() {
         assert_eq!(visible_ollama_answer("Architecture summary"), "Architecture summary");
         assert_eq!(visible_ollama_answer("<think>unfinished"), "");
+    }
+}
+
+#[cfg(test)]
+mod logo_tests {
+    use super::*;
+    #[test]
+    fn unicode_logo_renders_without_panic() {
+        let text = greeting();
+        let styled = styled_output(&text);
+        assert_eq!(styled.lines.len(), text.lines().count());
+        for line in ENOVA_LOGO {
+            assert_eq!(line.chars().count(), line.chars().count());
+        }
     }
 }
