@@ -980,6 +980,10 @@ async fn ask_ollama(
             let body = response.text().await.unwrap_or_default();
             let failed_label = format!("{request_label}_http_{status}");
             metrics.stage(&failed_label, "ollama", request_start, false);
+            if tools_enabled && is_ollama_tool_parse_error(status, &body) {
+                return recover_ollama_tool_parse(client, host, model, conversation, &workspace, &evidence, &metrics).await
+                    .map_err(|fallback| format!("Ollama tool parser failed: {body}. Recovery failed: {fallback}"));
+            }
             return Err(format!("Ollama HTTP {status}: {body}"));
         }
         if stream_final {
@@ -1163,6 +1167,83 @@ async fn ask_ollama(
         else { stalled_rounds = 0; }
     }
     Err("Ollama ended without a final response".into())
+}
+
+/// A known Ollama tool-call parser failure, not an arbitrary server error.
+fn is_ollama_tool_parse_error(status: reqwest::StatusCode, body: &str) -> bool {
+    status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        && body.contains("XML syntax error")
+        && (body.contains("function") || body.contains("parameter"))
+}
+
+/// Recover once without tool calling. We send only evidence actually collected by
+/// read-only workspace tools, and label the result as partial. Do not retry tools
+/// that might already have executed in the failed conversation.
+async fn recover_ollama_tool_parse(
+    client: &reqwest::Client,
+    host: &str,
+    model: &str,
+    mut conversation: Vec<Value>,
+    workspace: &std::path::Path,
+    evidence: &evidence::EvidenceCache,
+    metrics: &metrics::Metrics,
+) -> Result<String, String> {
+    if evidence.len() == 0 {
+        // A small deterministic bootstrap, not an unrestricted workspace crawl.
+        evidence.execute(workspace, "list_files", &json!({"path":"."}));
+        for path in ["Cargo.toml", "README.md", "src/main.rs"] {
+            if workspace.join(path).is_file() {
+                evidence.execute(workspace, "read_file", &json!({
+                    "path": path, "start_line": 1, "end_line": 120
+                }));
+            }
+        }
+    }
+    if !evidence.read_manifest().starts_with("READ SOURCE EXCERPTS") {
+        return Err("No source lines could be read for safe fallback. Check the model's tool-call support or switch models.".into());
+    }
+    conversation.push(json!({"role":"user","content":format!(
+        "Tool calling failed in the Ollama server. Do NOT call tools. Provide a PARTIAL assessment based ONLY on the source excerpts below. Cite precise observed file:line references. State missing coverage; never pretend to have reviewed the whole project.\n\n{}",
+        evidence.export()
+    )}));
+    let started = Instant::now();
+    let response = client.post(format!("{host}/api/chat"))
+        .json(&json!({
+            "model": model,
+            "messages": conversation,
+            "stream": false,
+            "think": false,
+            "options": {"num_ctx": investigation::context_size()}
+        }))
+        .send().await.map_err(|e| format!("Recovery connection: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        metrics.stage("ollama_recovery","ollama",started,false);
+        return Err(format!("HTTP {status}: {}",response.text().await.unwrap_or_default()));
+    }
+    let reply: OllamaReply = response.json().await.map_err(|e| format!("Recovery JSON: {e}"))?;
+    metrics.stage("ollama_recovery","ollama",started,true);
+    if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){
+        metrics.tokens("ollama",model,i,o);
+    }
+    if !reply.message.tool_calls.is_empty() || reply.message.content.trim().is_empty() {
+        return Err("Recovery returned no usable text or unexpected tool calls.".into());
+    }
+    Ok(format!("⚠️ Análise parcial: o Ollama falhou ao interpretar tool calls. Resposta baseada somente em arquivos lidos; revise as referências.\n\n{}",reply.message.content))
+}
+
+#[cfg(test)]
+mod ollama_recovery_tests {
+    use super::*;
+    #[test]
+    fn recognizes_only_specific_parser_failures() {
+        assert!(is_ollama_tool_parse_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"error":"XML syntax error on line 3: element <function> closed by </parameter>"}"#
+        ));
+        assert!(!is_ollama_tool_parse_error(reqwest::StatusCode::BAD_REQUEST, "XML syntax error <function>"));
+        assert!(!is_ollama_tool_parse_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "out of memory"));
+    }
 }
 
 async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> Result<String, String> {
