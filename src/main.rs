@@ -925,7 +925,12 @@ mod logo_tests {
         let styled = styled_output(&text);
         assert_eq!(styled.lines.len(), text.lines().count());
         for line in ENOVA_LOGO {
-            assert_eq!(line.chars().count(), line.chars().count());
+            let before = line.char_indices().nth(N_START).map(|(idx, _)| idx).unwrap_or(line.len());
+            let after = line.char_indices().nth(N_END).map(|(idx, _)| idx).unwrap_or(line.len());
+            assert!(line.is_char_boundary(before));
+            assert!(line.is_char_boundary(after));
+            assert!(before <= after);
+            assert_eq!(format!("{}{}{}", &line[..before], &line[before..after], &line[after..]), line);
         }
     }
 }
