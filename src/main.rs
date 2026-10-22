@@ -707,12 +707,16 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
-    let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
+    let source_required = investigation::requires_fresh_source(question, previous_user);
+    let allow_tools = allow_tools && (source_required || investigation::investigation_intent(question, previous_user));
+    if source_required && !allow_tools {
+        return Err("Evidence Requirement Gate: this request needs a fresh source inspection; the selected stage has no tool access.".into());
+    }
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")
             .map(|m|m.content.clone()).unwrap_or_default();
-        let bootstrap = investigation::needs_baseline(&question);
+        let bootstrap = source_required || investigation::needs_baseline(&question);
         let cache = evidence.clone();
         let overview = tokio::task::spawn_blocking(move || {
             let mut overview = investigation::overview(&root);
@@ -722,6 +726,15 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
             }
             overview
         }).await.map_err(|e| e.to_string())?;
+        if source_required && evidence.len() == 0 {
+            return Err("Evidence Requirement Gate: no current source excerpts could be read. Refusing to produce an evidence-backed project assessment from chat history alone.".into());
+        }
+        if source_required {
+            messages.push(Message {role:"system".into(),content:format!(
+                "EVIDENCE REQUIREMENT: The request is about this repository. Current execution has {} source observations. Treat older chat conclusions as unverified. Ground recommendations in lines read THIS execution; explicitly mark proposed changes as hypotheses and acknowledge any unread modules. Do not claim comprehensive coverage.",
+                evidence.len()
+            )});
+        }
         messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
