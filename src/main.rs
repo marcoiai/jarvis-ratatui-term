@@ -532,6 +532,8 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
+                let original_question = messages.iter().rev().find(|m|m.role == "user")
+                    .map(|m|m.content.clone()).unwrap_or_default();
                 let interpreted = if let Some(model) = interpreter_enabled.as_deref() {
                     if question_is_explicit_override(&messages) {
                         interpreter::Interpretation {route, enriched:None}
@@ -628,8 +630,7 @@ impl App {
                 let mode=if is_symphony {"symphony"}else{"solo"};
                 // Capture the user's actual request, not the Interpreter enrichment,
                 // so an audit pass cannot replace the original task with meta-review.
-                let validation_question = messages.iter().rev().find(|m|m.role == "user")
-                    .map(|m|m.content.clone()).unwrap_or_default();
+                let validation_question = original_question;
                 // Prevent a source-free answer on repository-specific tasks.
                 // Applies to Solo and Symphony; does not confuse prior chat with
                 // fresh source evidence collected in this execution.
