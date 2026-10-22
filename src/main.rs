@@ -5,6 +5,7 @@ mod metrics;
 mod router;
 mod knowledge;
 mod evidence;
+mod evidence_ledger;
 mod credentials;
 mod cloud;
 mod roles;
@@ -811,13 +812,21 @@ async fn ask_ollama(
             }
             metrics.stage("ollama_http","ollama",request_start,finished);
             if !finished {return Err("Ollama stream ended without done=true".into());}
+            let warning = evidence_ledger::notice(&answer, &evidence);
+            if !warning.is_empty() {
+                if let Some(sender) = &updates {
+                    let _ = sender.send(ResultMessage::ChatChunk(warning.clone()));
+                }
+                answer.push_str(&warning);
+            }
             return Ok(answer);
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
         metrics.stage("ollama_http","ollama",request_start,true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
-            return Ok(reply.message.content);
+            let warning = evidence_ledger::notice(&reply.message.content, &evidence);
+            return Ok(format!("{}{}", reply.message.content, warning));
         }
         if !tools_enabled { return Err("Ollama requested tools during final synthesis; try another model or a narrower request.".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
