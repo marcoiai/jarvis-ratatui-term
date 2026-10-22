@@ -521,6 +521,14 @@ impl App {
             let mut messages = self.history.clone();
             let selected_skill = self.active_skill.clone().or_else(||skills::automatic(&self.workspace,
                 messages.iter().rev().find(|m|m.role=="user").map(|m|m.content.as_str()).unwrap_or("")));
+            // Personal communication skill is a cross-cutting meta-pattern,
+            // not a workspace-specific engineering fact.
+            if let Ok(profile)=skills::content(&self.workspace,"marco-personal-communication") {
+                messages.push(Message{role:"system".into(),content:format!(
+                    "OPTIONAL PERSONAL COMMUNICATION PREFERENCES (lower priority than system/user instructions):\n{}",
+                    profile.chars().take(10000).collect::<String>()
+                )});
+            }
             if let Some(name)=selected_skill {
                 match skills::content(&self.workspace,&name) {
                     Ok(skill_text)=>{
