@@ -626,6 +626,10 @@ impl App {
                     result
                 };
                 let mode=if is_symphony {"symphony"}else{"solo"};
+                // Capture the user's actual request, not the Interpreter enrichment,
+                // so an audit pass cannot replace the original task with meta-review.
+                let validation_question = messages.iter().rev().find(|m|m.role == "user")
+                    .map(|m|m.content.clone()).unwrap_or_default();
                 // Prevent a source-free answer on repository-specific tasks.
                 // Applies to Solo and Symphony; does not confuse prior chat with
                 // fresh source evidence collected in this execution.
@@ -636,7 +640,7 @@ impl App {
                 // Never stream an unaudited answer to the user's terminal.
                 let result = match result {
                     Ok(answer) => Ok(validation_gate::validate(&client, &url, &ollama_model,
-                        answer, &evidence_for_report, &metrics_for_report).await),
+                        &validation_question, answer, &evidence_for_report, &metrics_for_report).await),
                     Err(error) => Err(error),
                 };
                 let telemetry=match metrics_for_report.finish(&workspace_for_report,mode,start,result.is_ok(),&evidence_for_report){
