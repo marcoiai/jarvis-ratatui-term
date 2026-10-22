@@ -5,6 +5,7 @@ mod metrics;
 mod router;
 mod knowledge;
 mod evidence;
+mod evidence_store;
 mod evidence_ledger;
 mod interpreter;
 mod runtime_intent;
@@ -386,6 +387,11 @@ impl App {
             self.output.push('\n');
             return;
         }
+        if input == "/evidence" {
+            self.output.push_str(&evidence_store::status(&self.workspace)
+                .unwrap_or_else(|e|format!("Evidence Store error: {e}\n")));
+            return;
+        }
         if input == "/knowledge" {
             self.output.push_str(&knowledge::list(&self.workspace).unwrap_or_else(|e|format!("Knowledge error: {e}")));
             self.output.push_str("Review: /knowledge approve ID | /knowledge reject ID\n");
@@ -644,11 +650,20 @@ impl App {
                         &validation_question, answer, &evidence_for_report, &metrics_for_report).await),
                     Err(error) => Err(error),
                 };
+                // Persist only read-only source observations, never guesses.
+                // Persistence failure cannot silently affect the answer.
+                let evidence_note = if evidence_for_report.len()>0 {
+                    match evidence_store::capture(&workspace_for_report,&validation_question,&evidence_for_report) {
+                        Ok(count) if count>0 => format!("Evidence Store: {count} trecho(s) persistido(s).\n"),
+                        Ok(_) => String::new(),
+                        Err(error) => format!("Evidence Store warning: {error}\n"),
+                    }
+                } else {String::new()};
                 let telemetry=match metrics_for_report.finish(&workspace_for_report,mode,start,result.is_ok(),&evidence_for_report){
                     Ok(summary)=>summary,
                     Err(err)=>format!("Metrics warning: {err}"),
                 };
-                let _ = tx.send(ResultMessage::Chat { answer: result, telemetry });
+                let _ = tx.send(ResultMessage::Chat { answer: result, telemetry: format!("{telemetry}\n{evidence_note}") });
             });
         }
     }
