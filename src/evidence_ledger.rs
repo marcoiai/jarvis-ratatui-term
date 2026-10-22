@@ -58,7 +58,7 @@ pub fn audit(answer: &str, evidence: &EvidenceCache) -> Audit {
         for path in &read_paths {
             // Check only declarations of unread files, not paragraphs discussing
             // why another report's unread declarations were mistaken.
-            if normalized.trim_start().starts_with(['-', '*', '|'])
+            if normalized.trim_start().chars().next().is_some_and(|c| matches!(c, '-' | '*' | '|'))
                 && normalized.contains(path)
                 && !normalized.contains("incorreto")
                 && !normalized.contains("falso") {
