@@ -116,13 +116,13 @@ pub fn export_approved(workspace:&Path)->Result<String,String>{
                 "claim":candidate.claim,"classification":candidate.classification,"evidence":candidate.evidence,
                 "needs_freshness_review":true});
             serde_json::to_writer(&mut file,&record).map_err(|e|e.to_string())?;
-            file.write_all(b"\\n").map_err(|e|e.to_string())?;
+            file.write_all(b"\n").map_err(|e|e.to_string())?;
         }
         file.sync_all().map_err(|e|e.to_string())?;
         fs::rename(&temp,&dest).map_err(|e|e.to_string())
     })();
     if result.is_err(){let _=fs::remove_file(&temp);}
-    result.map(|_|format!("Exportados {} conhecimentos aprovados para {}. Reveja segredos, licenças e validade antes de treinar.\\n",approved.len(),dest.display()))
+    result.map(|_|format!("Exportados {} conhecimentos aprovados para {}. Reveja segredos, licenças e validade antes de treinar.\n",approved.len(),dest.display()))
 }
 
 #[cfg(test)]
