@@ -611,6 +611,17 @@ impl App {
                     result
                 };
                 let mode=if is_symphony {"symphony"}else{"solo"};
+                // Prevent a source-free answer on repository-specific tasks.
+                // Applies to Solo and Symphony; does not confuse prior chat with
+                // fresh source evidence collected in this execution.
+                let requested = messages.iter().rev().find(|m|m.role == "user")
+                    .map(|m|m.content.as_str()).unwrap_or("");
+                let prior = messages.iter().rev().filter(|m|m.role == "user")
+                    .nth(1).map(|m|m.content.as_str());
+                let required = investigation::requires_fresh_source(requested,prior);
+                let result = if required && evidence_for_report.len() == 0 {
+                    Err("Evidence Requirement Gate: nenhum trecho de código foi observado nesta execução; parecer técnico bloqueado.".into())
+                } else { result };
                 // Hold the response until the deterministic gate has audited it.
                 // Never stream an unaudited answer to the user's terminal.
                 let result = match result {
@@ -709,9 +720,6 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
     let source_required = investigation::requires_fresh_source(question, previous_user);
     let allow_tools = allow_tools && (source_required || investigation::investigation_intent(question, previous_user));
-    if source_required && !allow_tools {
-        return Err("Evidence Requirement Gate: this request needs a fresh source inspection; the selected stage has no tool access.".into());
-    }
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")
