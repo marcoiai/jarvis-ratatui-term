@@ -7,6 +7,9 @@ pub struct Roles {
     pub investigator: String,
     pub architect: String,
     pub reviewer: String,
+    #[serde(default)] pub investigator_model: String,
+    #[serde(default)] pub architect_model: String,
+    #[serde(default)] pub reviewer_model: String,
     #[serde(default = "default_mode")]
     pub mode: String,
     #[serde(default = "default_solo_role")]
@@ -19,6 +22,9 @@ impl Default for Roles {
             investigator: "ollama".into(),
             architect: "gemini".into(),
             reviewer: "groq".into(),
+            investigator_model: String::new(),
+            architect_model: String::new(),
+            reviewer_model: String::new(),
             mode: default_mode(),
             solo_role: default_solo_role(),
         }
@@ -61,6 +67,28 @@ impl Roles {
         Ok(())
     }
 
+    pub fn set_model(&mut self,role:&str,model:&str)->Result<(),String>{
+        if model.len()>128 || model.is_empty() || !model.chars().all(|c|
+            c.is_ascii_alphanumeric() || matches!(c, '-'|'_'|'.'|'/'|':')) {
+            return Err("Invalid model name".into());
+        }
+        match role {
+            "investigator"=>self.investigator_model=model.into(),
+            "architect"=>self.architect_model=model.into(),
+            "reviewer"=>self.reviewer_model=model.into(),
+            _=>return Err("Unknown role".into())
+        }
+        Ok(())
+    }
+    pub fn model_for<'a>(&'a self,role:&str,default:&'a str)->&'a str {
+        let model=match role {
+            "investigator"=>&self.investigator_model,
+            "architect"=>&self.architect_model,
+            "reviewer"=>&self.reviewer_model,
+            _=>return default
+        };
+        if model.is_empty(){default}else{model}
+    }
     pub fn set_mode(&mut self, mode: &str) -> Result<(), String> {
         match mode {
             "solo" => self.mode = "solo".into(),
@@ -104,7 +132,10 @@ impl Roles {
     }
 
     pub fn summary(&self) -> String {
-        format!("Investigator: {}\nArchitect: {}\nReviewer: {}\n", self.investigator, self.architect, self.reviewer)
+        format!("Investigator: {} [{}]\nArchitect: {} [{}]\nReviewer: {} [{}]\n",
+        self.investigator,if self.investigator_model.is_empty(){"default"}else{&self.investigator_model},
+        self.architect,if self.architect_model.is_empty(){"default"}else{&self.architect_model},
+        self.reviewer,if self.reviewer_model.is_empty(){"default"}else{&self.reviewer_model})
     }
 }
 
