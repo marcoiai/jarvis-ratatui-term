@@ -341,6 +341,18 @@ impl App {
             self.output.push_str("Solo: one selected role. Symphony: investigator -> architect -> reviewer -> one answer.\n");
             return;
         }
+        if let Some(spec)=input.strip_prefix("/role-model ") {
+            let words:Vec<&str>=spec.split_whitespace().collect();
+            let result=match words.as_slice(){
+                [role,model]=>{
+                    let mut updated=self.roles.clone();
+                    updated.set_model(role,model).and_then(|_|updated.save(&self.workspace).map(|_|self.roles=updated))
+                },
+                _=>Err("Usage: /role-model investigator|architect|reviewer MODEL".into())
+            };
+            self.output.push_str(&format!("Role model: {result:?}\n"));
+            return;
+        }
         if let Some(spec) = input.strip_prefix("/role ") {
             let words: Vec<&str> = spec.split_whitespace().collect();
             let result = match words.as_slice() {
@@ -657,8 +669,13 @@ impl App {
                     let solo_start=Instant::now();
                     let question = messages.iter().rev().find(|m| m.role == "user")
                         .map(|m| m.content.clone()).unwrap_or_default();
+                    let selected=roles.model_for(&roles.solo_role,
+                        match solo_provider.as_str(){"ollama"=>&ollama_model,"groq"=>&groq_model,"gemini"=>&gemini_model,_=>&ollama_model});
                     let result=query_provider(&client, &solo_provider, messages, workspace.clone(),
-                        &url, &ollama_model, &groq_model, &gemini_model, true,
+                        &url,
+                        if solo_provider=="ollama"{selected}else{&ollama_model},
+                        if solo_provider=="groq"{selected}else{&groq_model},
+                        if solo_provider=="gemini"{selected}else{&gemini_model}, true,
                         evidence.clone(), metrics.clone(), None).await;
                     // Knowledge extraction is a separate, read-only pass. Never send
                     // extraction JSON to the UI or let a model promote memory itself.
@@ -875,9 +892,13 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if shared.is_empty() {"(none)"} else {&shared}
         )});
         let stage_start=Instant::now();
+        let selected_model=roles.model_for(&name.to_ascii_lowercase(),
+            match *provider {"ollama"=>local_model,"groq"=>groq_model,"gemini"=>gemini_model,_=>local_model});
         let result=query_provider(client,provider,stage,workspace.clone(),host,
-            local_model,groq_model,gemini_model,index == 0,evidence.clone(),metrics.clone(),
-            None).await;
+            if *provider=="ollama"{selected_model}else{local_model},
+            if *provider=="groq"{selected_model}else{groq_model},
+            if *provider=="gemini"{selected_model}else{gemini_model},
+            index == 0,evidence.clone(),metrics.clone(),None).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {
