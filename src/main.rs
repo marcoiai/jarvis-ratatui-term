@@ -7,6 +7,7 @@ mod knowledge;
 mod evidence;
 mod evidence_ledger;
 mod interpreter;
+mod runtime_intent;
 mod validation_gate;
 mod credentials;
 mod cloud;
@@ -445,6 +446,13 @@ impl App {
             return;
         }
 
+        // Runtime state belongs to App, not to a generative model. Resolve
+        // read-only natural-language questions before Interpreter/Ollama.
+        if let Some(intent) = runtime_intent::resolve(&input) {
+            self.output.push_str(&runtime_intent::answer(intent, &self.workspace,
+                &self.model, &self.roles.mode));
+            return;
+        }
         let selection = router::route(&input, &self.roles.mode, &self.communication.language);
         let interpreter_model = env::var("DUDE_INTERPRETER_MODEL").ok().filter(|v| !v.trim().is_empty());
         let is_explicit_local = input.starts_with('/') || input.starts_with('!');
