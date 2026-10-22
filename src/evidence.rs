@@ -126,6 +126,12 @@ impl EvidenceCache {
         format!("Source reads: {}. Files: {}. Tool errors: {}. This is sampled coverage, not verification of all modules.",
             read.len(), if read.is_empty() { "(none)".into() } else { read.into_iter().collect::<Vec<_>>().join(", ") }, failures)
     }
+    /// Snapshot of read-only tool results for durable, reviewable storage.
+    pub fn source_observations(&self) -> Vec<Value> {
+        self.observations.lock().map(|items|items.iter()
+            .filter(|item|item["tool"] == "read_file").cloned().collect())
+            .unwrap_or_default()
+    }
     pub fn export(&self) -> String {
         let Ok(cache) = self.observations.lock() else { return "Evidence records unavailable".into() };
         let mut text = String::new();
