@@ -20,6 +20,34 @@ pub fn is_deep_followup(question: &str) -> bool {
     ].iter().any(|marker| q.contains(marker))
 }
 
+/// Policy-level evidence requirement for claims about this workspace.
+/// Intentionally conservative: classify technical change requests and follow-ups
+/// independent of the model's rewritten prompt.
+pub fn requires_fresh_source(question: &str, previous_user: Option<&str>) -> bool {
+    let q = question.to_lowercase();
+    let change = [
+        "refator", "melhoria", "melhorias", "proposta", "proponha",
+        "propor", "implementar", "implementação", "arquitetura", "audit",
+        "segurança", "performance", "otimiz", "diagnóst", "problema",
+        "corrigir", "correção", "review", "code review", "analisa",
+        "análise", "analisar", "investig", "technical debt",
+    ].iter().any(|marker|q.contains(marker));
+    let target = [
+        "projeto", "código", "codigo", "code", "repo", "workspace",
+        "sistema", "módulo", "modulo", "src/", ".rs", "aplicação",
+    ].iter().any(|marker|q.contains(marker));
+    (change && target) ||
+        (change && previous_user.is_some_and(|p| {
+            let p=p.to_lowercase();
+            ["projeto","código","codigo","workspace","repo","módulo","modulo"]
+                .iter().any(|marker|p.contains(marker))
+        })) ||
+        (["melhore isso","proponha melhorias","como melhorar","refatore isso",
+          "o que mudaríamos","what should we improve"]
+         .iter().any(|marker|q.contains(marker))
+         && previous_user.is_some())
+}
+
 pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool {
     if is_deep_followup(question) {
         return previous_user.is_some_and(|previous| is_technical(previous)
@@ -216,5 +244,17 @@ mod intent_tests {
         assert!(is_technical("leia os arquivos e explique o projeto"));
         assert!(is_technical("Investigate the user request: inspect main.rs code"));
         assert!(is_technical("faça uma análise mais profunda"));
+    }
+}
+
+#[cfg(test)]
+mod requirement_gate_tests {
+    use super::requires_fresh_source;
+    #[test]
+    fn requires_source_for_project_refactor() {
+        assert!(requires_fresh_source("Proponha melhorias no código do projeto", None));
+        assert!(requires_fresh_source("Refatore isso", Some("Analisa o código do projeto")));
+        assert!(!requires_fresh_source("oi", None));
+        assert!(!requires_fresh_source("Explique Rust em geral", None));
     }
 }
