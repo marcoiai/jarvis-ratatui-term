@@ -118,20 +118,20 @@ fn current(workspace:&Path,e:&Excerpt)->bool {
 }
 pub fn list(workspace:&Path)->Result<String,String>{
     let entries=read_all(&destination(workspace)?)?;
-    if entries.is_empty(){return Ok("Nenhum trecho salvo. Execute uma investigação primeiro.\\n".replace("\\\\n","\\n"))}
+    if entries.is_empty(){return Ok("Nenhum trecho salvo. Execute uma investigação primeiro.\n".replace("\\\n","\n"))}
     let mut lines=vec!["Blocos persistidos (IDs começam em 1):".to_owned()];
     for (index,e) in entries.iter().enumerate().rev().take(50).rev(){
         lines.push(format!("#{} [{}] {} — {} bytes",index+1,
             if current(workspace,e){"atual"}else{"desatualizado"},
             e.path,e.excerpt.len()));
     }
-    Ok(format!("{}\\nUse /evidence show ID, /evidence search TERMO ou /evidence export.\\n",lines.join("\\n")))
+    Ok(format!("{}\nUse /evidence show ID, /evidence search TERMO ou /evidence export.\n",lines.join("\n")))
 }
 pub fn show(workspace:&Path,id:usize)->Result<String,String>{
     let entries=read_all(&destination(workspace)?)?;
     let e=entries.get(id.checked_sub(1).ok_or("ID inválido")?).ok_or("Bloco não encontrado")?;
     let state=if current(workspace,e){"atual"}else{"desatualizado"};
-    Ok(format!("Bloco #{} [{}] — {}\\nPergunta: {}\\n\\n{}\\n",id,state,e.path,e.question,e.excerpt))
+    Ok(format!("Bloco #{} [{}] — {}\nPergunta: {}\n\n{}\n",id,state,e.path,e.question,e.excerpt))
 }
 pub fn search(workspace:&Path,term:&str)->Result<String,String>{
     let term=term.trim();
@@ -145,8 +145,8 @@ pub fn search(workspace:&Path,term:&str)->Result<String,String>{
             matches.push(format!("#{} {} — {} bytes",i+1,e.path,e.excerpt.len()));
         }
     }
-    if matches.is_empty(){return Ok("Nenhum bloco atual encontrado.\\n".into())}
-    Ok(format!("Blocos atuais encontrados (até 30):\\n{}\\n",matches.into_iter().take(30).collect::<Vec<_>>().join("\\n")))
+    if matches.is_empty(){return Ok("Nenhum bloco atual encontrado.\n".into())}
+    Ok(format!("Blocos atuais encontrados (até 30):\n{}\n",matches.into_iter().take(30).collect::<Vec<_>>().join("\n")))
 }
 pub fn export_current(workspace:&Path)->Result<String,String>{
     let entries=read_all(&destination(workspace)?)?;
@@ -161,7 +161,7 @@ pub fn export_current(workspace:&Path)->Result<String,String>{
         let mut count=0;
         for e in entries.iter().filter(|e|current(workspace,e)){
             serde_json::to_writer(&mut output,e).map_err(|e|e.to_string())?;
-            output.write_all(b"\\n").map_err(|e|e.to_string())?;
+            output.write_all(b"\n").map_err(|e|e.to_string())?;
             count+=1;
         }
         output.sync_all().map_err(|e|e.to_string())?;
@@ -169,7 +169,7 @@ pub fn export_current(workspace:&Path)->Result<String,String>{
         Ok(count)
     })();
     if write.is_err(){let _=fs::remove_file(&temporary);}
-    write.map(|count|format!("Exportados {count} blocos atuais para {}. Revise segredos e licenças antes de compartilhar.\\n",target.display()))
+    write.map(|count|format!("Exportados {count} blocos atuais para {}. Revise segredos e licenças antes de compartilhar.\n",target.display()))
 }
 
 #[cfg(test)]
