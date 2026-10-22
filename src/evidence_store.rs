@@ -112,6 +112,66 @@ pub fn status(workspace:&Path)->Result<String,String>{
     Ok(format!("Evidence Store: {} trechos persistidos; {} atuais; {} desatualizados/indisponíveis.\nArmazenamento: .dude/source_evidence.jsonl\nTrechos são observações, não fatos verificados.\n",entries.len(),fresh,entries.len()-fresh))
 }
 
+fn current(workspace:&Path,e:&Excerpt)->bool {
+    checked_source(workspace,&e.path).as_deref().and_then(stamp)
+        ==Some((e.source_size,e.source_modified_ns))
+}
+pub fn list(workspace:&Path)->Result<String,String>{
+    let entries=read_all(&destination(workspace)?)?;
+    if entries.is_empty(){return Ok("Nenhum trecho salvo. Execute uma investigação primeiro.\\n".replace("\\\\n","\\n"))}
+    let mut lines=vec!["Blocos persistidos (IDs começam em 1):".to_owned()];
+    for (index,e) in entries.iter().enumerate().rev().take(50).rev(){
+        lines.push(format!("#{} [{}] {} — {} bytes",index+1,
+            if current(workspace,e){"atual"}else{"desatualizado"},
+            e.path,e.excerpt.len()));
+    }
+    Ok(format!("{}\\nUse /evidence show ID, /evidence search TERMO ou /evidence export.\\n",lines.join("\\n")))
+}
+pub fn show(workspace:&Path,id:usize)->Result<String,String>{
+    let entries=read_all(&destination(workspace)?)?;
+    let e=entries.get(id.checked_sub(1).ok_or("ID inválido")?).ok_or("Bloco não encontrado")?;
+    let state=if current(workspace,e){"atual"}else{"desatualizado"};
+    Ok(format!("Bloco #{} [{}] — {}\\nPergunta: {}\\n\\n{}\\n",id,state,e.path,e.question,e.excerpt))
+}
+pub fn search(workspace:&Path,term:&str)->Result<String,String>{
+    let term=term.trim();
+    if term.is_empty(){return Err("Informe um termo de busca".into())}
+    let entries=read_all(&destination(workspace)?)?;
+    let needle=term.to_lowercase();
+    let mut matches=Vec::new();
+    for (i,e) in entries.iter().enumerate(){
+        if !current(workspace,e){continue}
+        if e.path.to_lowercase().contains(&needle)||e.excerpt.to_lowercase().contains(&needle)||e.question.to_lowercase().contains(&needle){
+            matches.push(format!("#{} {} — {} bytes",i+1,e.path,e.excerpt.len()));
+        }
+    }
+    if matches.is_empty(){return Ok("Nenhum bloco atual encontrado.\\n".into())}
+    Ok(format!("Blocos atuais encontrados (até 30):\\n{}\\n",matches.into_iter().take(30).collect::<Vec<_>>().join("\\n")))
+}
+pub fn export_current(workspace:&Path)->Result<String,String>{
+    let entries=read_all(&destination(workspace)?)?;
+    let dir=folder(workspace)?;
+    let target=dir.join("source_evidence_export.jsonl");
+    if target.exists()&&fs::symlink_metadata(&target).map_err(|e|e.to_string())?.file_type().is_symlink(){
+        return Err("Arquivo de exportação é um symlink".into())
+    }
+    let temporary=dir.join(format!(".source-export-{}.tmp",std::process::id()));
+    let write=(||->Result<usize,String>{
+        let mut output=fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e|e.to_string())?;
+        let mut count=0;
+        for e in entries.iter().filter(|e|current(workspace,e)){
+            serde_json::to_writer(&mut output,e).map_err(|e|e.to_string())?;
+            output.write_all(b"\\n").map_err(|e|e.to_string())?;
+            count+=1;
+        }
+        output.sync_all().map_err(|e|e.to_string())?;
+        fs::rename(&temporary,&target).map_err(|e|e.to_string())?;
+        Ok(count)
+    })();
+    if write.is_err(){let _=fs::remove_file(&temporary);}
+    write.map(|count|format!("Exportados {count} blocos atuais para {}. Revise segredos e licenças antes de compartilhar.\\n",target.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
