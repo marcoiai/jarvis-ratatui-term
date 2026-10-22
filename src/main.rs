@@ -7,6 +7,7 @@ mod knowledge;
 mod evidence;
 mod evidence_ledger;
 mod interpreter;
+mod validation_gate;
 mod credentials;
 mod cloud;
 mod roles;
@@ -569,7 +570,7 @@ impl App {
                         .map(|m| m.content.clone()).unwrap_or_default();
                     let result=query_provider(&client, &solo_provider, messages, workspace.clone(),
                         &url, &ollama_model, &groq_model, &gemini_model, true,
-                        evidence.clone(), metrics.clone(), Some(tx.clone())).await;
+                        evidence.clone(), metrics.clone(), None).await;
                     // Knowledge extraction is a separate, read-only pass. Never send
                     // extraction JSON to the UI or let a model promote memory itself.
                     let result = match result {
@@ -610,6 +611,13 @@ impl App {
                     result
                 };
                 let mode=if is_symphony {"symphony"}else{"solo"};
+                // Hold the response until the deterministic gate has audited it.
+                // Never stream an unaudited answer to the user's terminal.
+                let result = match result {
+                    Ok(answer) => Ok(validation_gate::validate(&client, &url, &ollama_model,
+                        answer, &evidence_for_report, &metrics_for_report).await),
+                    Err(error) => Err(error),
+                };
                 let telemetry=match metrics_for_report.finish(&workspace_for_report,mode,start,result.is_ok(),&evidence_for_report){
                     Ok(summary)=>summary,
                     Err(err)=>format!("Metrics warning: {err}"),
@@ -752,7 +760,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         let stage_start=Instant::now();
         let result=query_provider(client,provider,stage,workspace.clone(),host,
             local_model,groq_model,gemini_model,index == 0,evidence.clone(),metrics.clone(),
-            if index == 2 {Some(updates.clone())} else {None}).await;
+            None).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         if index == 2 {
