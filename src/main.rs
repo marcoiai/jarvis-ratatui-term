@@ -10,6 +10,7 @@ mod evidence_ledger;
 mod interpreter;
 mod runtime_intent;
 mod skills;
+mod symphony_checkpoint;
 mod validation_gate;
 mod credentials;
 mod cloud;
@@ -886,10 +887,17 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         let mut stage:Vec<Message> = messages.iter().filter(|m|m.role=="system").cloned().collect();
         stage.push(Message{role:"system".into(),content:format!("You are the {name} in DUDE Symphony. {instruction}")});
         // Avoid broadcasting unrelated old chat turns to every Symphony stage.
-        let collected = if index == 0 { String::new() } else { evidence.export() };
+        // Character-based preflight budget. Deliberately conservative for
+        // rate-limited cloud providers; this is not a tokenizer or TPM guarantee.
+        let cloud_budget = *provider != "ollama";
+        let evidence_budget = if cloud_budget { 8500 } else { 24000 };
+        let collected = if index == 0 { String::new() } else {
+            evidence.export().chars().take(evidence_budget).collect::<String>()
+        };
+        let handoff = if cloud_budget {shared.chars().take(4500).collect::<String>()} else {shared.clone()};
         stage.push(Message{role:"user".into(),content:format!(
-            "Original user request:\n{question}\n\nStructured evidence from read-only tools:\n{collected}\n\nPrevious stage findings:\n{}\n",
-            if shared.is_empty() {"(none)"} else {&shared}
+            "Original user request:\n{question}\n\nStructured evidence from read-only tools (bounded):\n{collected}\n\nPrevious stage findings:\n{}\n",
+            if handoff.is_empty() {"(none)"} else {&handoff}
         )});
         let stage_start=Instant::now();
         let selected_model=roles.model_for(&name.to_ascii_lowercase(),
@@ -920,7 +928,11 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         }
         // Bound cost and payload sent to downstream providers.
         shared.push_str(&format!("\n{name} ({provider}) findings:\n{}\n",
-            response.chars().take(5000).collect::<String>()));
+            response.chars().take(3500).collect::<String>()));
+        // Save a local checkpoint after successful stages, without transferring
+        // more data to cloud providers. Resume is intentionally not automatic.
+        let _ = symphony_checkpoint::save(&workspace,question,name,provider,selected_model,
+            &response, &evidence.coverage());
     }
     Err("Symphony ended without a review".into())
 }
