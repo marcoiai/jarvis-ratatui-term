@@ -38,6 +38,10 @@ pub fn audit(answer: &str, evidence: &EvidenceCache) -> Audit {
         "nenhum código foi lido", "workspace vazio",
         "no source files were read", "no files were read",
         "workspace is empty",
+        "apenas snippets e readme foram acessíveis",
+        "apenas snippets e readme foram acessiveis",
+        "apenas snippets e readme foram acessados",
+        "código base completo precisa ser carregado",
     ].iter().any(|phrase| lower.contains(phrase));
     let coverage_conflict = denial && evidence.read_manifest().starts_with("READ SOURCE EXCERPTS");
     Audit { unchecked_references, coverage_conflict }
@@ -85,6 +89,7 @@ mod tests {
         evidence.execute(&root, "read_file", &json!({"path":"sample.rs"}));
         assert!(audit("Workspace vazio. Nenhum arquivo foi lido.", &evidence).coverage_conflict);
         assert!(!audit("Apenas parte dos arquivos foi lida.", &evidence).coverage_conflict);
+        assert!(audit("Até agora, apenas snippets e README foram acessíveis.", &evidence).coverage_conflict);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
