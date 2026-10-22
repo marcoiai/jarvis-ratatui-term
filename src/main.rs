@@ -523,15 +523,24 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
-                let route = if let Some(model) = interpreter_enabled.as_deref() {
+                let interpreted = if let Some(model) = interpreter_enabled.as_deref() {
                     if question_is_explicit_override(&messages) {
-                        route
+                        interpreter::Interpretation {route, enriched:None}
                     } else {
                         let prompt = messages.iter().rev().find(|m| m.role == "user")
                             .map(|m| m.content.as_str()).unwrap_or("");
-                        interpreter::classify(&client, &url, model, prompt, &roles.mode, route).await
+                        interpreter::interpret(&client, &url, model, prompt, &roles.mode, route).await
                     }
-                } else { route };
+                } else {interpreter::Interpretation {route, enriched:None}};
+                let route = interpreted.route;
+                let mut messages = messages;
+                if let Some(enriched) = interpreted.enriched {
+                    // The actual user turn is preserved in App.history. Only the
+                    // model-facing copy receives auxiliary interpretation.
+                    if let Some(last_user) = messages.iter_mut().rev().find(|m| m.role == "user") {
+                        last_user.content = enriched;
+                    }
+                }
                 if let router::Route::Local(reply) = &route {
                     let _ = tx.send(ResultMessage::Chat {answer:Ok(reply.clone()),telemetry:"Roteamento local por Interpreter.".into()});
                     return;
