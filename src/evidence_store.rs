@@ -33,6 +33,15 @@ fn checked_source(workspace:&Path,path:&str)->Option<std::path::PathBuf> {
     let relative=Path::new(path);
     if relative.is_absolute() || relative.components().any(|c| !matches!(c,Component::Normal(_))) {return None}
     if relative.components().any(|c|c.as_os_str().to_string_lossy().starts_with('.')) {return None}
+    // Conservative filter: store source-code excerpts only. A source file can
+    // still contain credentials; review the local store before exporting.
+    let allowed=["rs","py","java","cpp","cc","c","h","hpp","ts","tsx","js","jsx","php","go","kt","swift","toml","md"];
+    if !relative.extension().and_then(|v|v.to_str()).is_some_and(|ext|allowed.contains(&ext.to_ascii_lowercase().as_str())) {return None}
+    let forbidden=["secret","credential","password","token","private","keyfile"];
+    if relative.components().any(|c|{
+        let component=c.as_os_str().to_string_lossy().to_lowercase();
+        forbidden.iter().any(|part|component.contains(part))
+    }) {return None}
     let source=workspace.join(relative);
     if !source.symlink_metadata().ok()?.is_file() || source.symlink_metadata().ok()?.file_type().is_symlink() {return None}
     let canonical=source.canonicalize().ok()?;
