@@ -6,6 +6,7 @@ mod router;
 mod knowledge;
 mod evidence;
 mod evidence_ledger;
+mod interpreter;
 mod credentials;
 mod cloud;
 mod roles;
@@ -444,7 +445,10 @@ impl App {
         }
 
         let selection = router::route(&input, &self.roles.mode, &self.communication.language);
-        if let router::Route::Local(reply) = &selection {
+        let interpreter_model = env::var("DUDE_INTERPRETER_MODEL").ok().filter(|v| !v.trim().is_empty());
+        let is_explicit_local = input.starts_with('/') || input.starts_with('!');
+        if (interpreter_model.is_none() || is_explicit_local)
+            && let router::Route::Local(reply) = &selection {
             self.output.push_str(reply);
             self.output.push('\n');
             return;
@@ -477,6 +481,8 @@ impl App {
             let messages = self.history.clone();
             let roles = self.roles.clone();
             let route = selection;
+            let interpreter_enabled = interpreter_model;
+            let cloud_permission = self.cloud_allowed;
             let evidence = evidence::EvidenceCache::default();
             let metrics = metrics::Metrics::default();
             let url = self.ollama_url.clone();
@@ -517,6 +523,28 @@ impl App {
                 return;
             }
             tokio::spawn(async move {
+                let route = if let Some(model) = interpreter_enabled.as_deref() {
+                    if question_is_explicit_override(&messages) {
+                        route
+                    } else {
+                        let prompt = messages.iter().rev().find(|m| m.role == "user")
+                            .map(|m| m.content.as_str()).unwrap_or("");
+                        interpreter::classify(&client, &url, model, prompt, &roles.mode, route).await
+                    }
+                } else { route };
+                if let router::Route::Local(reply) = &route {
+                    let _ = tx.send(ResultMessage::Chat {answer:Ok(reply.clone()),telemetry:"Roteamento local por Interpreter.".into()});
+                    return;
+                }
+                // Re-evaluate authorization after async routing: an Interpreter may
+                // escalate Solo -> Symphony, but never grant cloud permissions.
+                let actual: Vec<&str> = if matches!(&route, router::Route::Symphony) {
+                    vec![&roles.investigator, &roles.architect, &roles.reviewer]
+                } else { vec![roles.selected_provider()] };
+                if actual.iter().any(|provider| *provider != "ollama") && !cloud_permission {
+                    let _ = tx.send(ResultMessage::Chat {answer:Err("Interpreter selected a cloud role without /cloud allow.".into()),telemetry:String::new()});
+                    return;
+                }
                 let is_symphony=matches!(&route, router::Route::Symphony);
                 let start=Instant::now();
                 let metrics_for_report=metrics.clone();
@@ -647,6 +675,11 @@ impl App {
         }
         self.follow_output = true;
     }
+}
+
+fn question_is_explicit_override(messages: &[Message]) -> bool {
+    let question = messages.iter().rev().find(|m| m.role == "user").map(|m| m.content.trim()).unwrap_or("");
+    question.starts_with("symphony:") || question.starts_with("sinfônica:") || question.starts_with("solo:")
 }
 
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
