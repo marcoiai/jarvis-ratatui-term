@@ -561,6 +561,13 @@ impl App {
                 let evidence_for_report=evidence.clone();
                 let workspace_for_report=workspace.clone();
                 let solo_provider=roles.selected_provider().to_owned();
+                let source_required_for_turn = {
+                    let current = messages.iter().rev().find(|m|m.role == "user")
+                        .map(|m|m.content.as_str()).unwrap_or("");
+                    let previous = messages.iter().rev().filter(|m|m.role == "user")
+                        .nth(1).map(|m|m.content.as_str());
+                    investigation::requires_fresh_source(current, previous)
+                };
                 let result = if is_symphony {
                     run_symphony(&client, &roles, messages, workspace, &url,
                         &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(), tx.clone()).await
@@ -614,12 +621,7 @@ impl App {
                 // Prevent a source-free answer on repository-specific tasks.
                 // Applies to Solo and Symphony; does not confuse prior chat with
                 // fresh source evidence collected in this execution.
-                let requested = messages.iter().rev().find(|m|m.role == "user")
-                    .map(|m|m.content.as_str()).unwrap_or("");
-                let prior = messages.iter().rev().filter(|m|m.role == "user")
-                    .nth(1).map(|m|m.content.as_str());
-                let required = investigation::requires_fresh_source(requested,prior);
-                let result = if required && evidence_for_report.len() == 0 {
+                let result = if source_required_for_turn && evidence_for_report.len() == 0 {
                     Err("Evidence Requirement Gate: nenhum trecho de código foi observado nesta execução; parecer técnico bloqueado.".into())
                 } else { result };
                 // Hold the response until the deterministic gate has audited it.
