@@ -115,7 +115,7 @@ mod tests {
         assert!(audit("Workspace vazio. Nenhum arquivo foi lido.", &evidence).coverage_conflict);
         assert!(!audit("Apenas parte dos arquivos foi lida.", &evidence).coverage_conflict);
         assert!(audit("Até agora, apenas snippets e README foram acessíveis.", &evidence).coverage_conflict);
-        assert_eq!(audit("- \`sample.rs\`: NÃO LIDO", &evidence).falsely_unread, vec!["sample.rs"]);
+        assert_eq!(audit("- `sample.rs`: NÃO LIDO", &evidence).falsely_unread, vec!["sample.rs"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
