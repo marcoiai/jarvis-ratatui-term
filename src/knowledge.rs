@@ -91,6 +91,40 @@ pub fn reject(workspace:&Path,id:u64)->Result<(),String>{
     item.status="rejected".into();
     save(workspace,&entries)
 }
+/// Explicit export of human-approved facts. This is training *source material*,
+/// not a ready-made chat fine-tuning corpus. Review licensing and secrets first.
+pub fn export_approved(workspace:&Path)->Result<String,String>{
+    let entries=load(workspace)?;
+    let approved:Vec<_>=entries.iter()
+        .filter(|c|c.status=="approved" && c.references_checked
+            && matches!(c.classification.as_str(),"documented"|"verified"))
+        .collect();
+    let dir=workspace.join(".dude");
+    fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
+    if fs::symlink_metadata(&dir).map_err(|e|e.to_string())?.file_type().is_symlink(){
+        return Err("Refusing symlink export directory".into())
+    }
+    let dest=dir.join("approved_knowledge.jsonl");
+    if dest.exists() && fs::symlink_metadata(&dest).map_err(|e|e.to_string())?.file_type().is_symlink(){
+        return Err("Refusing symlink export file".into())
+    }
+    let temp=dir.join(format!(".approved-{}.tmp",std::process::id()));
+    let result=(||->Result<(),String>{
+        let mut file=fs::OpenOptions::new().create_new(true).write(true).open(&temp).map_err(|e|e.to_string())?;
+        for candidate in &approved {
+            let record=serde_json::json!({"type":"approved_project_fact","question":candidate.question,
+                "claim":candidate.claim,"classification":candidate.classification,"evidence":candidate.evidence,
+                "needs_freshness_review":true});
+            serde_json::to_writer(&mut file,&record).map_err(|e|e.to_string())?;
+            file.write_all(b"\\n").map_err(|e|e.to_string())?;
+        }
+        file.sync_all().map_err(|e|e.to_string())?;
+        fs::rename(&temp,&dest).map_err(|e|e.to_string())
+    })();
+    if result.is_err(){let _=fs::remove_file(&temp);}
+    result.map(|_|format!("Exportados {} conhecimentos aprovados para {}. Reveja segredos, licenças e validade antes de treinar.\\n",approved.len(),dest.display()))
+}
+
 #[cfg(test)]
 mod tests{
     use super::*;
