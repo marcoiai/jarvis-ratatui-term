@@ -59,37 +59,38 @@ struct ToolCall { function: ToolFunction }
 #[derive(Deserialize)]
 struct ToolFunction { name: String, arguments: Value }
 
-// Five independent glyphs; never rely on columns of a large ASCII drawing.
-const ENOVA_GLYPHS: [[&str; 5]; 5] = [
-    ["████", "█   ", "███ ", "█   ", "████"], // E
-    ["█  █", "██ █", "█ ██", "█  █", "█  █"], // N
-    [" ██ ", "█  █", "█  █", "█  █", " ██ "], // O
-    ["█  █", "█  █", "█  █", " ██ ", " ██ "], // V
-    [" ██ ", "█  █", "████", "█  █", "█  █"], // A
+// ENOVA mark supplied by the user; preserve spacing and all 7 original rows.
+const ENOVA_LOGO: [&str; 7] = [
+    "█████ █   █  ███  █   █  ███    ",
+    "█░░░░░██  █░█ ░░█ █░  █░█ ░░█   ",
+    "████░░█░█ █░█░ ░█░█░░ █░█████░  ",
+    "█░░░░ █░░██░█░░ █░░█░█ ░█░░░█░░ ",
+    "█████░█░░ █░░███ ░░ █ ░ █░░░█░░ ",
+    " ░░░░░ ░░  ░░ ░░░ ░  ░ ░ ░░  ░░ ",
+    "  ░░░░░ ░   ░  ░░░    ░   ░   ░ ",
 ];
 
+// The N occupies columns 6..11 of this compact wordmark.
+const N_START: usize = 6;
+const N_END: usize = 11;
+
 fn greeting() -> String {
-    let logo = (0..5).map(|row| {
-        ENOVA_GLYPHS.iter().map(|glyph| glyph[row]).collect::<Vec<_>>().join("  ")
-    }).collect::<Vec<_>>().join("\n");
-    format!("{logo}\n           business solutions\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType /help for commands.\n")
+    format!("{}\n        business solutions\n\nD.U.D.E. — Demented Unified Development Entity\nHey dude! What are we building today?\nType /help for commands.\n", ENOVA_LOGO.join("\n"))
 }
 
 fn styled_output(output: &str) -> Text<'_> {
-    // Color only the N glyph, not a guessed slice of the original illustration.
-    if !output.starts_with(ENOVA_GLYPHS[0][0]) { return Text::raw(output); }
+    if !output.starts_with(ENOVA_LOGO[0]) { return Text::raw(output); }
     let mut lines = Vec::<Line<'_>>::new();
     for (i, line) in output.lines().enumerate() {
-        if i < 5 {
-            let glyphs = (0..5).map(|letter| {
-                let color = if letter == 1 { Color::Red } else { Color::White };
-                Span::styled(
-                    format!("{}{}", ENOVA_GLYPHS[letter][i], if letter < 4 { "  " } else { "" }),
-                    Style::default().fg(color)
-                )
-            }).collect::<Vec<_>>();
-            lines.push(Line::from(glyphs));
-        } else if i == 5 {
+        if i < ENOVA_LOGO.len() {
+            let before = N_START.min(line.len());
+            let after = N_END.min(line.len());
+            lines.push(Line::from(vec![
+                Span::styled(&line[..before], Style::default().fg(Color::White)),
+                Span::styled(&line[before..after], Style::default().fg(Color::Red)),
+                Span::styled(&line[after..], Style::default().fg(Color::White)),
+            ]));
+        } else if i == ENOVA_LOGO.len() {
             lines.push(Line::styled(line, Style::default().fg(Color::White)));
         } else {
             lines.push(Line::raw(line));
