@@ -118,7 +118,7 @@ fn current(workspace:&Path,e:&Excerpt)->bool {
 }
 pub fn list(workspace:&Path)->Result<String,String>{
     let entries=read_all(&destination(workspace)?)?;
-    if entries.is_empty(){return Ok("Nenhum trecho salvo. Execute uma investigação primeiro.\n".replace("\\\n","\n"))}
+    if entries.is_empty(){return Ok("Nenhum trecho salvo. Execute uma investigação primeiro.\n".into())}
     let mut lines=vec!["Blocos persistidos (IDs começam em 1):".to_owned()];
     for (index,e) in entries.iter().enumerate().rev().take(50).rev(){
         lines.push(format!("#{} [{}] {} — {} bytes",index+1,
