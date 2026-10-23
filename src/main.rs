@@ -678,11 +678,13 @@ impl App {
                     let solo_start=Instant::now();
                     let question = messages.iter().rev().find(|m| m.role == "user")
                         .map(|m| m.content.clone()).unwrap_or_default();
+                    let primary_start = Instant::now();
                     let result=query_provider(&client, &solo_provider, messages, workspace.clone(),
                         &url, &ollama_model, &groq_model, &gemini_model, true,
                         evidence.clone(), metrics.clone(), Some(tx.clone())).await;
                     // Knowledge extraction is a separate, read-only pass. Never send
                     // extraction JSON to the UI or let a model promote memory itself.
+                    metrics.stage("solo_primary_response", &solo_provider, primary_start, result.is_ok());
                     let result = match result {
                         Ok(answer) if evidence.len() > 0 => {
                             let evidence_text = evidence.export();
@@ -698,6 +700,7 @@ impl App {
                             ];
                             // Best-effort secondary inference: never spend another full
                             // investigation deadline extracting optional knowledge.
+                            let extraction_start = Instant::now();
                             let discovered = match tokio::time::timeout(
                                 Duration::from_secs(75),
                                 query_provider(&client, &solo_provider, extraction, workspace.clone(),
@@ -707,6 +710,7 @@ impl App {
                                 Ok(result) => result,
                                 Err(_) => Err("prazo de 75 s da extração excedido".into()),
                             };
+                            metrics.stage("knowledge_extraction", &solo_provider, extraction_start, discovered.is_ok());
                             match discovered {
                                 Ok(raw) => {
                                     let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
