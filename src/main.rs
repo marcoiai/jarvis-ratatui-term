@@ -806,6 +806,14 @@ impl App {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
+                let mut text = text;
+                if crate::claim_audit::unsupported_completeness_claims(&text) {
+                    let warning = "\\n\\n⚠ Auditoria DUDE: a resposta faz uma afirmação absoluta de implementação/verificação. As leituras de arquivos são amostrais e não comprovam que toda a arquitetura ou todos os módulos funcionam. Trate a conclusão como não verificada até haver evidência e testes específicos.\\n";
+                    text.push_str(warning);
+                    if self.streamed {
+                        self.output.push_str(warning);
+                    }
+                }
                 if let (Some(store), Some(user)) = (&self.memory, self.last_question.take()) {
                     if let Err(err) = store.journal_exchange(&user, &text) {
                         self.output.push_str(&format!("Journal write warning: {err}\\n"));
