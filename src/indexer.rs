@@ -126,7 +126,7 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     let added = next.keys().filter(|p| !old.files.contains_key(*p)).count();
     let updated = next.iter().filter(|(p,f)| old.files.get(*p).is_some_and(|prior| prior != *f)).count();
     let removed = old.files.keys().filter(|p| !next.contains_key(*p)).count();
-    let changed = added + updated + removed > 0 || old.version != 1 || old.workspace != root.to_string_lossy();
+    let changed = added + updated + removed > 0 || old.version != 1 || old.workspace != root.to_string_lossy().to_string();
     old.version = 1;
     old.workspace = root.to_string_lossy().into_owned();
     old.updated_unix = now();
