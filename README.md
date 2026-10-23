@@ -27,6 +27,10 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 
 DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
 
+## Persistent project indexer
+
+Activate with `/index start`, inspect with `/index status`, and stop with `/index stop`. While active, DUDE builds a local structural index and polls the workspace every 3 seconds for additions, edits, and deletions. The index is stored in `.dude/index.json` and survives restarts; the polling task is session-scoped and must be activated again. It records relative paths, sizes/timestamps, change fingerprints, language guesses, and likely declaration symbols—not source contents or embeddings. It respects Git ignore rules and `.dudeignore`, avoids symlinks, excludes common generated/dependency directories and sensitive files, skips binary files and files over 1 MiB, and reports the 100,000-file safety cap. This first version is structural, not semantic search; agents must still read source files to verify claims.
+
 ## AI file tools (read-only)
 
 DUDE can ask Ollama to call `list_files`, `read_file` (line ranges, similar to `sed -n`), and `search_text` (literal grep-style matches with line numbers). These are Rust implementations, not unrestricted shell commands. Tool-capable Ollama models are required; support varies by model.
