@@ -80,6 +80,7 @@ mod tests {
         assert!(unsupported_completeness_claims("The entire architecture is fully implemented."));
         assert!(unsupported_completeness_claims("Não há evidências de bugs críticos ou falhas na funcionalidade atual."));
         assert!(unsupported_completeness_claims("Sem necessidade de mudanças."));
+        assert!(unsupported_completeness_claims("O sistema funciona 100% conforme verificado, sem necessidade de mudanças. Não há evidências de bugs críticos."));
         assert!(!unsupported_completeness_claims("Somente src/main.rs foi verificado."));
         assert!(!unsupported_completeness_claims("Há funcionalidades ainda não verificadas."));
     }
