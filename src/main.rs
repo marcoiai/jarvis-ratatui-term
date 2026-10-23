@@ -1263,7 +1263,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let environment_line = app.environment.status();
         let runtime_line = runtime_status(&app.ollama_url, &app.model, app.model_ready);
         frame.render_widget(
-            Paragraph::new(format!("{environment_line}\\n{runtime_line}"))
+            Paragraph::new(format!("{environment_line}\n{runtime_line}"))
                 .style(Style::default().fg(Color::Cyan)),
             chunks[4],
         );
