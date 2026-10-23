@@ -30,7 +30,7 @@ fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default
 fn excluded(path: &Path) -> bool {
     path.components().any(|part| {
         let n = part.as_os_str().to_string_lossy();
-        matches!(n.as_ref(), ".git" | ".dude" | "target" | "node_modules" | "vendor" | "dist" |
+        matches!(n.as_ref(), ".git" | ".dude" | ".dudeignore" | "target" | "node_modules" | "vendor" | "dist" |
             "build" | ".ssh" | ".aws" | ".config" | ".idea" | ".vscode" | "coverage" |
             "__pycache__" | ".next" | ".venv" | "venv")
             || n == ".env" || n.starts_with(".env.") || n == "id_rsa" || n == "id_ed25519"
@@ -106,7 +106,7 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
         let relative = path.strip_prefix(&root).unwrap_or(path);
         if excluded(relative) { continue; }
         let Some(kind) = entry.file_type() else { continue };
-        if rules.matched_path_or_any_parents(relative, kind.is_dir()).is_ignore() { continue; }
+        if rules.matched_path_or_any_parents(path, kind.is_dir()).is_ignore() { continue; }
         if kind.is_dir() || !kind.is_file() { continue; }
         if next.len() >= MAX_FILES { capped = true; break; }
         let meta = match fs::metadata(path) { Ok(m) => m, Err(_) => continue };
