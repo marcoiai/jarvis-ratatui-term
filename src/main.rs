@@ -99,6 +99,26 @@ struct App {
     roles: roles::Roles,
 }
 
+// Invalid Knowledge review answers never enter model routing.
+fn blocks_pending_knowledge_reply(input: &str) -> bool {
+    !input.starts_with('/')
+}
+
+#[cfg(test)]
+mod knowledge_review_input_tests {
+    use super::blocks_pending_knowledge_reply;
+
+    #[test]
+    fn invalid_review_answers_never_reach_model_routing() {
+        for answer in ["talvez", "invalid review answer with more than twelve chars",
+                       "a long multiline reply\nwith unexpected text", "pub fn handler() {}"] {
+            assert!(blocks_pending_knowledge_reply(answer), "{answer}");
+        }
+        assert!(!blocks_pending_knowledge_reply("/knowledge"));
+        assert!(!blocks_pending_knowledge_reply("/clear"));
+    }
+}
+
 impl App {
     fn logo(&self) -> Text<'static> {
         // Terminal adaptation of the provided ENOVA Business Solutions reference:
@@ -242,14 +262,14 @@ impl App {
             if matches!(lower.as_str(), "não" | "nao" | "n" | "no") {
                 let result = knowledge::reject(&self.workspace, id);
                 self.pending_knowledge = None;
-                self.output.push_str(&format!("Knowledge #{id}: {result:?}\\n"));
+                self.output.push_str(&format!("Knowledge #{id}: {result:?}\n"));
                 self.ask_next_knowledge();
                 return;
             }
-            // Short unrecognized replies are typos, not new model requests.
-            // Explicit commands and substantive questions may interrupt a review.
-            if !input.starts_with('/') && input.chars().count() <= 12 {
-                self.output.push_str("⚠ Resposta inválida. Digite sim, não ou /knowledge.\n");
+            // Unrecognized prose must not become a model request during review.
+            // Only explicit slash commands may interrupt the review.
+            if blocks_pending_knowledge_reply(&input) {
+                self.output.push_str("⚠ Resposta inválida. Digite sim, não ou use um comando / explícito.\n");
                 return;
             }
             self.pending_knowledge = None;
