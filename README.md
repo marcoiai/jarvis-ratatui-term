@@ -94,6 +94,7 @@ The selected providers are saved per workspace in `.dude/roles.json`. In **Solo*
 /role investigator ollama
 /role architect gemini
 /role reviewer groq
+/role-model investigator qwen3:4b
 /mode solo
 /solo architect
 /mode symphony
@@ -106,7 +107,9 @@ Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `qwen3:4b`); G
 
 If any Symphony stage errors, DUDE displays an error instead of silently treating partial results as a complete three-role answer. Shared tools are read-only, and each provider is limited to eight rounds of tool calls.
 
-**Validation status:** code committed, but integration and compilation must be run in your local development environment. In particular, check the Gemini model and credentials against your account's API quota.
+`/role-model ROLE MODEL` overrides the model for that role in Solo and Symphony, including Solo's Knowledge extraction. Roles without an override use the provider default. Overrides are saved with the role configuration and included in pending-request recovery. Changing a provider does not clear its model override; set an appropriate model for the new provider.
+
+**Validation status (2026-10-23):** `cargo check --locked` and `cargo test --locked` pass, including local HTTP fixtures for model dispatch and checkpoint recovery. Live provider credentials, model availability and quota are not covered by those fixtures.
 
 ## API keys inside DUDE
 
@@ -232,3 +235,9 @@ DUDE keeps separate layers. Successful completed exchanges are appended with UTC
 ## Recovery of unfinished requests
 
 Before dispatching a model request, DUDE stores the current user request in `.dude/pending_request.json`. On normal successful completion it removes the recovery marker. If the process crashes or a request fails, the marker remains. At startup the TUI warns about an interrupted request. Type `/recover` to put it back into the editable input (press Enter to retry), or `/recover discard` to remove the marker. No request is replayed automatically. A subsequent submitted request replaces the current pending marker; this is a recovery mechanism for the latest request, not a queue. Response chunks and partially completed tool work are not checkpointed. This is local persistence, not a separate/offsite backup.
+
+Symphony also saves the most recently completed stage in `.dude/symphony_checkpoint.json`, with its role, provider, model, bounded response and coverage. If a later stage fails, this historical record remains available for inspection. A checkpoint write failure stops the pipeline before the next stage. This file does not enable automatic replay or stage-level resume; `/recover` still retries the original request.
+
+Ollama's specific XML tool-parser failure receives at most one text-only recovery request using observed source excerpts. Recovery output passes through the reasoning filter and remains subject to the current evidence gate. Empty output and unexpected tool calls fail closed. Per-request telemetry records round, message count, payload size and retry token usage without recording prompt bodies in the labels.
+
+Source reads identify requested excerpt boundaries, total file lines and output truncation. `complete_file=true` describes returned source coverage, not semantic verification. Explicit `!command` invocations run in the selected DUDE workspace.

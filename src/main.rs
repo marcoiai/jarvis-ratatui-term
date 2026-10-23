@@ -13,6 +13,7 @@ mod cloud;
 mod roles;
 mod memory;
 mod file_tools;
+mod symphony_checkpoint;
 #[cfg(test)]
 mod consolidation_tests;
 use std::{
@@ -926,6 +927,11 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if index == 2 {Some(updates.clone())} else {None}).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
+        // A durable stage record is historical evidence, never an automatic replay.
+        // Stop before dispatching the next provider if the checkpoint cannot be saved.
+        symphony_checkpoint::save(&workspace, question, name, provider, selected_model,
+            &response, &evidence.coverage())
+            .map_err(|error| format!("{name} checkpoint failed: {error}"))?;
         if index == 2 {
             const MARKER: &str = "DUDE_KNOWLEDGE_JSON:";
             if let Some(pos)=response.rfind(MARKER) {
@@ -1273,9 +1279,8 @@ async fn recover_ollama_tool_parse(
         metrics.stage("ollama_recovery", "ollama", started, false);
         return Err("Recovery returned no usable text or unexpected tool calls.".into());
     }
-    let answer = response_filter::strip_completed(&reply.message.content).map_err(|error| {
+    let answer = response_filter::strip_completed(&reply.message.content).inspect_err(|_| {
         metrics.stage("ollama_recovery", "ollama", started, false);
-        error
     })?;
     if answer.trim().is_empty() {
         metrics.stage("ollama_recovery", "ollama", started, false);

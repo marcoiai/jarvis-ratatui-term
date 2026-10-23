@@ -174,3 +174,74 @@ async fn explicit_commands_run_in_selected_workspace() {
     let output = run_command("pwd".into(), expected.clone()).await.unwrap();
     assert_eq!(output.trim(), expected.to_string_lossy());
 }
+
+#[test]
+fn role_models_survive_config_and_pending_request_recovery() {
+    let workspace = Workspace::new();
+    let legacy = r#"{"investigator":"ollama","architect":"gemini","reviewer":"groq"}"#;
+    let mut roles: roles::Roles = serde_json::from_str(legacy).unwrap();
+    assert_eq!(roles.model_for("investigator", "default"), "default");
+    roles.set_model("investigator", "local:4b").unwrap();
+    roles.set_model("architect", "remote-model").unwrap();
+    roles.save(&workspace.0).unwrap();
+    assert_eq!(roles::Roles::load(&workspace.0).unwrap(), roles);
+    let memory = memory::Memory::open(&workspace.0).unwrap();
+    memory.save_pending(&memory::PendingRequest {
+        question: "review".into(), roles: Some(roles.clone()),
+        ollama_model: Some("default".into()), groq_model: None,
+        gemini_model: None, cloud_was_allowed: false,
+    }).unwrap();
+    assert_eq!(memory.pending().unwrap().unwrap().roles.unwrap(), roles);
+    assert!(roles.set_model("unknown", "valid-model").is_err());
+    assert!(roles.set_model("reviewer", "invalid\nmodel").is_err());
+}
+
+#[tokio::test]
+async fn symphony_uses_role_models_preserves_evidence_and_checkpoints_before_failure() {
+    let workspace = Workspace::new();
+    std::fs::write(workspace.0.join("sample.rs"), "observed source\n").unwrap();
+    let cache = evidence::EvidenceCache::default();
+    let (host, task) = server(vec![
+        (200, json!({"message":{"tool_calls":[{"function":{"name":"read_file","arguments":{"path":"sample.rs"}}}]}}).to_string()),
+        (200, reply("Investigator sample.rs:1")),
+        (200, reply("Architect sample.rs:1")),
+        (503, "unavailable".into()),
+    ]).await;
+    let mut roles = roles::Roles::default();
+    for (role, model) in [("investigator", "investigator:4b"), ("architect", "architect:8b"), ("reviewer", "reviewer:4b")] {
+        roles.set(role, "ollama").unwrap();
+        roles.set_model(role, model).unwrap();
+    }
+    let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let (updates, _receiver) = mpsc::unbounded_channel();
+    let result = run_symphony(&client, &roles,
+        vec![Message {role:"user".into(), content:"review".into()}],
+        workspace.0.clone(), &host, "default", "unused", "unused", cache.clone(), metrics::Metrics::default(), updates).await;
+    assert!(result.unwrap_err().contains("Reviewer (ollama) failed"));
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["model"], "investigator:4b");
+    assert_eq!(requests[1]["model"], "investigator:4b");
+    assert_eq!(requests[2]["model"], "architect:8b");
+    assert_eq!(requests[3]["model"], "reviewer:4b");
+    assert!(requests[2]["tools"].as_array().unwrap().is_empty());
+    assert!(requests[3]["tools"].as_array().unwrap().is_empty());
+    assert!(requests[3]["messages"].to_string().contains("observed source"));
+    assert_eq!(cache.calls(), 1);
+    let checkpoint: Value = serde_json::from_slice(&std::fs::read(workspace.0.join(".dude/symphony_checkpoint.json")).unwrap()).unwrap();
+    assert_eq!(checkpoint["stage"], "Architect");
+    assert_eq!(checkpoint["model"], "architect:8b");
+    assert_eq!(checkpoint["question"], "review");
+    assert!(checkpoint["note"].as_str().unwrap().contains("not validated for automatic resume"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symphony_checkpoint_refuses_symlink_destination() {
+    let workspace = Workspace::new();
+    std::fs::create_dir(workspace.0.join(".dude")).unwrap();
+    let protected = workspace.0.join("untouched");
+    std::fs::write(&protected, "keep").unwrap();
+    std::os::unix::fs::symlink(&protected, workspace.0.join(".dude/symphony_checkpoint.json")).unwrap();
+    assert!(symphony_checkpoint::save(&workspace.0, "question", "Architect", "ollama", "model", "answer", "partial").is_err());
+    assert_eq!(std::fs::read_to_string(protected).unwrap(), "keep");
+}
