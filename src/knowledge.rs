@@ -39,18 +39,30 @@ fn save(workspace:&Path, entries:&[Candidate])->Result<(),String>{
     if result.is_err(){let _=fs::remove_file(tmp);}
     result
 }
+fn useful_claim(claim: &str) -> bool {
+    let text = claim.trim();
+    let lower = text.to_lowercase();
+    if text.len() < 25 || lower.starts_with("source declaration in ") {
+        return false;
+    }
+    !["pub fn ", "pub async fn ", "pub struct ", "pub enum ", "pub trait ",
+        "public class ", "public interface ", "class ", "def ", "async def "]
+        .iter().any(|prefix| lower.starts_with(prefix))
+}
+
 pub fn propose(workspace:&Path,question:&str,claims:&[CandidateDraft], observations:&crate::evidence::EvidenceCache)->Result<Vec<u64>,String>{
     let mut entries=load(workspace)?;
     let mut ids=Vec::new();
     for c in claims.iter().take(12){
-        if c.claim.trim().is_empty() || c.claim.len()>1600 || !matches!(c.classification.as_str(),"documented"|"verified"|"inferred") {continue}
+        if !useful_claim(&c.claim) || c.claim.len()>1600 || !matches!(c.classification.as_str(),"documented"|"verified"|"inferred") {continue}
         if entries.iter().any(|e|e.claim==c.claim && e.status!="rejected"){continue}
         let next=entries.iter().map(|e|e.id).max().unwrap_or(0)+1;
         let references: Vec<String> = c.evidence.iter().take(5)
             .map(|v|v.chars().take(500).collect()).collect();
         let checked = !references.is_empty()
             && references.iter().all(|reference| observations.observed_reference(reference));
-        let classification = if checked { c.classification.clone() } else { "inferred".into() };
+        if !checked { continue; }
+        let classification = c.classification.clone();
         entries.push(Candidate{id:next,status:"pending".into(),classification,
             claim:c.claim.trim().into(),evidence:references,question:question.chars().take(1000).collect(),
             references_checked:checked});
@@ -122,6 +134,13 @@ pub fn reject(workspace:&Path,id:u64)->Result<(),String>{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn rejects_source_declarations() {
+        assert!(!useful_claim("Source declaration in src/router.rs: pub enum Route {"));
+        assert!(!useful_claim("pub fn route(input: &str) -> Route {"));
+        assert!(useful_claim("The application requires explicit approval before persisting knowledge."));
+    }
+
     #[test]
     fn draft_parsing(){
         let draft:CandidateDraft=serde_json::from_str(r#"{"classification":"documented","claim":"A","evidence":["README.md:1"]}"#).unwrap();
