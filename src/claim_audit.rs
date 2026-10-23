@@ -56,6 +56,7 @@ pub fn unsupported_completeness_claims(answer: &str) -> bool {
             "verified", "functional", "implemented", "audited", "tested", "works",
             "verificado", "verificada", "funcional", "implementado", "implementada",
             "auditado", "auditada", "testado", "testada", "funciona", "funcionando",
+            "necessidade de mudanças", "no changes needed", "no changes required",
         ].iter().any(|term| lower.contains(term));
         absolute_scope && certainty
     })
