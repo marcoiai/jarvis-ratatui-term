@@ -893,11 +893,29 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         }
         let has_supported_citation = evidence_for_gate.has_supported_citation(&answer);
         let coverage = evidence_for_gate.coverage();
-        return Ok(crate::claim_audit::project_report_preamble(
+        let mut report = crate::claim_audit::project_report_preamble(
             &answer,
             &coverage,
             has_supported_citation,
-        ));
+        );
+        match crate::claim_audit::semantic_audit(
+            client,
+            host,
+            local_model,
+            &answer,
+            &evidence_for_gate,
+        ).await {
+            Ok(audit) => {
+                report.push_str("\n\n--- Avaliação semântica das conclusões ---\n");
+                report.push_str(&audit);
+            }
+            Err(error) => {
+                report.push_str(&format!(
+                    "\n\n⚠ AUDITORIA SEMÂNTICA NÃO EXECUTADA\n- Motivo: {error}\n- As conclusões do relatório permanecem sem validação semântica. Os alertas por palavras-chave são apenas heurísticos."
+                ));
+            }
+        }
+        return Ok(report);
     }
     Ok(answer)
 }
