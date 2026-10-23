@@ -1023,22 +1023,46 @@ async fn ask_ollama(
                 // A successful tool investigation must not silently become an empty
                 // report. Retry the final synthesis once using a full JSON response.
                 // Keep the same observations and never repeat file tool calls.
-                let fallback = client.post(format!("{host}/api/chat"))
-                    .json(&json!({
-                        "model": model,
-                        "messages": conversation,
-                        "stream": false,
-                        "think": false,
-                        "options": { "num_ctx": investigation::context_size() },
-                        "tools": [],
-                    }))
-                    .send().await
-                    .map_err(|e| format!("Ollama produced an empty review; non-streaming retry failed: {e}"))?;
+                let retry_start = Instant::now();
+                let retry_payload = json!({
+                    "model": model,
+                    "messages": conversation,
+                    "stream": false,
+                    "think": false,
+                    "options": { "num_ctx": investigation::context_size() },
+                    "tools": [],
+                });
+                let retry_label = format!(
+                    "ollama_retry_empty_stream_messages_{}_payload_bytes_{}",
+                    conversation.len(),
+                    serde_json::to_vec(&retry_payload).map(|body| body.len()).unwrap_or_default()
+                );
+                let fallback = match client.post(format!("{host}/api/chat"))
+                    .json(&retry_payload)
+                    .send().await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        metrics.stage(&retry_label, "ollama", retry_start, false);
+                        return Err(format!("Ollama produced an empty review; non-streaming retry failed: {error}"));
+                    }
+                };
                 if !fallback.status().is_success() {
-                    return Err(format!("Ollama produced an empty review; retry HTTP {}", fallback.status()));
+                    let status = fallback.status();
+                    let _ = fallback.text().await;
+                    metrics.stage(&format!("{retry_label}_http_{status}"), "ollama", retry_start, false);
+                    return Err(format!("Ollama produced an empty review; retry HTTP {status}"));
                 }
-                let reply: OllamaReply = fallback.json().await
-                    .map_err(|e| format!("Ollama empty-review retry returned invalid JSON: {e}"))?;
+                let reply: OllamaReply = match fallback.json().await {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        metrics.stage(&retry_label, "ollama", retry_start, false);
+                        return Err(format!("Ollama empty-review retry returned invalid JSON: {error}"));
+                    }
+                };
+                metrics.stage(&retry_label, "ollama", retry_start, true);
+                if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count) {
+                    metrics.tokens("ollama", model, i, o);
+                }
                 if !reply.message.tool_calls.is_empty() {
                     return Err("Ollama requested tools during empty-review retry; no report was produced.".into());
                 }
@@ -1075,16 +1099,41 @@ async fn ask_ollama(
             let mut retry_messages = conversation.clone();
             retry_messages.push(json!({"role":"user","content":
                 "Your previous response was empty. Provide the final answer now in ordinary visible text. Do not use thinking tags. Cite source lines only when observed; state uncertainty otherwise."}));
-            let retry = client.post(format!("{host}/api/chat"))
-                .json(&json!({
-                    "model":model,"messages":retry_messages,"stream":false,"think":false,
-                    "options":{"num_ctx": investigation::context_size()},"tools":[]
-                })).send().await.map_err(|e|format!("Empty Ollama reply and retry failed: {e}"))?;
+            let retry_start = Instant::now();
+            let retry_payload = json!({
+                "model":model,"messages":retry_messages,"stream":false,"think":false,
+                "options":{"num_ctx": investigation::context_size()},"tools":[]
+            });
+            let retry_label = format!(
+                "ollama_retry_empty_response_messages_{}_payload_bytes_{}",
+                retry_messages.len(),
+                serde_json::to_vec(&retry_payload).map(|body| body.len()).unwrap_or_default()
+            );
+            let retry = match client.post(format!("{host}/api/chat"))
+                .json(&retry_payload).send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    metrics.stage(&retry_label, "ollama", retry_start, false);
+                    return Err(format!("Empty Ollama reply and retry failed: {error}"));
+                }
+            };
             if !retry.status().is_success() {
-                return Err(format!("Empty Ollama reply; retry HTTP {}",retry.status()));
+                let status = retry.status();
+                let _ = retry.text().await;
+                metrics.stage(&format!("{retry_label}_http_{status}"), "ollama", retry_start, false);
+                return Err(format!("Empty Ollama reply; retry HTTP {status}"));
             }
-            let second: OllamaReply = retry.json().await
-                .map_err(|e|format!("Invalid Ollama retry response: {e}"))?;
+            let second: OllamaReply = match retry.json().await {
+                Ok(reply) => reply,
+                Err(error) => {
+                    metrics.stage(&retry_label, "ollama", retry_start, false);
+                    return Err(format!("Invalid Ollama retry response: {error}"));
+                }
+            };
+            metrics.stage(&retry_label, "ollama", retry_start, true);
+            if let (Some(i),Some(o))=(second.prompt_eval_count,second.eval_count) {
+                metrics.tokens("ollama", model, i, o);
+            }
             let answer = response_filter::strip_completed(&second.message.content)?;
             if answer.trim().is_empty() {
                 return Err("Ollama generated tokens but no visible review, even on retry. No conclusions were fabricated.".into());
