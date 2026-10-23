@@ -22,7 +22,7 @@ use std::{
 
 use crossterm::{
     cursor::{SetCursorStyle, Show},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -1151,9 +1151,11 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let mut visible = String::new();
         let mut visible_width = 0usize;
         for ch in app.input.chars().rev() {
-            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            // Keep the widget single-line while preserving newlines in the submitted prompt.
+            let display_ch = if ch.is_whitespace() || ch.is_control() { ' ' } else { ch };
+            let char_width = UnicodeWidthChar::width(display_ch).unwrap_or(0);
             if visible_width + char_width >= input_width { break; }
-            visible.insert(0, ch);
+            visible.insert(0, display_ch);
             visible_width += char_width;
         }
         if app.key_prompt.is_some() {
@@ -1253,26 +1255,32 @@ async fn run(
             app.complete(result);
         }
         draw(terminal, &mut app)?;
-        if event::poll(Duration::from_millis(80))?
-            && let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
-                if kind != KeyEventKind::Press {
-                    continue;
+        if event::poll(Duration::from_millis(80))? {
+            match event::read()? {
+                // Treat clipboard content atomically: embedded newlines stay inside one prompt.
+                Event::Paste(pasted) => app.input.push_str(&pasted),
+                Event::Key(KeyEvent { code, modifiers, kind, .. }) => {
+                    if kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    match code {
+                        KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\\n"); },
+                        KeyCode::Esc => break,
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
+                        KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
+                        KeyCode::Enter if matches!(app.input.trim().to_ascii_lowercase().as_str(), "/exit" | "/quit" | "/sair") => break,
+                        KeyCode::Enter => app.submit(tx.clone(), client.clone()),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Up if app.key_prompt.is_some() => {},
+                        KeyCode::Down if app.key_prompt.is_some() => {},
+                        KeyCode::Up => { app.follow_output = false; app.scroll = app.scroll.saturating_sub(1); },
+                        KeyCode::Down => { app.follow_output = false; app.scroll = app.scroll.saturating_add(1).min(60_000); },
+                        KeyCode::Char(c) => app.input.push(c),
+                        _ => {}
+                    }
                 }
-                match code {
-                    KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
-                    KeyCode::Esc => break,
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
-                    KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
-                    KeyCode::Enter if matches!(app.input.trim().to_ascii_lowercase().as_str(), "/exit" | "/quit" | "/sair") => break,
-                    KeyCode::Enter => app.submit(tx.clone(), client.clone()),
-                    KeyCode::Backspace => { app.input.pop(); }
-                    KeyCode::Up if app.key_prompt.is_some() => {},
-                    KeyCode::Down if app.key_prompt.is_some() => {},
-                    KeyCode::Up => { app.follow_output = false; app.scroll = app.scroll.saturating_sub(1); },
-                    KeyCode::Down => { app.follow_output = false; app.scroll = app.scroll.saturating_add(1).min(60_000); },
-                    KeyCode::Char(c) => app.input.push(c),
-                    _ => {}
-                }
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -1282,13 +1290,13 @@ async fn run(
 async fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, Show, SetCursorStyle::BlinkingBar)?;
+    execute!(stdout, EnterAlternateScreen, Show, SetCursorStyle::BlinkingBar, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run(&mut terminal).await;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape, LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape, DisableBracketedPaste, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     result
 }
