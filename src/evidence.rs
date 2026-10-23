@@ -36,6 +36,7 @@ impl EvidenceCache {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 let result = item["result"].as_str().unwrap_or_default().to_owned();
                 self.record(name, args, started, true, true, &result);
+                let _ = crate::progress::append(&root, name, args, true, true);
                 return result;
         }
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -53,6 +54,7 @@ impl EvidenceCache {
                 cache.insert(key, json!({"tool":name,"arguments":args,"result":result}));
         }
         self.record(name, args, started, false, success, &result);
+        let _ = crate::progress::append(&root, name, args, success, false);
         if success && let Ok(mut records) = self.observations.lock()
             && records.len() < 100 {
                 records.push(json!({"tool":name,"arguments":args,"result":result.chars().take(16000).collect::<String>()}));
@@ -91,6 +93,39 @@ impl EvidenceCache {
                     content.lines().any(|row| row.starts_with(&prefix))
                 })
         })
+    }
+    /// Collect declaration candidates exclusively from numbered read_file source lines.
+    /// This is a syntax observation, not proof of runtime behavior.
+    pub fn declaration_drafts(&self, limit: usize) -> Vec<crate::knowledge::CandidateDraft> {
+        let Ok(observations) = self.observations.lock() else { return Vec::new(); };
+        let mut drafts = Vec::new();
+        let mut seen = BTreeSet::new();
+        for item in observations.iter() {
+            if item["tool"] != "read_file" { continue; }
+            let Some(path) = item["arguments"]["path"].as_str() else { continue; };
+            if !(path.ends_with(".rs") || path.ends_with(".java")
+                || path.ends_with(".php") || path.ends_with(".py")) { continue; }
+            let Some(content) = item["result"].as_str() else { continue; };
+            for row in content.lines() {
+                let Some((number, line)) = row.split_once(": ") else { continue; };
+                let Ok(number) = number.parse::<usize>() else { continue; };
+                if number == 0 { continue; }
+                let declaration = line.trim();
+                let is_declaration = ["pub fn ", "pub async fn ", "pub struct ", "pub enum ",
+                    "pub trait ", "class ", "def ", "async def ", "public class ",
+                    "public interface "].iter().any(|prefix| declaration.starts_with(prefix));
+                if !is_declaration || declaration.len() > 180 { continue; }
+                let reference = format!("{path}:{number}");
+                if !seen.insert(reference.clone()) { continue; }
+                drafts.push(crate::knowledge::CandidateDraft {
+                    classification: "documented".into(),
+                    claim: format!("Source declaration in {path}: {}", declaration),
+                    evidence: vec![reference],
+                });
+                if drafts.len() >= limit { return drafts; }
+            }
+        }
+        drafts
     }
     pub fn read_manifest(&self) -> String {
         let Ok(events) = self.events.lock() else { return "Source-read manifest unavailable".into(); };
@@ -137,6 +172,32 @@ impl EvidenceCache {
         text.push_str(&format!("\n{}\n{}\n",self.coverage(),self.read_manifest()));
         text
     }
+    /// Whether the report contains at least one file:line pointing to a line
+    /// actually returned by read_file. This is citation presence, NOT claim validation.
+    pub fn has_supported_citation(&self, report: &str) -> bool {
+        let Ok(events) = self.events.lock() else { return false; };
+        let paths: BTreeSet<String> = events.iter()
+            .filter(|event| event["tool"] == "read_file" && event["success"] == true)
+            .filter_map(|event| event["path"].as_str().map(str::to_owned))
+            .collect();
+        drop(events);
+        for path in paths {
+            let needle = format!("{path}:");
+            for (offset, _) in report.match_indices(&needle) {
+                let remainder = &report[offset + needle.len()..];
+                let digits: String = remainder.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+                if !digits.is_empty() && self.observed_reference(&format!("{path}:{digits}")) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    pub fn source_read_count(&self) -> usize {
+        self.events.lock().map(|events| events.iter()
+            .filter(|event| event["tool"] == "read_file" && event["success"] == true).count())
+            .unwrap_or(0)
+    }
     pub fn len(&self) -> usize { self.observations.lock().map(|c|c.len()).unwrap_or(0) }
     pub fn calls(&self) -> usize { self.calls.load(Ordering::Relaxed) }
     pub fn hits(&self) -> usize { self.hits.load(Ordering::Relaxed) }
@@ -153,9 +214,27 @@ mod tests {
         let evidence = EvidenceCache::default();
         evidence.execute(&root, "read_file", &json!({"path":"example.rs","start_line":2,"end_line":2}));
         assert!(evidence.observed_reference("example.rs:2"));
+        assert!(evidence.declaration_drafts(6).is_empty());
+        assert!(evidence.has_supported_citation("Implementação em example.rs:2"));
+        assert!(!evidence.has_supported_citation("Implementação em example.rs:1"));
+        assert!(!evidence.has_supported_citation("Sem referências"));
         assert!(!evidence.observed_reference("example.rs:1"));
         assert!(!evidence.observed_reference("other.rs:2"));
         assert!(!evidence.observed_reference("example.rs"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn declaration_drafts_require_actual_read_file_lines() {
+        let root=std::env::temp_dir().join(format!("dude-decl-{}",std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("sample.rs"),"pub struct Agent;\nfn private() {}\npub fn run() {}\n").unwrap();
+        let evidence=EvidenceCache::default();
+        evidence.execute(&root,"read_file",&json!({"path":"sample.rs"}));
+        let drafts=evidence.declaration_drafts(6);
+        assert_eq!(drafts.len(),2);
+        assert_eq!(drafts[0].evidence,vec!["sample.rs:1"]);
+        assert_eq!(drafts[1].evidence,vec!["sample.rs:3"]);
+        assert!(drafts.iter().all(|d|evidence.observed_reference(&d.evidence[0])));
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

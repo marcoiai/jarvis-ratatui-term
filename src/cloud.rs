@@ -8,6 +8,63 @@ async fn tool(workspace: PathBuf, name: String, args: Value, evidence: EvidenceC
     }).await.map_err(|e| e.to_string())
 }
 
+// Compact outbound Groq context without altering locally retained observations.
+// Source excerpts prioritize numbered lines relevant to the user's request, while
+// preserving a small beginning/end sample and explicit omission markers.
+fn select_evidence(content: &str, terms: &[String], budget: usize) -> String {
+    if content.chars().count() <= budget { return content.to_owned(); }
+    let lines: Vec<&str> = content.lines().collect();
+    let mut scores: Vec<(usize, usize)> = lines.iter().enumerate().map(|(index, line)| {
+        let lower = line.to_lowercase();
+        let hits = terms.iter().filter(|term| lower.contains(term.as_str())).count();
+        let numbered = line.split_once(": ").is_some_and(|(prefix, _)| prefix.trim().parse::<usize>().is_ok());
+        (index, hits * 10 + usize::from(numbered) + usize::from(index < 3) * 8)
+    }).collect();
+    scores.sort_by(|a,b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut selected = std::collections::BTreeSet::new();
+    let mut used = 0;
+    for (index, _) in scores {
+        let size = lines[index].chars().count() + 1;
+        if used + size > budget.saturating_sub(100) { continue; }
+        selected.insert(index);
+        used += size;
+    }
+    let mut result = String::new();
+    let mut last = None;
+    for index in selected {
+        if last.is_some_and(|prev| index > prev + 1) {
+            result.push_str("[... omitted source lines ...]\n");
+        }
+        result.push_str(lines[index]);
+        result.push('\n');
+        last = Some(index);
+    }
+    result.push_str("[selected excerpts; full tool output retained in local evidence]");
+    result
+}
+
+fn groq_compact_messages(messages: &[Value]) -> Vec<Value> {
+    const MAX_TOOL_CHARS: usize = 1050;
+    const MAX_OTHER_CHARS: usize = 2600;
+    // Terms are derived from the most recent actual user request, not tool output.
+    let question = messages.iter().find(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_str()).unwrap_or("");
+    let terms: Vec<String> = question.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 4).take(20).map(str::to_lowercase).collect();
+    messages.iter().map(|original| {
+        let mut msg = original.clone();
+        let role = msg["role"].as_str().unwrap_or("");
+        let limit = if role == "tool" { MAX_TOOL_CHARS } else { MAX_OTHER_CHARS };
+        if let Some(content) = msg["content"].as_str() {
+            if content.chars().count() > limit {
+                let shortened = select_evidence(content, &terms, limit);
+                msg["content"] = json!(shortened);
+            }
+        }
+        msg
+    }).collect()
+}
+
 pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>, workspace: PathBuf, allow_tools: bool, evidence: EvidenceCache, metrics: Metrics) -> Result<String, String> {
     let key = credentials::get("groq").ok_or("Missing Groq API key. Use /apikey groq")?;
     let mut convo: Vec<Value> = messages.into_iter().map(|m| json!({"role":m.role,"content":m.content})).collect();
@@ -20,10 +77,11 @@ pub async fn groq(client: &reqwest::Client, model: &str, messages: Vec<Message>,
         // Rate limits are shared across all Groq calls, including other Symphony roles.
         // Retry the exact same turn; never re-execute completed file tools.
         let mut retries = 0;
+        let outgoing = groq_compact_messages(&convo);
         let response = loop {
             let response = client.post("https://api.groq.com/openai/v1/chat/completions")
                 .bearer_auth(&key)
-                .json(&if tools_enabled { json!({"model":model,"messages":convo,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}) } else { json!({"model":model,"messages":convo,"stream":false}) })
+                .json(&if tools_enabled { json!({"model":model,"messages":outgoing,"stream":false,"tools":file_tools::definitions(),"tool_choice":"auto"}) } else { json!({"model":model,"messages":outgoing,"stream":false}) })
                 .send().await.map_err(|e|format!("Groq connection: {e}"))?;
             if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {break response;}
             if retries >= 3 {break response;}
@@ -82,7 +140,16 @@ pub async fn gemini(client: &reqwest::Client, model: &str, messages: Vec<Message
             .json(&if tools_enabled { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents,"tools":[{"functionDeclarations":defs}]}) } else { json!({"systemInstruction":{"parts":[{"text":context}]},"contents":contents}) })
             .send().await.map_err(|e|format!("Gemini connection: {e}"))?;
         let status=response.status();
-        if !status.is_success() {return Err(format!("Gemini HTTP {status}: {}",response.text().await.unwrap_or_default().chars().take(600).collect::<String>()));}
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Err(format!(
+                    "Gemini model '{model}' is unavailable to this API key (404). Set GEMINI_MODEL=gemini-3.8-flash and restart DUDE. Details: {}",
+                    body.chars().take(300).collect::<String>()
+                ));
+            }
+            return Err(format!("Gemini HTTP {status}: {}",body.chars().take(600).collect::<String>()));
+        }
         let value:Value=response.json().await.map_err(|e|e.to_string())?;
         if let (Some(i),Some(o))=(value["usageMetadata"]["promptTokenCount"].as_u64(),value["usageMetadata"]["candidatesTokenCount"].as_u64()){ metrics.tokens("gemini",model,i,o); }
         let candidate=&value["candidates"][0]["content"];
@@ -119,6 +186,14 @@ fn parse_retry_seconds(body: &str) -> Option<f64> {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+    #[test]
+    fn groq_compaction_retains_tool_identity() {
+        let messages = vec![json!({"role":"tool","tool_call_id":"call-1","content":"x".repeat(10000)})];
+        let compact = groq_compact_messages(&messages);
+        assert_eq!(compact[0]["tool_call_id"], "call-1");
+        assert!(compact[0]["content"].as_str().unwrap().len() < 1100);
+        assert_eq!(messages[0]["content"].as_str().unwrap().len(), 10000);
+    }
     #[test]
     fn detects_retry_seconds() {
         assert_eq!(parse_retry_seconds("Please try again in 12.1425s."), Some(12.1425));

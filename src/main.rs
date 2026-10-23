@@ -1,3 +1,6 @@
+mod claim_audit;
+mod progress;
+mod response_filter;
 mod investigation;
 mod alignment;
 mod environment;
@@ -19,13 +22,14 @@ use std::{
 
 use crossterm::{
     cursor::{SetCursorStyle, Show},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
+    text::{Line, Span, Text},
     style::{Color, Style},
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
@@ -95,7 +99,60 @@ struct App {
     roles: roles::Roles,
 }
 
+// Invalid Knowledge review answers never enter model routing.
+fn blocks_pending_knowledge_reply(input: &str) -> bool {
+    !input.starts_with('/')
+}
+
+#[cfg(test)]
+mod knowledge_review_input_tests {
+    use super::blocks_pending_knowledge_reply;
+
+    #[test]
+    fn invalid_review_answers_never_reach_model_routing() {
+        for answer in ["talvez", "invalid review answer with more than twelve chars",
+                       "a long multiline reply\nwith unexpected text", "pub fn handler() {}"] {
+            assert!(blocks_pending_knowledge_reply(answer), "{answer}");
+        }
+        assert!(!blocks_pending_knowledge_reply("/knowledge"));
+        assert!(!blocks_pending_knowledge_reply("/clear"));
+    }
+}
+
 impl App {
+    fn logo(&self) -> Text<'static> {
+        // Terminal adaptation of the provided ENOVA Business Solutions reference:
+        // the N is red, the other letters are neutral, and the tagline is gray.
+        const E: [&str; 5] = ["█████ ", "█     ", "████  ", "█     ", "█████ "];
+        const N: [&str; 5] = ["█   █ ", "██  █ ", "█ █ █ ", "█  ██ ", "█   █ "];
+        const OVA: [&str; 5] = [
+            " ███  █   █   ███ ",
+            "█   █ █   █  █   █",
+            "█   █ █   █  █████",
+            "█   █  █ █   █   █",
+            " ███    █    █   █",
+        ];
+        let mut lines: Vec<Line<'static>> = (0..5).map(|i| Line::from(vec![
+            Span::styled(E[i], Style::default().fg(Color::White)),
+            Span::styled(N[i], Style::default().fg(Color::Red)),
+            Span::styled(OVA[i], Style::default().fg(Color::White)),
+        ])).collect();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "business solutions",
+            Style::default().fg(Color::Gray),
+        )));
+        Text::from(lines)
+    }
+
+    fn banner(&self) -> &'static str {
+        if self.communication.language == "pt-BR" {
+            "D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\nSanidade: FALHARAM | NOVVS: EM ESPERA | Café: CRÍTICO\nDeploys questionáveis: só com aprovação. E aí, buddy!"
+        } else {
+            "D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\nSanity: FAILED | NOVVS: STANDBY | Coffee: CRITICAL\nQuestionable deployments require approval. Hey dude!"
+        }
+    }
+
     fn new() -> Self {
         let workspace = env::var("DUDE_WORKSPACE").ok()
             .and_then(|p| std::fs::canonicalize(p).ok())
@@ -125,9 +182,9 @@ impl App {
             input: String::new(),
             key_prompt: None,
             output: if communication.language == "pt-BR" {
-                String::from("D.U.D.E. — Demented Unified Development Entity\nAssistente de engenharia Enova | IA local\n\nDUDE inicializado.\nTestes de sanidade: FALHARAM.\nDiagnóstico NOVVS: EM ESPERA.\nDependência de café: CRÍTICA.\nPronto para deploys questionáveis (com sua aprovação).\n\nE aí, buddy! O que vamos construir hoje?\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
+                String::from("DUDE inicializado.\nDigite uma pergunta, !comando, /model NOME ou /clear.\n")
             } else {
-                String::from("D.U.D.E. — Demented Unified Development Entity\nEnova Engineering Assistant | Local AI Mode\n\nDUDE initialized successfully.\nSanity checks: FAILED.\nNOVVS diagnostics: STANDBY.\nCoffee dependency: CRITICAL.\nReady to deploy questionable decisions (with your approval).\n\nHey dude! What are we building today?\nType a question, !command, /model NAME or /clear.\n")
+                String::from("DUDE initialized successfully.\nType a question, !command, /model NAME or /clear.\n")
             },
             history,
             scroll: 0,
@@ -144,7 +201,7 @@ impl App {
             pending_knowledge: None,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
-            gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into()),
+            gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
             cloud_allowed: false,
             model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
             ollama_url: env::var("OLLAMA_HOST")
@@ -183,21 +240,94 @@ impl App {
             if matches!(lower.as_str(), "sim" | "s" | "yes" | "y") {
                 let result = self.memory.as_ref().ok_or("Memória indisponível".to_string())
                     .and_then(|memory| knowledge::approve(&self.workspace, id, memory));
-                self.pending_knowledge = None;
-                self.output.push_str(&format!("Knowledge #{id}: {}\\n", if result.is_ok() {"aprovado"} else {"não aprovado"}));
-                if let Err(error) = result { self.output.push_str(&format!("Motivo: {error}\\n")); }
-                self.ask_next_knowledge();
+                match result {
+                    Ok(()) => {
+                        self.pending_knowledge = None;
+                        self.output.push_str(&format!("Knowledge #{id}: aprovado.\n"));
+                        self.ask_next_knowledge();
+                    }
+                    Err(error) => {
+                        self.output.push_str(&format!(
+                            "Knowledge #{id}: não aprovado. Motivo: {error}\n"
+                        ));
+                        self.output.push_str(
+                            "O candidato continua pendente. Responda 'não' para descartá-lo ou use /knowledge para revisar a fila.\n"
+                        );
+                        // Keep pending_knowledge set, so "não" can reject this item.
+                        // Do not call ask_next_knowledge after a failed approval.
+                    }
+                }
                 return;
             }
             if matches!(lower.as_str(), "não" | "nao" | "n" | "no") {
                 let result = knowledge::reject(&self.workspace, id);
                 self.pending_knowledge = None;
-                self.output.push_str(&format!("Knowledge #{id}: {result:?}\\n"));
+                self.output.push_str(&format!("Knowledge #{id}: {result:?}\n"));
                 self.ask_next_knowledge();
                 return;
             }
-            // Do not hijack arbitrary input: other commands and questions remain available.
+            // Unrecognized prose must not become a model request during review.
+            // Only explicit slash commands may interrupt the review.
+            if blocks_pending_knowledge_reply(&input) {
+                self.output.push_str("⚠ Resposta inválida. Digite sim, não ou use um comando / explícito.\n");
+                return;
+            }
             self.pending_knowledge = None;
+        }
+        if input == "/ollama" {
+            self.output.push_str(&format!("Ollama endpoint: {} | model: {} | ready: {}\nUse /ollama retry or /ollama host http://IP:11434\n",
+                self.ollama_url, self.model, self.model_ready));
+            return;
+        }
+        if input == "/ollama retry" || input.starts_with("/ollama host ") {
+            if let Some(host) = input.strip_prefix("/ollama host ") {
+                let host = host.trim().trim_end_matches('/');
+                if !(host.starts_with("http://") || host.starts_with("https://"))
+                    || host.contains(char::is_whitespace)
+                    || host.contains('?') || host.contains('#')
+                    || host.len() > 256 {
+                    self.output.push_str("Invalid Ollama URL. Example: /ollama host http://192.168.1.10:11434\n");
+                    return;
+                }
+                self.ollama_url = host.to_string();
+            }
+            self.model_ready = false;
+            self.output.push_str(&format!("Checking Ollama at {} for {}...\n", self.ollama_url, self.model));
+            let host=self.ollama_url.clone();
+            let model=self.model.clone();
+            tokio::spawn(async move {
+                let result=ensure_model(&client,&host,&model).await;
+                let _=tx.send(ResultMessage::ModelReady(result));
+            });
+            return;
+        }
+        if input == "/recover" {
+            match self.memory.as_ref().map(|m|m.pending()).unwrap_or(Ok(None)) {
+                Ok(Some(saved)) => {
+                    self.input = saved.question;
+                    if let Some(roles) = saved.roles {
+                        self.roles = roles;
+                    }
+                    if let Some(model) = saved.ollama_model { self.model = model; }
+                    if let Some(model) = saved.groq_model { self.groq_model = model; }
+                    if let Some(model) = saved.gemini_model { self.gemini_model = model; }
+                    self.output.push_str(&format!(
+                        "Pedido recuperado para edição. Modo: {} | Solo: {} | Ollama: {}. Pressione Enter para reenviar.\n",
+                        self.roles.mode, self.roles.selected_provider(), self.model
+                    ));
+                    if saved.cloud_was_allowed && !self.cloud_allowed {
+                        self.output.push_str("Esta execução usava cloud. Para reenviar, autorize novamente com /cloud allow.\n");
+                    }
+                },
+                Ok(None)=>self.output.push_str("Nenhum pedido pendente para recuperar.\n"),
+                Err(error)=>self.output.push_str(&format!("Erro ao recuperar: {error}\n")),
+            }
+            return;
+        }
+        if input == "/recover discard" {
+            let result=self.memory.as_ref().map(|m|m.clear_pending()).unwrap_or(Ok(()));
+            self.output.push_str(&format!("Descarte do pedido pendente: {result:?}\n"));
+            return;
         }
         if input == "/align" {
             self.output.push_str(&format!("{}\n",self.communication.describe()));
@@ -515,6 +645,25 @@ impl App {
                 }
                 return;
             }
+            if let Some(store)=&self.memory {
+                if let Some(question)=self.last_question.as_deref() {
+                    if let Err(error)=store.save_pending(&memory::PendingRequest {
+                        question: question.to_owned(),
+                        roles: Some(roles.clone()),
+                        ollama_model: Some(ollama_model.clone()),
+                        groq_model: Some(groq_model.clone()),
+                        gemini_model: Some(gemini_model.clone()),
+                        cloud_was_allowed: self.cloud_allowed,
+                    }) {
+                        self.output.push_str(&format!("Checkpoint error (request not dispatched): {error}\n"));
+                        self.history.pop();
+                        self.last_question=None;
+                        self.busy=false;
+                        self.started_at=None;
+                        return;
+                    }
+                }
+            }
             tokio::spawn(async move {
                 let is_symphony=matches!(&route, router::Route::Symphony);
                 let start=Instant::now();
@@ -529,41 +678,54 @@ impl App {
                     let solo_start=Instant::now();
                     let question = messages.iter().rev().find(|m| m.role == "user")
                         .map(|m| m.content.clone()).unwrap_or_default();
+                    let primary_start = Instant::now();
                     let result=query_provider(&client, &solo_provider, messages, workspace.clone(),
                         &url, &ollama_model, &groq_model, &gemini_model, true,
                         evidence.clone(), metrics.clone(), Some(tx.clone())).await;
                     // Knowledge extraction is a separate, read-only pass. Never send
                     // extraction JSON to the UI or let a model promote memory itself.
+                    metrics.stage("solo_primary_response", &solo_provider, primary_start, result.is_ok());
                     let result = match result {
                         Ok(answer) if evidence.len() > 0 => {
                             let evidence_text = evidence.export();
                             let prompt = format!(
-                                "Extract up to 6 reusable, project-specific factual knowledge candidates from the answer below. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
-                                question.chars().take(1000).collect::<String>(),
-                                answer.chars().take(5500).collect::<String>(),
-                                evidence_text.chars().take(16000).collect::<String>()
+                                "Extract up to 6 durable, project-specific architectural decisions, conventions, or non-obvious confirmed behaviors from the answer below. Never propose source declarations, signatures, structs, enums, or transient implementation details. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
+                                question.chars().take(500).collect::<String>(),
+                                answer.chars().take(3000).collect::<String>(),
+                                evidence_text.chars().take(5000).collect::<String>()
                             );
                             let extraction = vec![
                                 Message {role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into()},
                                 Message {role: "user".into(), content: prompt},
                             ];
-                            let discovered = query_provider(&client, &solo_provider, extraction, workspace.clone(),
-                                &url, &ollama_model, &groq_model, &gemini_model, false,
-                                evidence.clone(), metrics.clone(), None).await;
+                            // Best-effort secondary inference: never spend another full
+                            // investigation deadline extracting optional knowledge.
+                            let extraction_start = Instant::now();
+                            let discovered = match tokio::time::timeout(
+                                Duration::from_secs(75),
+                                query_provider(&client, &solo_provider, extraction, workspace.clone(),
+                                    &url, &ollama_model, &groq_model, &gemini_model, false,
+                                    evidence.clone(), metrics.clone(), None),
+                            ).await {
+                                Ok(result) => result,
+                                Err(_) => Err("prazo de 75 s da extração excedido".into()),
+                            };
+                            metrics.stage("knowledge_extraction", &solo_provider, extraction_start, discovered.is_ok());
                             match discovered {
                                 Ok(raw) => {
                                     let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
                                         .trim_end_matches("```").trim();
-                                    if let Ok(drafts) = serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
-                                        match knowledge::propose(&workspace, &question, &drafts, &evidence) {
+                                    match serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
+                                        Ok(drafts) => match knowledge::propose(&workspace, &question, &drafts, &evidence) {
                                             Ok(ids) if !ids.is_empty() =>
-                                                Ok(format!("{answer}\\n\\nKnowledge: {} candidato(s) para sua aprovação.", ids.len())),
-                                            Ok(_) => Ok(answer),
-                                            Err(error) => Ok(format!("{answer}\\n\\nKnowledge: falha ao guardar candidatos: {error}")),
-                                        }
-                                    } else { Ok(answer) }
+                                                Ok(format!("{answer}\\n\\n🧠 Knowledge: {} candidato(s) aguardando tua aprovação.", ids.len())),
+                                            Ok(_) => Ok(format!("{answer}\\n\\n🧠 Knowledge: nenhum candidato novo verificável. Use /knowledge para consultar pendências.")),
+                                            Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: falha ao guardar candidatos: {error}")),
+                                        },
+                                        Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração inválida ({error}). Nenhum conhecimento novo foi salvo.")),
+                                    }
                                 }
-                                Err(_) => Ok(answer), // Knowledge is optional; never break the user's answer.
+                                Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração indisponível ({error}). Nenhum conhecimento novo foi salvo.")),
                             }
                         }
                         other => other,
@@ -616,12 +778,22 @@ impl App {
                 self.output.push_str(&format!("{}: {model}\n", if self.communication.language == "pt-BR" {"Modelo pronto"} else {"Model ready"}));
             }
             ResultMessage::ModelReady(Err(error)) => {
+                self.model_ready = false;
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
-                if let (Some(store), Some(user)) = (&self.memory, self.last_question.take())
-                    && let Err(err) = store.record(&user, &text) {
-                        self.output.push_str(&format!("Memory write warning: {err}\n"));
+                if let (Some(store), Some(user)) = (&self.memory, self.last_question.take()) {
+                    if let Err(err) = store.journal_exchange(&user, &text) {
+                        self.output.push_str(&format!("Journal write warning: {err}\\n"));
+                    }
+                    if let Err(err) = store.record(&user, &text) {
+                        self.output.push_str(&format!("History write warning: {err}\\n"));
+                    }
+                }
+                if let Some(store)=&self.memory {
+                    if let Err(error)=store.clear_pending() {
+                        self.output.push_str(&format!("Recovery cleanup warning: {error}\n"));
+                    }
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
                 if self.streamed { self.output.push_str(&format!("\n\n{telemetry}\n")); }
@@ -656,6 +828,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
+    let require_project_evidence = allow_tools && investigation::needs_baseline(question);
     let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
     if allow_tools {
         let root = workspace.clone();
@@ -674,12 +847,25 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
-    match provider {
+    let evidence_for_gate = evidence.clone();
+
+    let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
+    }?;
+    if require_project_evidence {
+        investigation::require_evidence_for_overview(evidence_for_gate.source_read_count())?;
+        if answer.trim().is_empty() {
+            return Err("The model produced no review text; investigation evidence was gathered but no conclusion was generated.".into());
+        }
+        if !evidence_for_gate.has_supported_citation(&answer) {
+            let warning = "\n\n⚠ DUDE: este parecer não apresenta referências arquivo:linha confirmadas nas leituras. É uma síntese preliminar, não uma verificação das afirmações.\n";
+            return Ok(format!("{answer}{warning}"));
+        }
     }
+    Ok(answer)
 }
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
@@ -758,7 +944,11 @@ async fn ask_ollama(
         if allow_tools && !tools_enabled {
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\n{}", evidence.coverage(), evidence.read_manifest()))}));
         }
-        let stream_final = !tools_enabled;
+        // Internal extraction has no UI consumer: request one complete JSON response.
+        // Streaming is only useful when sending ChatChunk updates to the TUI.
+        // Stability first: receive final synthesis as one complete response.
+        // This prevents an audit warning from being the only streamed content.
+        let stream_final = false;
         let request_start = Instant::now();
         let response = client
             .post(format!("{host}/api/chat"))
@@ -772,7 +962,7 @@ async fn ask_ollama(
             }))
             .send()
             .await
-            .map_err(|e| format!("Cannot reach Ollama: {e}"))?;
+            .map_err(|e| format!("Ollama request failed or timed out: {e}. Check Ollama logs and model availability."))?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -783,6 +973,7 @@ async fn ask_ollama(
             let mut response = response;
             let mut buffer = Vec::<u8>::new();
             let mut answer = String::new();
+            let mut filter = response_filter::ThinkingFilter::default();
             let mut finished = false;
             while let Some(chunk) = response.chunk().await.map_err(|e|format!("Ollama stream error: {e}"))? {
                 buffer.extend_from_slice(&chunk);
@@ -794,8 +985,11 @@ async fn ask_ollama(
                     let value: Value = serde_json::from_slice(line).map_err(|e|format!("Ollama stream JSON: {e}"))?;
                     if let Some(error)=value["error"].as_str(){return Err(error.into());}
                     if let Some(delta)=value["message"]["content"].as_str() {
-                        answer.push_str(delta);
-                        if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(delta.to_owned())); }
+                        let visible = filter.push(delta)?;
+                        if !visible.is_empty() {
+                            answer.push_str(&visible);
+                            if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(visible)); }
+                        }
                     }
                     if value["done"].as_bool() == Some(true) {
                         if let (Some(i),Some(o))=(value["prompt_eval_count"].as_u64(),value["eval_count"].as_u64()){
@@ -807,13 +1001,82 @@ async fn ask_ollama(
             }
             metrics.stage("ollama_http","ollama",request_start,finished);
             if !finished {return Err("Ollama stream ended without done=true".into());}
+            let tail = filter.finish()?;
+            if !tail.is_empty() {
+                answer.push_str(&tail);
+                if let Some(sender)=&updates { let _=sender.send(ResultMessage::ChatChunk(tail)); }
+            }
+            if answer.trim().is_empty() {
+                // A successful tool investigation must not silently become an empty
+                // report. Retry the final synthesis once using a full JSON response.
+                // Keep the same observations and never repeat file tool calls.
+                let fallback = client.post(format!("{host}/api/chat"))
+                    .json(&json!({
+                        "model": model,
+                        "messages": conversation,
+                        "stream": false,
+                        "think": false,
+                        "options": { "num_ctx": investigation::context_size() },
+                        "tools": [],
+                    }))
+                    .send().await
+                    .map_err(|e| format!("Ollama produced an empty review; non-streaming retry failed: {e}"))?;
+                if !fallback.status().is_success() {
+                    return Err(format!("Ollama produced an empty review; retry HTTP {}", fallback.status()));
+                }
+                let reply: OllamaReply = fallback.json().await
+                    .map_err(|e| format!("Ollama empty-review retry returned invalid JSON: {e}"))?;
+                if !reply.message.tool_calls.is_empty() {
+                    return Err("Ollama requested tools during empty-review retry; no report was produced.".into());
+                }
+                answer = response_filter::strip_completed(&reply.message.content)?;
+                if answer.trim().is_empty() {
+                    return Err(format!("Ollama returned no visible review text for {model}, even after a non-streaming retry. Investigation reads remain recorded; no conclusions were fabricated."));
+                }
+                if let Some(sender)=&updates {
+                    let _=sender.send(ResultMessage::ChatChunk(answer.clone()));
+                }
+            }
+            if crate::claim_audit::unsupported_coverage_percentages(&answer) {
+                let warning = "\n\n⚠ Auditoria DUDE: percentual de cobertura mencionado pelo modelo não foi medido pelo runtime. Não o trate como evidência de verificação.\n";
+                answer.push_str(warning);
+                if let Some(sender)=&updates {
+                    let _=sender.send(ResultMessage::ChatChunk(warning.into()));
+                }
+            }
             return Ok(answer);
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
         metrics.stage("ollama_http","ollama",request_start,true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
-            return Ok(reply.message.content);
+            let answer = response_filter::strip_completed(&reply.message.content)?;
+            if !answer.trim().is_empty() {
+                return Ok(answer);
+            }
+            if tools_enabled {
+                return Err("Ollama returned an empty response while tools were enabled.".into());
+            }
+            // The original completion can consume tokens without producing any
+            // visible text. Retry once, with no tools and explicit user-facing output.
+            let mut retry_messages = conversation.clone();
+            retry_messages.push(json!({"role":"user","content":
+                "Your previous response was empty. Provide the final answer now in ordinary visible text. Do not use thinking tags. Cite source lines only when observed; state uncertainty otherwise."}));
+            let retry = client.post(format!("{host}/api/chat"))
+                .json(&json!({
+                    "model":model,"messages":retry_messages,"stream":false,"think":false,
+                    "options":{"num_ctx": investigation::context_size()},"tools":[]
+                })).send().await.map_err(|e|format!("Empty Ollama reply and retry failed: {e}"))?;
+            if !retry.status().is_success() {
+                return Err(format!("Empty Ollama reply; retry HTTP {}",retry.status()));
+            }
+            let second: OllamaReply = retry.json().await
+                .map_err(|e|format!("Invalid Ollama retry response: {e}"))?;
+            let answer = response_filter::strip_completed(&second.message.content)?;
+            if answer.trim().is_empty() {
+                return Err("Ollama generated tokens but no visible review, even on retry. No conclusions were fabricated.".into());
+            }
+            return Ok(answer);
         }
         if !tools_enabled { return Err("Ollama requested tools during final synthesis; try another model or a narrower request.".into()); }
         let calls: Vec<Value> = reply.message.tool_calls.iter().map(|call| {
@@ -842,7 +1105,7 @@ async fn ask_ollama(
 
 async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> Result<String, String> {
     let response = client.get(format!("{host}/api/tags")).send().await
-        .map_err(|e| format!("Ollama unreachable: {e}. Start Ollama first."))?;
+        .map_err(|e| format!("Cannot contact Ollama at {host}: {e}. Check the endpoint and network, then use /ollama retry or /ollama host URL."))?;
     if !response.status().is_success() {
         return Err(format!("Ollama model list returned HTTP {}", response.status()));
     }
@@ -893,22 +1156,70 @@ async fn run_command(command: String) -> Result<String, String> {
     }
 }
 
+// Show the configured endpoint, not an unverified network connection.
+// Never expose URL userinfo, query parameters or paths in the TUI.
+fn runtime_status(host: &str, model: &str, ready: bool) -> String {
+    let endpoint = reqwest::Url::parse(host).ok().and_then(|url| {
+        let hostname = url.host_str()?;
+        let port = url.port().map(|value| format!(":{value}")).unwrap_or_default();
+        Some(format!("{}://{hostname}{port}", url.scheme()))
+    }).unwrap_or_else(|| "(URL inválida)".into());
+    let state = if ready { "pronto" } else { "não confirmado" };
+    format!("Ollama: {endpoint} | Modelo: {model} | Estado: {state}")
+}
+
+#[cfg(test)]
+mod runtime_status_tests {
+    use super::runtime_status;
+
+    #[test]
+    fn shows_configured_endpoint_and_model() {
+        let line = runtime_status("http://10.10.10.159:11434", "qwen3.5:4b", true);
+        assert!(line.contains("http://10.10.10.159:11434"));
+        assert!(line.contains("qwen3.5:4b"));
+        assert!(line.contains("pronto"));
+    }
+
+    #[test]
+    fn hides_url_credentials_path_and_query() {
+        let line = runtime_status("https://user:secret@example.org:11434/private?token=abc", "modelo", false);
+        assert!(line.contains("https://example.org:11434"));
+        for secret in ["user", "secret", "private", "token=abc"] {
+            assert!(!line.contains(secret));
+        }
+        assert!(line.contains("não confirmado"));
+    }
+}
+
 fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io::Result<()> {
     terminal.draw(|frame| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(7), Constraint::Length(3), Constraint::Length(4), Constraint::Min(3), Constraint::Length(2), Constraint::Length(3)])
             .split(frame.area());
 
+        // ENOVA wordmark stays fixed above the input; only N is red.
+        frame.render_widget(
+            Paragraph::new(app.logo()),
+            chunks[0],
+        );
+        // DUDE identification stays fixed below the input, outside the transcript.
+        frame.render_widget(
+            Paragraph::new(app.banner()).style(Style::default().fg(Color::Cyan)),
+            chunks[2],
+        );
+
         // Keep the input tail and the real terminal cursor visible.
-        let input_width = chunks[0].width.saturating_sub(2) as usize;
+        let input_width = chunks[1].width.saturating_sub(2) as usize;
         let mut visible = String::new();
         let mut visible_width = 0usize;
         for ch in app.input.chars().rev() {
-            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            // Keep the input widget single-line while preserving newlines in the submitted prompt.
+            let display_ch = if ch.is_whitespace() || ch.is_control() { ' ' } else { ch };
+            let char_width = UnicodeWidthChar::width(display_ch).unwrap_or(0);
             if visible_width + char_width >= input_width { break; }
-            visible.insert(0, ch);
+            visible.insert(0, display_ch);
             visible_width += char_width;
         }
         if app.key_prompt.is_some() {
@@ -918,9 +1229,9 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let input = Paragraph::new(visible)
             .block(Block::default().title(if app.key_prompt.is_some() {"DUDE - secret API key"} else {"DUDE - input"}).borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
-        frame.render_widget(input, chunks[0]);
-        if input_width > 0 && chunks[0].height > 2 {
-            frame.set_cursor_position((chunks[0].x + 1 + visible_width as u16, chunks[0].y + 1));
+        frame.render_widget(input, chunks[1]);
+        if input_width > 0 && chunks[1].height > 2 {
+            frame.set_cursor_position((chunks[1].x + 1 + visible_width as u16, chunks[1].y + 1));
         }
 
         const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
@@ -937,8 +1248,8 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             .block(Block::default().title(title).borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         if app.follow_output {
-            let visible_rows = chunks[1].height.saturating_sub(2) as usize;
-            let available_width = chunks[1].width.saturating_sub(2).max(1);
+            let visible_rows = chunks[3].height.saturating_sub(2) as usize;
+            let available_width = chunks[3].width.saturating_sub(2).max(1);
             let width = available_width as usize;
             let wrapped_rows: usize = app.output.lines().map(|line| {
                 let columns = line.chars().count();
@@ -947,10 +1258,15 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             // Keep the final lines in view, without scrolling into blank space.
             app.scroll = wrapped_rows.saturating_sub(visible_rows).min(60_000) as u16;
         }
-        frame.render_widget(output.scroll((app.scroll, 0)), chunks[1]);
+        frame.render_widget(output.scroll((app.scroll, 0)), chunks[3]);
 
-        let environment_line=app.environment.status();
-        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[2]);
+        let environment_line = app.environment.status();
+        let runtime_line = runtime_status(&app.ollama_url, &app.model, app.model_ready);
+        frame.render_widget(
+            Paragraph::new(format!("{environment_line}\n{runtime_line}"))
+                .style(Style::default().fg(Color::Cyan)),
+            chunks[4],
+        );
 
         let mode_label = if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
@@ -966,7 +1282,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         frame.render_widget(
             Paragraph::new(footer)
                 .block(Block::default().title("Help").borders(Borders::ALL)),
-            chunks[3],
+            chunks[5],
         );
     })?;
     Ok(())
@@ -976,8 +1292,16 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> Result<(), Box<dyn Error>> {
     let mut app = App::new();
+    if let Some(store)=&app.memory {
+        match store.pending() {
+            Ok(Some(_))=>app.output.push_str("\n⚠ Pedido inacabado encontrado em disco. Use /recover para carregar ou /recover discard para descartar.\n"),
+            Ok(None)=>(),
+            Err(error)=>app.output.push_str(&format!("Aviso recuperação: {error}\n")),
+        }
+    }
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(180))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
         .build()?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.output.push_str(&format!(
@@ -992,32 +1316,43 @@ async fn run(
     });
     // The UI stays responsive while a missing model downloads.
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(180))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
         .build()?;
     loop {
         while let Ok(result) = rx.try_recv() {
             app.complete(result);
         }
         draw(terminal, &mut app)?;
-        if event::poll(Duration::from_millis(80))?
-            && let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? {
-                if kind != KeyEventKind::Press {
-                    continue;
+        if event::poll(Duration::from_millis(80))? {
+            match event::read()? {
+                // Treat clipboard content atomically: embedded newlines stay inside one prompt.
+                Event::Paste(pasted) => {
+                    let normalized = pasted.replace("\r\n", "\n").replace('\r', "\n");
+                    app.input.push_str(&normalized);
                 }
-                match code {
-                    KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
-                    KeyCode::Esc => break,
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
-                    KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
-                    KeyCode::Enter => app.submit(tx.clone(), client.clone()),
-                    KeyCode::Backspace => { app.input.pop(); }
-                    KeyCode::Up if app.key_prompt.is_some() => {},
-                    KeyCode::Down if app.key_prompt.is_some() => {},
-                    KeyCode::Up => { app.follow_output = false; app.scroll = app.scroll.saturating_sub(1); },
-                    KeyCode::Down => { app.follow_output = false; app.scroll = app.scroll.saturating_add(1).min(60_000); },
-                    KeyCode::Char(c) => app.input.push(c),
-                    _ => {}
+                Event::Key(KeyEvent { code, modifiers, kind, .. }) => {
+                    if kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    match code {
+                        KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
+                        KeyCode::Esc => break,
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
+                        KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
+                        KeyCode::Enter if matches!(app.input.trim().to_ascii_lowercase().as_str(), "/exit" | "/quit" | "/sair") => break,
+                        KeyCode::Enter => app.submit(tx.clone(), client.clone()),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Up if app.key_prompt.is_some() => {},
+                        KeyCode::Down if app.key_prompt.is_some() => {},
+                        KeyCode::Up => { app.follow_output = false; app.scroll = app.scroll.saturating_sub(1); },
+                        KeyCode::Down => { app.follow_output = false; app.scroll = app.scroll.saturating_add(1).min(60_000); },
+                        KeyCode::Char(c) => app.input.push(c),
+                        _ => {}
+                    }
                 }
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -1027,13 +1362,13 @@ async fn run(
 async fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, Show, SetCursorStyle::BlinkingBar)?;
+    execute!(stdout, EnterAlternateScreen, Show, SetCursorStyle::BlinkingBar, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run(&mut terminal).await;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape, LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), SetCursorStyle::DefaultUserShape, DisableBracketedPaste, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     result
 }

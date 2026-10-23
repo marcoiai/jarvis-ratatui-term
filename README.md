@@ -28,6 +28,7 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 - `!ls -la` executes a local program directly (no shell interpretation: pipes, globbing and redirects are unsupported).
 - `/model granite-code:latest` changes the model during the session.
 - `/clear` clears conversation and screen.
+- `/exit`, `/quit` or `/sair` exits the TUI cleanly (also Esc or Ctrl+C).
 - Up/Down scroll, ESC or Ctrl+C exits.
 
 DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
@@ -223,3 +224,11 @@ Before tool-enabled investigation, DUDE supplies a bounded filename inventory (u
 Broad project-understanding requests (for example, `entenda o projeto atual`) now bootstrap actual README, manifest and entry-point excerpts before the first provider call. Rust module declarations in `src/main.rs` provide additional source candidates. At most 12 candidate files are read, with bounded excerpts; these reads appear in the shared evidence cache and execution metrics. This is deterministic initial reading, not exhaustive coverage. Other layouts may still require model-directed tools. Use `/workspace` to verify the project being analyzed.
 
 Standalone language preferences such as `voce pode a partir de agora falar sempre em portugues?` are saved locally with a short acknowledgement and no model call. Mixed requests are not silently consumed as preferences. Technical intent detection gates the inventory, investigation policy and file tools; ordinary conversation receives communication alignment without investigation scaffolding. This detection is a conservative keyword heuristic, not general intent understanding.
+
+## Raw operational memory versus learned knowledge
+
+DUDE keeps separate layers. Successful completed exchanges are appended with UTC timestamps to `.dude/journal/YYYY-MM-DD.jsonl` and synced to disk, independently of the optional Knowledge extraction step. `.dude/history.jsonl` still provides recent chat context. Only reviewed/approved Knowledge candidates enter `.dude/memory.md`; raw journal entries are never automatically promoted to facts. Daily filenames do not imply a background timer: there is no hourly scheduler and unfinished responses are not yet journaled. Protect `.dude/` from Git and backups shared externally; journal entries may contain sensitive code or text.
+
+## Recovery of unfinished requests
+
+Before dispatching a model request, DUDE stores the current user request in `.dude/pending_request.json`. On normal successful completion it removes the recovery marker. If the process crashes or a request fails, the marker remains. At startup the TUI warns about an interrupted request. Type `/recover` to put it back into the editable input (press Enter to retry), or `/recover discard` to remove the marker. No request is replayed automatically. A subsequent submitted request replaces the current pending marker; this is a recovery mechanism for the latest request, not a queue. Response chunks and partially completed tool work are not checkpointed. This is local persistence, not a separate/offsite backup.
