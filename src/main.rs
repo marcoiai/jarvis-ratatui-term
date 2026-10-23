@@ -771,14 +771,13 @@ impl App {
         match knowledge::next_pending(&self.workspace) {
             Ok(Some(candidate)) => {
                 self.pending_knowledge = Some(candidate.id);
-                let supported = (candidate.classification == "verified" || candidate.classification == "documented")
-                    && !candidate.evidence.is_empty() && candidate.references_checked;
+                let citation_observed = !candidate.evidence.is_empty() && candidate.references_checked;
                 self.output.push_str(&format!(
                     "\\n🧠 Conhecimento proposto #{} [{}]: {}\\nEvidências: {}\\n{}\\n",
                     candidate.id, candidate.classification, candidate.claim,
                     if candidate.evidence.is_empty() {"(nenhuma)".to_string()} else {candidate.evidence.join("; ")},
-                    if supported {"Salvar na memória? (sim/não; ou /knowledge para revisar)"}
-                    else {"Ainda não verificável como fato. Use /knowledge para revisar; responda não para descartar."}
+                    if citation_observed {"Referência(s) de linha observada(s), mas a afirmação NÃO foi validada automaticamente. Confira as linhas antes de salvar na memória (sim/não; /knowledge para revisar)."}
+                    else {"Nenhuma referência de linha foi confirmada. Não aprove como fato; use /knowledge para revisar ou responda não para descartar."}
                 ));
             }
             Ok(None) => self.pending_knowledge = None,
