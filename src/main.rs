@@ -1156,12 +1156,47 @@ async fn run_command(command: String) -> Result<String, String> {
     }
 }
 
+// Show the configured endpoint, not an unverified network connection.
+// Never expose URL userinfo, query parameters or paths in the TUI.
+fn runtime_status(host: &str, model: &str, ready: bool) -> String {
+    let endpoint = reqwest::Url::parse(host).ok().and_then(|url| {
+        let hostname = url.host_str()?;
+        let port = url.port().map(|value| format!(":{value}")).unwrap_or_default();
+        Some(format!("{}://{hostname}{port}", url.scheme()))
+    }).unwrap_or_else(|| "(URL inválida)".into());
+    let state = if ready { "pronto" } else { "não confirmado" };
+    format!("Ollama: {endpoint} | Modelo: {model} | Estado: {state}")
+}
+
+#[cfg(test)]
+mod runtime_status_tests {
+    use super::runtime_status;
+
+    #[test]
+    fn shows_configured_endpoint_and_model() {
+        let line = runtime_status("http://10.10.10.159:11434", "qwen3.5:4b", true);
+        assert!(line.contains("http://10.10.10.159:11434"));
+        assert!(line.contains("qwen3.5:4b"));
+        assert!(line.contains("pronto"));
+    }
+
+    #[test]
+    fn hides_url_credentials_path_and_query() {
+        let line = runtime_status("https://user:secret@example.org:11434/private?token=abc", "modelo", false);
+        assert!(line.contains("https://example.org:11434"));
+        for secret in ["user", "secret", "private", "token=abc"] {
+            assert!(!line.contains(secret));
+        }
+        assert!(line.contains("não confirmado"));
+    }
+}
+
 fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io::Result<()> {
     terminal.draw(|frame| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(7), Constraint::Length(3), Constraint::Length(4), Constraint::Min(3), Constraint::Length(1), Constraint::Length(3)])
+            .constraints([Constraint::Length(7), Constraint::Length(3), Constraint::Length(4), Constraint::Min(3), Constraint::Length(2), Constraint::Length(3)])
             .split(frame.area());
 
         // ENOVA wordmark stays fixed above the input; only N is red.
@@ -1225,8 +1260,13 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         }
         frame.render_widget(output.scroll((app.scroll, 0)), chunks[3]);
 
-        let environment_line=app.environment.status();
-        frame.render_widget(Paragraph::new(environment_line).style(Style::default().fg(Color::Cyan)),chunks[4]);
+        let environment_line = app.environment.status();
+        let runtime_line = runtime_status(&app.ollama_url, &app.model, app.model_ready);
+        frame.render_widget(
+            Paragraph::new(format!("{environment_line}\\n{runtime_line}"))
+                .style(Style::default().fg(Color::Cyan)),
+            chunks[4],
+        );
 
         let mode_label = if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
