@@ -1264,7 +1264,7 @@ async fn run(
                         continue;
                     }
                     match code {
-                        KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\\n"); },
+                        KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
                         KeyCode::Esc => break,
                         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
                         KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
