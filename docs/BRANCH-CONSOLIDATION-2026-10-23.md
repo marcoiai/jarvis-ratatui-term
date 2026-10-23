@@ -58,4 +58,39 @@ Essas três branches não são obsoletas e não serão excluídas enquanto suas 
 
 ## Execução de integração e limpeza
 
-A execução final, SHAs publicados e exclusões confirmadas serão registrados abaixo após verificar o remoto. Sem force push, reset destrutivo ou descarte de arquivos locais.
+Código validado integrado por fast-forward de `3ef1a27` para `fe634451bd1c692b448a2080520cb68532fe8a5b`, publicado na main por push normal. O commit `fe63445` conecta os checkpoints ao fluxo atual e acrescenta os testes de Symphony/configuração. Este fechamento documental é feito na mesma branch curta e integrado por novo fast-forward.
+
+**11 branches remotas excluídas**, após reconferir seus SHAs e a presença do trabalho na main ou em `feat/symphony-resilience-m2`:
+
+
+- `feat/evidence-ledger-m1` (`209c766`)
+- `feat/evidence-requirement-gate` (`2a7f6ee`)
+- `feat/evidence-retrieval-m1-5-1` (`beac1b4`)
+- `feat/intent-preserving-validation` (`4b908d3`)
+- `feat/interpreter-routing` (`f033657`)
+- `feat/ollama-request-telemetry` (`c3a2d7d`)
+- `feat/persistent-evidence-m1-5` (`1f78f5b`)
+- `feat/reuse-existing-skills-m1-6` (`b682caf`)
+- `feat/runtime-intent-resolver` (`2c261e5`)
+- `feat/validation-gate-m1-2` (`9755edd`)
+- `fix/ollama-tool-parser-recovery` (`0bc8d03`)
+
+**9 branches locais antigas excluídas**, com ancestralidade ou equivalência comprovada:
+
+- `feat/evidence-ledger-m1` (`209c766`), preservada em `origin/feat/symphony-resilience-m2`.
+- `feat/evidence-requirement-gate` (`2a7f6ee`), preservada em `origin/feat/symphony-resilience-m2`.
+- `feat/evidence-retrieval-m1-5-1` (`beac1b4`), preservada em `origin/feat/symphony-resilience-m2`.
+- `feat/ollama-request-telemetry` (`c3a2d7d`), preservada em `main-equivalent-patches`.
+- `feat/reuse-existing-skills-m1-6` (`b682caf`), preservada em `origin/feat/symphony-resilience-m2`.
+- `feat/runtime-intent-resolver` (`2c261e5`), preservada em `origin/feat/symphony-resilience-m2`.
+- `fix/investigation-evidence-gate` (`b307f49`), preservada em `main`.
+- `fix/ollama-tool-parser-recovery` (`0bc8d03`), preservada em `origin/feat/symphony-resilience-m2`.
+- `perf/knowledge-latency-metrics` (`c6a72e7`), preservada em `main`.
+
+**Retidas no remoto:** `feat/dude-alpha-continue` (`faf2165`), `feat/symphony-resilience-m2` (`f87f930`) e `fix/symphony-checkpoint-901506a-build` (`fd53eff`). As duas primeiras também permanecem locais; alpha local foi avançada de `3942ab1` para o tip remoto, após prova de ancestralidade.
+
+**Estado local:** somente `parse_ollama.zsh` permanece não versionado. Os hashes SHA-256 de Cargo.lock e desse script são iguais aos capturados no início. O stash temporário do lockfile foi removido apenas depois dessa verificação; cópia dos bytes originais e patch permanecem no arquivo de auditoria local. O bundle anterior às exclusões continua válido.
+
+**CI remoto:** a consulta ao conector GitHub para `fe63445` retornou lista vazia de workflow runs. Portanto, este relatório atesta os gates executados localmente, não uma execução de Actions. Provedores reais e TUI interativa continuam não testados.
+
+Nenhum force push ou reset destrutivo foi usado. Três branches com trabalho exclusivo permanecem como pendência explícita; limpeza de referências redundantes não significa que todos os recursos históricos foram integrados.
