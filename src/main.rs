@@ -1258,7 +1258,10 @@ async fn run(
         if event::poll(Duration::from_millis(80))? {
             match event::read()? {
                 // Treat clipboard content atomically: embedded newlines stay inside one prompt.
-                Event::Paste(pasted) => app.input.push_str(&pasted),
+                Event::Paste(pasted) => {
+                    let normalized = pasted.replace("\r\n", "\n").replace('\r', "\n");
+                    app.input.push_str(&normalized);
+                },
                 Event::Key(KeyEvent { code, modifiers, kind, .. }) => {
                     if kind != KeyEventKind::Press {
                         continue;
