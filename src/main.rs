@@ -13,6 +13,8 @@ mod cloud;
 mod roles;
 mod memory;
 mod file_tools;
+#[cfg(test)]
+mod consolidation_tests;
 use std::{
     env,
     error::Error,
@@ -592,8 +594,9 @@ impl App {
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
             let command = command.trim().to_owned();
+            let workspace = self.workspace.clone();
             tokio::spawn(async move {
-                let result = run_command(command).await;
+                let result = run_command(command, workspace).await;
                 let _ = tx.send(ResultMessage::Shell(result));
             });
         } else {
@@ -1087,7 +1090,13 @@ async fn ask_ollama(
             }
             return Ok(answer);
         }
-        let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
+        let reply: OllamaReply = match response.json().await {
+            Ok(reply) => reply,
+            Err(error) => {
+                metrics.stage(&request_label, "ollama", request_start, false);
+                return Err(format!("Invalid response: {error}"));
+            }
+        };
         metrics.stage(&request_label, "ollama", request_start, true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
@@ -1137,6 +1146,9 @@ async fn ask_ollama(
             metrics.stage(&retry_label, "ollama", retry_start, true);
             if let (Some(i),Some(o))=(second.prompt_eval_count,second.eval_count) {
                 metrics.tokens("ollama", model, i, o);
+            }
+            if !second.message.tool_calls.is_empty() {
+                return Err("Ollama requested tools during empty-response retry; no report was produced.".into());
             }
             let answer = response_filter::strip_completed(&second.message.content)?;
             if answer.trim().is_empty() {
@@ -1188,7 +1200,7 @@ async fn recover_ollama_tool_parse(
     evidence: &evidence::EvidenceCache,
     metrics: &metrics::Metrics,
 ) -> Result<String, String> {
-    if evidence.len() == 0 {
+    if evidence.source_read_count() == 0 {
         // A small deterministic bootstrap, not an unrestricted workspace crawl.
         evidence.execute(workspace, "list_files", &json!({"path":"."}));
         for path in ["Cargo.toml", "README.md", "src/main.rs"] {
@@ -1213,23 +1225,39 @@ async fn recover_ollama_tool_parse(
             "messages": conversation,
             "stream": false,
             "think": false,
+            "tools": [],
             "options": {"num_ctx": investigation::context_size()}
         }))
-        .send().await.map_err(|e| format!("Recovery connection: {e}"))?;
+        .send().await.map_err(|e| {
+            metrics.stage("ollama_recovery", "ollama", started, false);
+            format!("Recovery connection: {e}")
+        })?;
     let status = response.status();
     if !status.is_success() {
         metrics.stage("ollama_recovery","ollama",started,false);
         return Err(format!("HTTP {status}: {}",response.text().await.unwrap_or_default()));
     }
-    let reply: OllamaReply = response.json().await.map_err(|e| format!("Recovery JSON: {e}"))?;
-    metrics.stage("ollama_recovery","ollama",started,true);
+    let reply: OllamaReply = response.json().await.map_err(|e| {
+        metrics.stage("ollama_recovery", "ollama", started, false);
+        format!("Recovery JSON: {e}")
+    })?;
     if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){
         metrics.tokens("ollama",model,i,o);
     }
-    if !reply.message.tool_calls.is_empty() || reply.message.content.trim().is_empty() {
+    if !reply.message.tool_calls.is_empty() {
+        metrics.stage("ollama_recovery", "ollama", started, false);
         return Err("Recovery returned no usable text or unexpected tool calls.".into());
     }
-    Ok(format!("⚠️ Análise parcial: o Ollama falhou ao interpretar tool calls. Resposta baseada somente em arquivos lidos; revise as referências.\n\n{}",reply.message.content))
+    let answer = response_filter::strip_completed(&reply.message.content).map_err(|error| {
+        metrics.stage("ollama_recovery", "ollama", started, false);
+        error
+    })?;
+    if answer.trim().is_empty() {
+        metrics.stage("ollama_recovery", "ollama", started, false);
+        return Err("Recovery returned no visible text.".into());
+    }
+    metrics.stage("ollama_recovery", "ollama", started, true);
+    Ok(format!("⚠️ Análise parcial: o Ollama falhou ao interpretar tool calls. Resposta baseada somente em arquivos lidos; revise as referências.\n\n{answer}"))
 }
 
 #[cfg(test)]
@@ -1280,11 +1308,12 @@ async fn ensure_model(client: &reqwest::Client, host: &str, preferred: &str) -> 
     }
 }
 
-async fn run_command(command: String) -> Result<String, String> {
+async fn run_command(command: String, workspace: PathBuf) -> Result<String, String> {
     // Intentional: execute a program and arguments, never through a shell.
     let mut words = command.split_whitespace();
     let program = words.next().ok_or("Empty command")?;
     let output = Command::new(program)
+        .current_dir(workspace)
         .args(words)
         .output()
         .await

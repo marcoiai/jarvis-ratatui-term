@@ -68,6 +68,10 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let entries = fs::read_dir(path).map_err(|e| e.to_string())?;
             for item in entries.take(MAX_ENTRIES) {
                 let item = item.map_err(|e| e.to_string())?;
+                let name = item.file_name();
+                let name = name.to_string_lossy();
+                if matches!(name.as_ref(), ".git" | ".dude" | ".dudeignore" | ".env" | ".ssh" | ".aws" | ".config" | "id_rsa" | "id_ed25519")
+                    || name.starts_with(".env.") { continue; }
                 lines.push(format!("{}{}",item.file_name().to_string_lossy(),if item.file_type().map_err(|e| e.to_string())?.is_dir() { "/" } else { "" }));
             }
             lines.sort();
@@ -78,11 +82,19 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             let content = read_limited(&path)?;
             let start = args.get("start_line").and_then(Value::as_u64).unwrap_or(1).clamp(1,100_000) as usize;
             let end = args.get("end_line").and_then(Value::as_u64).unwrap_or((start+199) as u64).clamp(start as u64,100_000) as usize;
-            let value = content.lines().enumerate()
+            let total_lines = content.lines().count();
+            let excerpt = content.lines().enumerate()
                 .filter(|(i,_)| *i+1 >= start && *i < end)
                 .map(|(i,l)| format!("{}: {}",i+1,l))
                 .collect::<Vec<_>>().join("\n");
-            Ok(value.chars().take(MAX_BYTES).collect())
+            let visible: String = excerpt.chars().take(MAX_BYTES).collect();
+            let truncated = visible.len() < excerpt.len();
+            let range = if start > total_lines { "none".to_owned() }
+                else { format!("{start}-{}", end.min(total_lines)) };
+            Ok(format!(
+                "SOURCE EXCERPT: {relative} | lines {range} of {total_lines} | complete_file={} | output_truncated={truncated}\n{visible}",
+                start == 1 && end >= total_lines && !truncated
+            ))
         }
         "search_text" => {
             let pattern = args.get("pattern").and_then(Value::as_str).ok_or("Missing pattern")?;
@@ -103,5 +115,25 @@ pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
             Ok(lines.join("\n").chars().take(MAX_BYTES).collect())
         }
         _ => Err(format!("Unknown tool: {name}")),
+    }
+}
+
+#[cfg(test)]
+mod source_excerpt_contract_tests {
+    use super::*;
+    #[test]
+    fn distinguishes_partial_read_from_complete_file() {
+        let root=std::env::temp_dir().join(format!("dude-excerpt-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("test.rs"),"line1\nline2\nline3\n").unwrap();
+        let partial=execute(&root,"read_file",&json!({"path":"test.rs","start_line":1,"end_line":2})).unwrap();
+        assert!(partial.contains("lines 1-2 of 3"));
+        assert!(partial.contains("complete_file=false"));
+        assert!(!partial.contains("3: line3"));
+        let whole=execute(&root,"read_file",&json!({"path":"test.rs","start_line":1,"end_line":10})).unwrap();
+        assert!(whole.contains("complete_file=true"));
+        assert!(whole.contains("3: line3"));
+        let _=std::fs::remove_dir_all(&root);
     }
 }
