@@ -114,6 +114,25 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
     Ok(output)
 }
 
+
+/// Auxiliary keyword heuristic retained for lightweight warnings; never a semantic verdict.
+pub fn unsupported_completeness_claims(answer: &str) -> bool {
+    answer.lines().any(|line| {
+        let lower = line.to_lowercase();
+        let broad = ["100%", "fully", "completely", "entire architecture", "all modules",
+            "all components", "todos os módulos", "todos os componentes", "toda a arquitetura",
+            "arquitetura inteira", "totalmente", "completamente", "integralmente",
+            "sem necessidade de mudanças", "without need for changes", "no critical bugs",
+            "nenhum bug crítico", "nenhuma falha crítica", "não há evidências de bugs",
+            "não há evidências de falhas"].iter().any(|term| lower.contains(term));
+        let certainty = ["verified", "functional", "implemented", "audited", "tested", "works",
+            "verificado", "verificada", "funcional", "implementado", "implementada",
+            "auditado", "auditada", "testado", "testada", "funciona", "funcionando",
+            "no changes needed", "no changes required"].iter().any(|term| lower.contains(term));
+        broad && certainty
+    })
+}
+
 /// Adds a runtime-generated evidence status to broad project reports.
 /// A confirmed citation proves only that a source line was observed, not that a claim is true.
 pub fn project_report_preamble(answer: &str, coverage: &str, has_supported_citation: bool) -> String {
