@@ -332,7 +332,7 @@ impl App {
             let saved = indexer::status(&self.workspace)
                 .unwrap_or_else(|e| format!("Index unavailable: {e}"));
             self.output.push_str(&format!(
-                "Indexer: {} | Workspace: {}\\n{}\\nCommands: /index start | /index stop | /index status\\n",
+                "Indexer: {} | Workspace: {}\n{}\nCommands: /index start | /index stop | /index status\n",
                 if self.indexer_running { "ACTIVE (polling every 3s)" } else { "INACTIVE" },
                 self.workspace.display(), saved
             ));
@@ -340,7 +340,7 @@ impl App {
         }
         if input == "/index start" {
             if self.indexer_running {
-                self.output.push_str("Project indexer is already active. Use /index status.\\n");
+                self.output.push_str("Project indexer is already active. Use /index status.\n");
                 return;
             }
             let root = self.workspace.clone();
@@ -348,7 +348,7 @@ impl App {
             let events = tx.clone();
             self.indexer_stop = Some(stop_tx);
             self.indexer_running = true;
-            self.output.push_str("Project indexer activated. Building persistent index and polling every 3 seconds.\\n");
+            self.output.push_str("Project indexer activated. Building persistent index and polling every 3 seconds.\n");
             tokio::spawn(async move {
                 let first_root = root.clone();
                 let initial = tokio::task::spawn_blocking(move || indexer::refresh(&first_root))
@@ -386,9 +386,9 @@ impl App {
             if let Some(stop) = self.indexer_stop.take() {
                 let _ = stop.send(true);
                 self.indexer_running = false;
-                self.output.push_str("Project indexer stopping; saved index will be kept.\\n");
+                self.output.push_str("Project indexer stopping; saved index will be kept.\n");
             } else {
-                self.output.push_str("Project indexer is not active. Use /index start.\\n");
+                self.output.push_str("Project indexer is not active. Use /index start.\n");
             }
             return;
         }
