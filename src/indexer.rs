@@ -11,7 +11,7 @@ const INDEX_FILE: &str = "index.json";
 struct IndexedFile {
     path: String,
     bytes: u64,
-    modified_unix: u64,
+    modified_nanos: u128,
     fingerprint: String,
     language: String,
     symbols: Vec<String>,
@@ -111,16 +111,22 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
         if next.len() >= MAX_FILES { capped = true; break; }
         let meta = match fs::metadata(path) { Ok(m) => m, Err(_) => continue };
         if meta.len() > MAX_FILE_BYTES { skipped_large += 1; continue; }
+        let modified_nanos = meta.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos()).unwrap_or(0);
+        let rel = relative.to_string_lossy().replace('\\', "/");
+        if let Some(previous) = old.files.get(&rel)
+            && previous.bytes == meta.len()
+            && previous.modified_nanos == modified_nanos {
+                next.insert(rel, previous.clone());
+                continue;
+        }
         let bytes = match fs::read(path) { Ok(b) => b, Err(_) => continue };
         if bytes.contains(&0) { continue; }
         let Ok(content) = std::str::from_utf8(&bytes) else { continue };
-        let rel = relative.to_string_lossy().replace('\\', "/");
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         bytes.hash(&mut hasher);
         let fingerprint = format!("{:016x}", hasher.finish());
-        let modified_unix = meta.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs()).unwrap_or(0);
-        next.insert(rel.clone(), IndexedFile { path: rel, bytes: meta.len(), modified_unix,
+        next.insert(rel.clone(), IndexedFile { path: rel, bytes: meta.len(), modified_nanos,
             fingerprint, language: language(path), symbols: symbols(content) });
     }
     let added = next.keys().filter(|p| !old.files.contains_key(*p)).count();
