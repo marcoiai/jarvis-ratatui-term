@@ -17,6 +17,27 @@ pub fn unsupported_coverage_percentages(answer: &str) -> bool {
         })
     })
 }
+
+/// Flags broad completeness/verification claims that cannot be established by a
+/// sampled set of source reads. This is a heuristic warning, not a semantic proof.
+pub fn unsupported_completeness_claims(answer: &str) -> bool {
+    answer.lines().any(|line| {
+        let lower = line.to_lowercase();
+        let absolute_scope = [
+            "100%", "fully", "completely", "entire architecture", "all modules",
+            "all components", "everything is", "todos os módulos", "todos os componentes",
+            "toda a arquitetura", "arquitetura inteira", "totalmente", "completamente",
+            "integralmente", "100 por cento",
+        ].iter().any(|term| lower.contains(term));
+        let certainty = [
+            "verified", "functional", "implemented", "audited", "tested", "works",
+            "verificado", "verificada", "funcional", "implementado", "implementada",
+            "auditado", "auditada", "testado", "testada", "funciona", "funcionando",
+        ].iter().any(|term| lower.contains(term));
+        absolute_scope && certainty
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26,5 +47,14 @@ mod tests {
         assert!(unsupported_coverage_percentages("85 % dos fluxos analisados"));
         assert!(!unsupported_coverage_percentages("13 arquivos lidos; cobertura parcial"));
         assert!(!unsupported_coverage_percentages("latência 85% menor"));
+    }
+
+    #[test]
+    fn flags_unproven_absolute_completeness_claims() {
+        assert!(unsupported_completeness_claims("Arquitetura 100% verificada e funcional."));
+        assert!(unsupported_completeness_claims("Todos os componentes foram testados."));
+        assert!(unsupported_completeness_claims("The entire architecture is fully implemented."));
+        assert!(!unsupported_completeness_claims("Somente src/main.rs foi verificado."));
+        assert!(!unsupported_completeness_claims("Há funcionalidades ainda não verificadas."));
     }
 }
