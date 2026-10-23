@@ -129,6 +129,9 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
         next.insert(rel.clone(), IndexedFile { path: rel, bytes: meta.len(), modified_nanos,
             fingerprint, language: language(path), symbols: symbols(content) });
     }
+    if capped {
+        return Err(format!("Workspace exceeds the {MAX_FILES}-file index limit; refusing to replace the saved index with an incomplete scan."));
+    }
     let added = next.keys().filter(|p| !old.files.contains_key(*p)).count();
     let updated = next.iter().filter(|(p,f)| old.files.get(*p).is_some_and(|prior| prior != *f)).count();
     let removed = old.files.keys().filter(|p| !next.contains_key(*p)).count();
