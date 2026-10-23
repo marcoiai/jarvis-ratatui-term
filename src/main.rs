@@ -891,10 +891,13 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         if answer.trim().is_empty() {
             return Err("The model produced no review text; investigation evidence was gathered but no conclusion was generated.".into());
         }
-        if !evidence_for_gate.has_supported_citation(&answer) {
-            let warning = "\n\n⚠ DUDE: este parecer não apresenta referências arquivo:linha confirmadas nas leituras. É uma síntese preliminar, não uma verificação das afirmações.\n";
-            return Ok(format!("{answer}{warning}"));
-        }
+        let has_supported_citation = evidence_for_gate.has_supported_citation(&answer);
+        let coverage = evidence_for_gate.coverage();
+        return Ok(crate::claim_audit::project_report_preamble(
+            &answer,
+            &coverage,
+            has_supported_citation,
+        ));
     }
     Ok(answer)
 }
