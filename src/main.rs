@@ -233,7 +233,12 @@ impl App {
                 self.ask_next_knowledge();
                 return;
             }
-            // Do not hijack arbitrary input: other commands and questions remain available.
+            // Short unrecognized replies are typos, not new model requests.
+            // Explicit commands and substantive questions may interrupt a review.
+            if !input.starts_with('/') && input.chars().count() <= 12 {
+                self.output.push_str("⚠ Resposta inválida. Digite sim, não ou /knowledge.\n");
+                return;
+            }
             self.pending_knowledge = None;
         }
         if input == "/ollama" {
@@ -647,21 +652,9 @@ impl App {
                     // extraction JSON to the UI or let a model promote memory itself.
                     let result = match result {
                         Ok(answer) if evidence.len() > 0 => {
-                            // Fast, deterministic first pass: source declarations become
-                            // reviewable candidates without another model invocation.
-                            let grounded = evidence.declaration_drafts(6);
-                            let seeded = if grounded.is_empty() {
-                                Ok(Vec::new())
-                            } else {
-                                knowledge::propose(&workspace, &question, &grounded, &evidence)
-                            };
-                            if let Ok(ids) = &seeded
-                                && !ids.is_empty() {
-                                Ok(format!("{answer}\n\n🧠 Knowledge: {} candidato(s) fundamentado(s) aguardando aprovação.", ids.len()))
-                            } else {
                             let evidence_text = evidence.export();
                             let prompt = format!(
-                                "Extract up to 6 reusable, project-specific factual knowledge candidates from the answer below. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
+                                "Extract up to 6 durable, project-specific architectural decisions, conventions, or non-obvious confirmed behaviors from the answer below. Never propose source declarations, signatures, structs, enums, or transient implementation details. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
                                 question.chars().take(500).collect::<String>(),
                                 answer.chars().take(3000).collect::<String>(),
                                 evidence_text.chars().take(5000).collect::<String>()
@@ -698,7 +691,6 @@ impl App {
                                 Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração indisponível ({error}). Nenhum conhecimento novo foi salvo.")),
                             }
                         }
-                            }
                         other => other,
                     };
                     metrics.stage("Solo",&solo_provider,solo_start,result.is_ok());
