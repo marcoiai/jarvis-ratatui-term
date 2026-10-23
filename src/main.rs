@@ -950,23 +950,36 @@ async fn ask_ollama(
         // This prevents an audit warning from being the only streamed content.
         let stream_final = false;
         let request_start = Instant::now();
-        let response = client
+        let payload = json!({
+            "model": model,
+            "messages": conversation,
+            "stream": stream_final,
+            "think": false,
+            "options": { "num_ctx": investigation::context_size() },
+            "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
+        });
+        let payload_bytes = serde_json::to_vec(&payload).map(|body| body.len()).unwrap_or_default();
+        let request_label = format!(
+            "ollama_http_round_{round}_tools_{}_stream_{}_messages_{}_payload_bytes_{payload_bytes}",
+            tools_enabled, stream_final, conversation.len()
+        );
+        let response = match client
             .post(format!("{host}/api/chat"))
-            .json(&json!({
-                "model": model,
-                "messages": conversation,
-                "stream": stream_final,
-                "think": false,
-                "options": { "num_ctx": investigation::context_size() },
-                "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
-            }))
+            .json(&payload)
             .send()
             .await
-            .map_err(|e| format!("Ollama request failed or timed out: {e}. Check Ollama logs and model availability."))?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                metrics.stage(&request_label, "ollama", request_start, false);
+                return Err(format!("Ollama request failed or timed out: {error}. Check Ollama logs and model availability."));
+            }
+        };
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            metrics.stage("ollama_http","ollama",request_start,false);
+            let failed_label = format!("{request_label}_http_{status}");
+            metrics.stage(&failed_label, "ollama", request_start, false);
             return Err(format!("Ollama HTTP {status}: {body}"));
         }
         if stream_final {
@@ -999,7 +1012,7 @@ async fn ask_ollama(
                     }
                 }
             }
-            metrics.stage("ollama_http","ollama",request_start,finished);
+            metrics.stage(&request_label, "ollama", request_start, finished);
             if !finished {return Err("Ollama stream ended without done=true".into());}
             let tail = filter.finish()?;
             if !tail.is_empty() {
@@ -1047,7 +1060,7 @@ async fn ask_ollama(
             return Ok(answer);
         }
         let reply: OllamaReply = response.json().await.map_err(|e| format!("Invalid response: {e}"))?;
-        metrics.stage("ollama_http","ollama",request_start,true);
+        metrics.stage(&request_label, "ollama", request_start, true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
             let answer = response_filter::strip_completed(&reply.message.content)?;
