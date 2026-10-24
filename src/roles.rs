@@ -47,7 +47,7 @@ impl Roles {
         for value in [&roles.investigator, &roles.architect, &roles.reviewer] {
             if !Self::valid(value) { return Err(format!("Unknown provider in role configuration: {value}")); }
         }
-        if !matches!(roles.mode.as_str(), "solo" | "symphony") { return Err("Invalid mode".into()); }
+        if !matches!(roles.mode.as_str(), "direct" | "solo" | "symphony") { return Err("Invalid mode".into()); }
         if !matches!(roles.solo_role.as_str(), "investigator" | "architect" | "reviewer") { return Err("Invalid solo role".into()); }
         Ok(roles)
     }
@@ -91,9 +91,10 @@ impl Roles {
     }
     pub fn set_mode(&mut self, mode: &str) -> Result<(), String> {
         match mode {
+            "direct" => self.mode = "direct".into(),
             "solo" => self.mode = "solo".into(),
             "symphony" | "symfony" => self.mode = "symphony".into(),
-            _ => return Err("Use solo or symphony".into()),
+            _ => return Err("Use direct, solo or symphony".into()),
         }
         Ok(())
     }
@@ -153,6 +154,15 @@ mod tests {
         assert_eq!(roles.mode, "symphony");
         assert!(roles.set_solo_role("reviewer").is_ok());
         assert_eq!(roles.selected_provider(),"groq");
+    }
+    #[test]
+    fn direct_mode_is_saved_and_loaded() {
+        let mut roles = Roles::default();
+        roles.set_mode("direct").unwrap();
+        let data = serde_json::to_string(&roles).unwrap();
+        let loaded: Roles = serde_json::from_str(&data).unwrap();
+        assert_eq!(loaded.mode, "direct");
+        assert!(roles.set_mode("unsupported").is_err());
     }
     #[test]
     fn serialized_roles_round_trip() {
