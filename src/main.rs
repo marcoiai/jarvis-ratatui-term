@@ -2138,9 +2138,6 @@ async fn ask_ollama(
     for round in 0..=rounds {
         // Stop requesting more tools after two rounds without new observations.
         let tools_enabled = allow_tools && round < rounds && stalled_rounds < 2;
-        if let Some(sender) = &updates {
-            let _ = sender.send(ResultMessage::ChatStage("Raciocinando"));
-        }
         if allow_tools && !tools_enabled {
             if evidence.source_files_since(baseline_event_count) < minimum_new_reads {
                 return Err("Revisão incompleta: as chamadas nativas read_file não examinaram arquivos suficientes. Raciocínio textual e listagem de diretórios não são evidência de leitura.".into());
@@ -2160,6 +2157,23 @@ async fn ask_ollama(
         let show_thinking = stream_final && env::var("DUDE_OLLAMA_THINK")
             .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
             .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
+        if let Some(sender) = &updates {
+            let stage = if tools_enabled && !stream_final {
+                "Solicitando ferramentas (sem streaming)"
+            } else if tools_enabled {
+                "Investigando com ferramentas"
+            } else if show_thinking {
+                "Raciocínio do modelo"
+            } else {
+                "Gerando resposta"
+            };
+            let _ = sender.send(ResultMessage::ChatStage(stage));
+            if direct_mode && round == 0 && tools_enabled && !stream_final {
+                let _ = sender.send(ResultMessage::ChatNotice(format!(
+                    "🔎 DUDE: consultando {model} para solicitar ferramentas nativas.                      Este modelo não fornece um canal de raciocínio separado;                      o andamento exibido representa operações reais do DUDE."
+                )));
+            }
+        }
         let request_start = Instant::now();
         let tool_definitions = model_tool_definitions(tools_enabled,allow_actions);
         let payload = json!({
@@ -2466,15 +2480,21 @@ async fn ask_ollama(
             let evidence = evidence.clone();
             let tool_name = name.clone();
             let tool_path = args.get("path").and_then(Value::as_str).unwrap_or(".").to_string();
+            if let Some(sender) = &updates {
+                let _ = sender.send(ResultMessage::ChatNotice(format!(
+                    "🔧 DUDE: executando {tool_name}({tool_path:?})"
+                )));
+            }
             let output = tokio::task::spawn_blocking(move || {
                 evidence.execute(&root, &name, &args)
             }).await.map_err(|e| e.to_string())?;
-            if output.starts_with("Tool error:") {
-                if let Some(sender) = &updates {
-                    let _ = sender.send(ResultMessage::ChatNotice(format!(
-                        "⚠ Ferramenta {tool_name} (caminho {tool_path:?}) falhou: {output}"
-                    )));
-                }
+            if let Some(sender) = &updates {
+                let notice = if output.starts_with("Tool error:") {
+                    format!("⚠ Ferramenta {tool_name} (caminho {tool_path:?}) falhou: {output}")
+                } else {
+                    format!("✅ DUDE: {tool_name}({tool_path:?}) concluída; resultado recebido.")
+                };
+                let _ = sender.send(ResultMessage::ChatNotice(notice));
             }
             conversation.push(json!({"role":"tool","tool_name":tool_name,"content":output}));
         }
