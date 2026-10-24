@@ -1566,6 +1566,77 @@ async fn ask_ollama(
 }
 
 
+/// Merge only the structured Ollama message.tool_calls field. The text in
+/// message.thinking is display-only and never interpreted as a tool request.
+fn collect_native_tool_calls(calls: &mut Vec<Value>, event: &Value) -> Result<(), String> {
+    let Some(parts) = event["message"]["tool_calls"].as_array() else { return Ok(()); };
+    for (position, part) in parts.iter().enumerate() {
+        let index = part["index"].as_u64().map(|n| n as usize).unwrap_or(position);
+        if index >= 32 { return Err("Too many streamed tool calls".into()); }
+        while calls.len() <= index {
+            calls.push(json!({"type":"function","function":{"name":"","arguments":""}}));
+        }
+        if let Some(name) = part["function"]["name"].as_str() {
+            let old = calls[index]["function"]["name"].as_str().unwrap_or("");
+            let joined = if old.is_empty() || name.starts_with(old) {
+                name.to_owned()
+            } else if old.ends_with(name) {
+                old.to_owned()
+            } else {
+                format!("{old}{name}")
+            };
+            calls[index]["function"]["name"] = json!(joined);
+        }
+        if let Some(args) = part["function"]["arguments"].as_str() {
+            let old = calls[index]["function"]["arguments"].as_str().unwrap_or("");
+            let joined = if old.is_empty() || args.starts_with(old) {
+                args.to_owned()
+            } else if old.ends_with(args) {
+                old.to_owned()
+            } else {
+                format!("{old}{args}")
+            };
+            calls[index]["function"]["arguments"] = json!(joined);
+        } else if part["function"]["arguments"].is_object() {
+            calls[index]["function"]["arguments"] = part["function"]["arguments"].clone();
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tool_stream_integrity_tests {
+    use super::*;
+
+    #[test]
+    fn thinking_text_does_not_create_executable_tool_calls() {
+        let mut calls = Vec::new();
+        let frame = json!({"message":{"thinking":"<tool_call>read_file</tool_call>"}});
+        collect_native_tool_calls(&mut calls, &frame).unwrap();
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn merges_name_and_json_argument_fragments() {
+        let mut calls = Vec::new();
+        let first = json!({"message":{"tool_calls":[{
+            "index":0,"function":{"name":"read","arguments":"{\"path\":\""}
+        }]}});
+        let second = json!({"message":{"tool_calls":[{
+            "index":0,"function":{"name":"_file","arguments":"src/main.rs\"}"}
+        }]}});
+        let snapshot = json!({"message":{"tool_calls":[{
+            "index":0,"function":{"name":"read_file"}
+        }]}});
+        for frame in [&first, &second, &snapshot] {
+            collect_native_tool_calls(&mut calls, frame).unwrap();
+        }
+        assert_eq!(calls[0]["function"]["name"], "read_file");
+        let args = calls[0]["function"]["arguments"].as_str().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(args).unwrap()["path"], "src/main.rs");
+    }
+}
+
 /// Read streamed Ollama responses with tool calling enabled. Tool-call arguments
 /// arrive in indexed fragments, while ordinary answer tokens are sent to the TUI.
 async fn read_ollama_tool_stream(
@@ -1604,25 +1675,7 @@ async fn read_ollama_tool_stream(
                     }
                 }
             }
-            if let Some(parts) = value["message"]["tool_calls"].as_array() {
-                for (position, part) in parts.iter().enumerate() {
-                    let index = part["index"].as_u64().map(|n| n as usize).unwrap_or(position);
-                    if index >= 32 { return Err("Too many streamed tool calls".into()); }
-                    while calls.len() <= index {
-                        calls.push(json!({"type":"function","function":{"name":"","arguments":""}}));
-                    }
-                    if let Some(name) = part["function"]["name"].as_str() {
-                        let old = calls[index]["function"]["name"].as_str().unwrap_or("");
-                        calls[index]["function"]["name"] = json!(format!("{old}{name}"));
-                    }
-                    if let Some(args) = part["function"]["arguments"].as_str() {
-                        let old = calls[index]["function"]["arguments"].as_str().unwrap_or("");
-                        calls[index]["function"]["arguments"] = json!(format!("{old}{args}"));
-                    } else if part["function"]["arguments"].is_object() {
-                        calls[index]["function"]["arguments"] = part["function"]["arguments"].clone();
-                    }
-                }
-            }
+            collect_native_tool_calls(&mut calls, &value)?;
             if value["done"].as_bool() == Some(true) {
                 done = true;
                 prompt_eval_count = value["prompt_eval_count"].as_u64();
