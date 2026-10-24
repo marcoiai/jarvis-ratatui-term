@@ -1630,7 +1630,8 @@ fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &st
                 "Use only native read_file calls with specific relative filenames, ",
                 "not '..' or absolute paths. ",
                 "This is a directory listing, NOT source read_file evidence."
-            )
+            ),
+            inventory = inventory
         ),
     });
 }
@@ -2239,7 +2240,8 @@ async fn ask_ollama(
                         "🔎 DUDE: {model} está preparando chamadas de ferramentas. ",
                         "Llama 3.1 não fornece um canal de thinking; ",
                         "as etapas exibidas são ações reais, não raciocínio interno."
-                    )
+                    ),
+                    model = model
                 )));
             }
         }
