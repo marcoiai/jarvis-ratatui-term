@@ -7,7 +7,7 @@
 
 - Repositório: `marcoiai/jarvis-ratatui-term` (DUDE, Rust + Ratatui + Ollama).
 - Branch de trabalho: `fix/technical-followup-evidence-gate` — PR #32, aberto contra `main`: https://github.com/marcoiai/jarvis-ratatui-term/pull/32.
-- Head inspecionado antes deste handoff: `a69e481f89c46a728f0727c5f83295d9b7b05ed5` (atualizar SHA depois deste commit).
+- Head consultado ao atualizar este handoff: `cbec2c52d7e289f5834d018e455bb91fc79ef25f` (revalidar com git rev-parse HEAD no VS Code).
 - O usuário quer um assistente de engenharia que entenda a conversa, decida **por modelo** quando usar ferramentas read-only, leia código de verdade e justifique conclusões com arquivos/linhas. Não quer roteamento principal baseado apenas em palavras-chave.
 - Configuração de teste: Ollama local/remoto, no último transcript `qwen3:4b`; modelo do terminal pode ser outro conforme `OLLAMA_MODEL`/`/model`. Uso comum: DUDE no Linux e Ollama servido pelo Mac.
 - Prioridade atual: diagnóstico de qualidade, precisão das evidências e continuidade contextual; **não** focar agora em SFT, feedback ou otimizar/desativar o thinking. O usuário quer thinking e streaming visíveis por enquanto.
@@ -42,6 +42,59 @@ Fonte: `Texto colado(20261024-015121).txt`, arquivo disponibilizado pelo usuári
 - Em `src/evidence.rs`, inserção em cache depende de `cache.len() < 80` e `result.len() <= 16000` (bytes); os registros de observação têm limite separado (`records.len() < 100`). Afirmar que 'cache de evidências = 150 itens de 32 KB' é misturar subsistemas.
 - Também afirmou 'não permite execução de comandos shell', frase ambígua: o DUDE tem `!command` que executa programas externos, mas **sem interpretação por shell** (pipes/globbing/redirecionamento não funcionam como num shell). Não descrever isso como impossibilidade absoluta de executar comandos externos ou como sandbox de segurança.
 - Não assumir segurança plena: bloqueios de caminhos sensíveis não tornam o runtime um sandbox. Conferir implementações e limitações antes de afirmar proteção.
+
+## 2B. Segundo transcript: aprofundamento não progride apesar das tools (24/10/2026)
+
+Fonte: arquivo de log anexado na conversa, Texto colado(20261024-020823).txt. Transcript integral não versionado, por privacidade.
+
+### Teste C: "whats up"
+- Resposta em inglês, curta e social. 26.693 ms, zero tools, zero arquivos lidos, input 1.457 e output 960 tokens. Thinking muito extenso para o resultado, mas NÃO desligar thinking, conforme decisão do usuário.
+
+### Teste D: "can you review curret project?"
+- Resposta de visão geral em inglês. 86.377 ms: 55.027 ms da rodada Ollama e 31.277 ms de auditoria semântica; 14 execuções de tools; 13 arquivos-fonte lidos. Tokens: input 9.525, output 1.114.
+- Declara incorretamente que o cache de evidências em src/evidence.rs possui 150 entradas de 32 KB. Realidade: src/file_tools.rs define MAX_ENTRIES=150 e MAX_BYTES=32768 para limites de ferramentas; src/evidence.rs armazena itens em cache somente se cache.len()<80 e result.len()<=16000 bytes. Há ainda limite próprio de 100 registros de observação.
+- Resposta termina com "No unverified claims made. This is a verified snapshot" apesar de conter erro factual e cobertura amostral. A autovalidação textual do LLM não é evidência.
+- O avaliador semântico usa referências amplas (README.md:1-120, src/main.rs:1-100), que podem estar presentes na coleta sem sustentar a afirmação individual.
+- Contradição do auditor: marca como unsupported a frase "DUDE does not have a secure sandbox", ao mesmo tempo em que justifica com a declaração no README de que o DUDE NÃO é um sandbox. Também confunde .gitignore com impossibilidade técnica de compartilhar.
+- Conhecimento opcional em segundo plano retornou timeout de 35 s. Não contabilizar esses 35 segundos como parte dos 86.377 ms da resposta principal.
+
+### Teste E: "ok, can you review more?" — P0
+- O Qwen reconheceu que deveria usar list_files e read_file, mas gastou longo raciocínio narrando os próximos passos e até emitiu pseudo XML de tool calls e JSON dentro do thinking.
+- ATENÇÃO: textos de tool_call no thinking NÃO demonstram execução real. Só message.tool_calls nativos processados pelo runtime e seus eventos de execução contam.
+- Métricas verificáveis do turno: total 196.784 ms; 4 rodadas Ollama de 55.019, 14.835, 66.208, 60.689 ms; input 13.429/output 4.609 tokens; 3 tools executadas; 3 evidence items; **apenas 1 source read, src/main.rs**. Tool errors 0.
+- A resposta inventou "Source reads: 14" e listou 13 arquivos anteriores + diretório src/ como se fossem evidência atual. Contradiz o relatório do runtime: Source reads: 1, Files: src/main.rs. Distinguir leituras do turno, leituras herdadas da conversa e inventário.
+- Exibiu como conclusões "verificadas" tanto "Workspace seguro" como propriedades de outros arquivos que admitiu não ter revisado. Leitura de configuração de workspace não prova segurança integral.
+- Ao invés de aprofundar e concluir a análise, sugeriu ao usuário que verificasse src/file_tools.rs e src/memory.rs. O DUDE tinha acesso read-only e deveria investigar ele próprio.
+- O segundo turno não exibiu auditoria semântica apesar de revisar código: hipótese forte a testar é que src/investigation.rs::needs_baseline exige padrões como "review"+"project" e não reconhece o follow-up curto "review more"; o gate pós-auditoria de src/main.rs::query_provider depende desse resultado. Não transformar conversa social em revisão técnica por palavras soltas.
+
+### Plano de correção e testes de regressão, em ordem
+
+**P0 — Integridade do tool calling e seguimento contextual**
+1. Inspecionar src/main.rs::{ask_ollama,read_ollama_tool_stream} com fixture NDJSON contendo pseudo tool-call em message.thinking: nenhum efeito de ferramenta deve ocorrer sem message.tool_calls estruturados.
+2. Testar JSON de argumentos de tools em múltiplos fragmentos NDJSON; contar corretamente list_files e read_file e as evidências coletadas. Verificar nos eventos, e não nas alegações do modelo, se o uso foi efetivo.
+3. Reproduzir sequência review current project -> ok, can you review more?; exigir continuidade da intenção técnica e novas leituras de código, ou declaração factual de impossibilidade. Se o modelo optar por não usar tools, a resposta não pode afirmar que reviu código novo.
+4. Distinguir explicitamente nos dados runtime: fontes do bootstrap, leituras pedidas por tools nativas do modelo, inventário, leituras do turno e leituras históricas. As alegações numéricas da resposta devem ser consistentes com esses dados.
+5. Garantir que revisão técnica de follow-up recebe o mesmo nível de evidência e auditoria de uma primeira revisão. Não substituir decisão do modelo por um detector rígido de palavras.
+
+**P1 — Verificação semântica confiável**
+6. Separar factualidade de "arquivo/linha observado": uma referência README.md:1-120 lida não prova que toda alegação de segurança, sandbox ou API esteja correta. Preferir citações pontuais e contexto da linha.
+7. Diferenciar not_assessable por falta de observação, unsupported por contradição real, e partially_supported por escopo incompleto. O exemplo "não é sandbox" não pode ser rejeitado usando a própria frase que confirma essa limitação.
+8. Criar teste de alegação falsa sobre cache 150/32KB vs 80/16KB, com evidência separada de src/file_tools.rs e src/evidence.rs.
+9. Restringir frases absolutas como "verified snapshot" e "No unverified claims" a avaliações de runtime; a auditoria posterior não pode legitimar trecho já transmitido como verificado. Estudar status "provisório/não validado" durante streaming de revisão até haver evidências.
+10. Exigir que "review more" reporte valor incremental (arquivos adicionais realmente lidos, novo fluxo analisado, achados novos e lacunas), não apenas resuma o README e recomende leituras que o DUDE poderia fazer.
+
+**P2 — Telemetria e experiência**
+11. Manter thinking e resposta em streaming, /export e os estágios distintos da TUI. Para avaliar latência: teste C 26,7 s, D 86,4 s (auditoria 31,3 s), E 196,8 s (4 rodadas, apenas 1 arquivo-fonte lido).
+12. Testes Rust obrigatórios: texto pseudo-tool no thinking vs chamadas reais; argumentos fragmentados; follow-up que herda intenção; divergência source_reads no texto vs métricas; auditor com referência válida porém alegação falsa; erros de classificação de sandbox; saída em inglês após comando explícito de idioma.
+
+### Critérios adicionais de aceitação
+- Em revisões, fatos citados têm correspondência REAL com arquivo/linhas observados e status correto. Nenhuma leitura ou número histórico aparece como leitura nova do turno.
+- Pensamento narrativo e pseudo-XML em thinking não viram tool calls nem evidência.
+- Pedido de aprofundamento abre novos trechos relevantes ou relata explicitamente por que não conseguiu fazê-lo. Não retorna somente "abra você os arquivos".
+- A auditoria diferencia ausência de evidência e contradição, e não transforma README em certificado de segurança.
+- Thinking/streaming continuam ligados até nova decisão explícita do usuário.
+
+---
 
 ## 3. Causa provável e pontos exatos de inspeção
 
