@@ -94,7 +94,21 @@ Use the following commands inside the DUDE terminal:
 - `/index` and `/index status` report whether scanning is active and how many files are saved in the index. `/index stop` stops polling but **keeps** the index on disk.
 - Changing workspaces automatically stops the previous workspace's indexer, so results from a previous scan cannot interfere with the new workspace.
 - The index records relative file paths, sizes, timestamps, fingerprints, language guesses and likely symbol declarations. It does **not** store source bodies, embeddings, or promise that the model has read those files. The index is not yet semantic search.
-- The scanner respects Git ignore rules and a root `.dudeignore` file, excludes sensitive and commonly generated/dependency paths, never follows symlinks, skips binary and oversized files, and caps each scan at 100,000 files. It uses the existing `ignore` Rust crate dependency from the original feature branch.
+- The scanner respects Git ignore rules and a root `.dudeignore` file. **Ignored directories are pruned before traversal**, not just filtered from the saved index. Excluded and commonly generated/dependency paths are also pruned; symlinks are not followed. Binary/oversized files are skipped and each scan is capped at 100,000 files. The scanner uses the `ignore` Rust crate dependency from the original feature branch.
+- Edit `<workspace>/.dudeignore` as a gitignore-style text file, for example:
+
+```gitignore
+# Do not traverse or index these directories
+node_modules/
+target/
+vendor/
+build/
+docs/private/
+# Ignore traces
+*.log
+```
+
+  Patterns are reloaded on each 3-second scan. A new ignore rule removes previously indexed files from `.dude/index.json` on the next refresh. `/index status` shows the remaining indexed file count.
 - Polling runs separately from the model request; an index update must not interrupt the active Ollama generation. Indexing is started manually after each DUDE restart.
 
 ## Persistent AI Co-Engineering memory
