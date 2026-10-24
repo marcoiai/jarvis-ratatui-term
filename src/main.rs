@@ -73,7 +73,7 @@ struct ToolCall { function: ToolFunction }
 struct ToolFunction { name: String, arguments: Value }
 
 enum ResultMessage {
-    ModelReady(Result<String, String>),
+    ModelReady { requested: String, endpoint: String, result: Result<String, String> },
     Chat { answer: Result<String, String>, telemetry: String },
     Shell(Result<String, String>),
     ChatChunk(String),
@@ -311,7 +311,7 @@ impl App {
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
             cloud_allowed: false,
-            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".into()),
+            model: env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.1:8b".into()),
             ollama_url: env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://127.0.0.1:11434".into())
                 .trim_end_matches('/')
@@ -508,7 +508,9 @@ impl App {
             let model=self.model.clone();
             tokio::spawn(async move {
                 let result=ensure_model(&client,&host,&model).await;
-                let _=tx.send(ResultMessage::ModelReady(result));
+                let _=tx.send(ResultMessage::ModelReady {
+                    requested: model, endpoint: host, result
+                });
             });
             return;
         }
@@ -781,10 +783,28 @@ impl App {
         }
 
         if let Some(model) = input.strip_prefix("/model ") {
-            if !model.trim().is_empty() {
-                self.model = model.trim().to_string();
-                self.output.push_str(&format!("Model set to {}\n", self.model));
+            let name = model.trim();
+            if name.is_empty() {
+                self.output.push_str("Uso: /model llama3.1:8b\n");
+                return;
             }
+            if name.contains(char::is_whitespace) || name.len() > 128 {
+                self.output.push_str("Nome do modelo inválido.\n");
+                return;
+            }
+            self.model = name.to_string();
+            self.model_ready = false;
+            self.output.push_str(&format!(
+                "Selecionando {} no Ollama; verificando disponibilidade...\n", self.model
+            ));
+            let requested = self.model.clone();
+            let endpoint = self.ollama_url.clone();
+            tokio::spawn(async move {
+                let result=ensure_model(&client,&endpoint,&requested).await;
+                let _=tx.send(ResultMessage::ModelReady {
+                    requested, endpoint, result
+                });
+            });
             return;
         }
         if input == "/clear" {
@@ -1000,6 +1020,13 @@ impl App {
         ) {
             return;
         }
+        // Startup checks can complete after the user switched model/host.
+        // Never replace the newly selected model with a stale readiness result.
+        if let ResultMessage::ModelReady { ref requested, ref endpoint, .. } = result {
+            if requested != &self.model || endpoint != &self.ollama_url {
+                return;
+            }
+        }
         if let ResultMessage::ChatStage(stage) = result {
             self.chat_stage = stage;
             return;
@@ -1061,12 +1088,12 @@ impl App {
         self.busy = false;
         self.started_at = None;
         match result {
-            ResultMessage::ModelReady(Ok(model)) => {
+            ResultMessage::ModelReady { result: Ok(model), .. } => {
                 self.model = model.clone();
                 self.model_ready = true;
                 self.output.push_str(&format!("{}: {model}\n", if self.communication.language == "pt-BR" {"Modelo pronto"} else {"Model ready"}));
             }
-            ResultMessage::ModelReady(Err(error)) => {
+            ResultMessage::ModelReady { result: Err(error), .. } => {
                 self.model_ready = false;
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
@@ -2400,7 +2427,9 @@ async fn run(
     let model = app.model.clone();
     tokio::spawn(async move {
         let result = ensure_model(&client, &host, &model).await;
-        let _ = tx_init.send(ResultMessage::ModelReady(result));
+        let _ = tx_init.send(ResultMessage::ModelReady {
+            requested: model, endpoint: host, result
+        });
     });
     // The UI stays responsive while a missing model downloads.
     let client = reqwest::Client::builder()
