@@ -105,11 +105,13 @@ pub fn list(workspace:&Path)->Result<String,String>{
     } else {
         for item in pending {
             report.push_str(&format!(
-                "#{} [{}{}] {}\n  Evidence: {}\n",
+                "#{} [{}{}] {}\n  Evidence: {}\n  Review: {}\n",
                 item.id,item.classification,
                 if item.references_checked {""} else {", references unverified"},
                 item.claim,
-                if item.evidence.is_empty() {"(none)".to_owned()} else {item.evidence.join("; ")}
+                if item.evidence.is_empty() {"(none)".to_owned()} else {item.evidence.join("; ")},
+                if item.references_checked {"line reference observed; claim not automatically validated"}
+                else {"no matching source line observed"}
             ));
         }
     }

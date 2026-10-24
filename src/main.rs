@@ -771,14 +771,13 @@ impl App {
         match knowledge::next_pending(&self.workspace) {
             Ok(Some(candidate)) => {
                 self.pending_knowledge = Some(candidate.id);
-                let supported = (candidate.classification == "verified" || candidate.classification == "documented")
-                    && !candidate.evidence.is_empty() && candidate.references_checked;
+                let citation_observed = !candidate.evidence.is_empty() && candidate.references_checked;
                 self.output.push_str(&format!(
                     "\\n🧠 Conhecimento proposto #{} [{}]: {}\\nEvidências: {}\\n{}\\n",
                     candidate.id, candidate.classification, candidate.claim,
                     if candidate.evidence.is_empty() {"(nenhuma)".to_string()} else {candidate.evidence.join("; ")},
-                    if supported {"Salvar na memória? (sim/não; ou /knowledge para revisar)"}
-                    else {"Ainda não verificável como fato. Use /knowledge para revisar; responda não para descartar."}
+                    if citation_observed {"Referência(s) de linha observada(s), mas a afirmação NÃO foi validada automaticamente. Confira as linhas antes de salvar na memória (sim/não; /knowledge para revisar)."}
+                    else {"Nenhuma referência de linha foi confirmada. Não aprove como fato; use /knowledge para revisar ou responda não para descartar."}
                 ));
             }
             Ok(None) => self.pending_knowledge = None,
@@ -806,6 +805,14 @@ impl App {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
+                let mut text = text;
+                if crate::claim_audit::unsupported_completeness_claims(&text) {
+                    let warning = "\n\n⚠ Auditoria DUDE: a resposta faz uma afirmação absoluta de implementação/verificação. As leituras de arquivos são amostrais e não comprovam que toda a arquitetura ou todos os módulos funcionam. Trate a conclusão como não verificada até haver evidência e testes específicos.\n";
+                    text.push_str(warning);
+                    if self.streamed {
+                        self.output.push_str(warning);
+                    }
+                }
                 if let (Some(store), Some(user)) = (&self.memory, self.last_question.take()) {
                     if let Err(err) = store.journal_exchange(&user, &text) {
                         self.output.push_str(&format!("Journal write warning: {err}\\n"));
@@ -872,6 +879,8 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
     let evidence_for_gate = evidence.clone();
+    // Keep a sender for the semantic auditor after ask_ollama consumes its own copy.
+    let audit_updates = updates.clone();
 
     let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
@@ -884,10 +893,46 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         if answer.trim().is_empty() {
             return Err("The model produced no review text; investigation evidence was gathered but no conclusion was generated.".into());
         }
-        if !evidence_for_gate.has_supported_citation(&answer) {
-            let warning = "\n\n⚠ DUDE: este parecer não apresenta referências arquivo:linha confirmadas nas leituras. É uma síntese preliminar, não uma verificação das afirmações.\n";
-            return Ok(format!("{answer}{warning}"));
+        let has_supported_citation = evidence_for_gate.has_supported_citation(&answer);
+        let coverage = evidence_for_gate.coverage();
+        let mut report = crate::claim_audit::project_report_preamble(
+            &answer,
+            &coverage,
+            has_supported_citation,
+        );
+        if let Some(sender) = &audit_updates {
+            let _ = sender.send(ResultMessage::ChatChunk(
+                "\n\n🧠 Avaliador semântico — stream bruto ao vivo:\n".into()
+            ));
         }
+        match crate::claim_audit::semantic_audit(
+            client,
+            host,
+            local_model,
+            &answer,
+            &evidence_for_gate,
+            audit_updates.as_ref(),
+        ).await {
+            Ok(audit) => {
+                report.push_str("\n\n--- Avaliação semântica das conclusões ---\n");
+                report.push_str(&audit);
+                if let Some(sender) = &audit_updates {
+                    let _ = sender.send(ResultMessage::ChatChunk(
+                        format!("\n\n--- Resultado interpretado ---\n{audit}\n")
+                    ));
+                }
+            }
+            Err(error) => {
+                let failure = format!(
+                    "\n\n⚠ AUDITORIA SEMÂNTICA NÃO EXECUTADA\n- Motivo: {error}\n- As conclusões do relatório permanecem sem validação semântica. Os alertas por palavras-chave são apenas heurísticos."
+                );
+                report.push_str(&failure);
+                if let Some(sender) = &audit_updates {
+                    let _ = sender.send(ResultMessage::ChatChunk(failure));
+                }
+            }
+        }
+        return Ok(report);
     }
     Ok(answer)
 }
