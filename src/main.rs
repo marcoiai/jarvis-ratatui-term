@@ -75,6 +75,8 @@ enum ResultMessage {
     Chat { answer: Result<String, String>, telemetry: String },
     Shell(Result<String, String>),
     ChatChunk(String),
+    /// Ollama's own streamed thinking channel; display only, never persist as answer.
+    ChatThinking(String),
 }
 
 struct App {
@@ -86,6 +88,7 @@ struct App {
     follow_output: bool,
     busy: bool,
     streamed: bool,
+    thinking_active: bool,
     started_at: Option<Instant>,
     model_ready: bool,
     model: String,
@@ -194,6 +197,7 @@ impl App {
             follow_output: true,
             busy: false,
             streamed: false,
+            thinking_active: false,
             started_at: None,
             model_ready: false,
             workspace,
@@ -604,6 +608,7 @@ impl App {
 
         self.busy = true;
         self.streamed = false;
+        self.thinking_active = false;
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
             let command = command.trim().to_owned();
@@ -786,7 +791,22 @@ impl App {
     }
 
     fn complete(&mut self, result: ResultMessage) {
+        if let ResultMessage::ChatThinking(ref delta) = result {
+            if !delta.is_empty() {
+                if !self.thinking_active {
+                    self.output.push_str("\n🧠 Raciocínio (Ollama):\n");
+                    self.thinking_active = true;
+                }
+                self.output.push_str(delta);
+                self.follow_output = true;
+            }
+            return;
+        }
         if let ResultMessage::ChatChunk(ref chunk) = result {
+            if self.thinking_active {
+                self.output.push_str("\n\n💬 Resposta:\n");
+                self.thinking_active = false;
+            }
             self.streamed = true;
             self.output.push_str(chunk);
             self.follow_output = true;
@@ -805,6 +825,10 @@ impl App {
                 self.output.push_str(&format!("Model initialization failed: {error}\n"));
             }
             ResultMessage::Chat { answer: Ok(text), telemetry } => {
+                if self.thinking_active {
+                    self.output.push_str("\n\n💬 Resposta:\n");
+                    self.thinking_active = false;
+                }
                 let mut text = text;
                 if crate::claim_audit::unsupported_completeness_claims(&text) {
                     let warning = "\n\n⚠ Auditoria DUDE: a resposta faz uma afirmação absoluta de implementação/verificação. As leituras de arquivos são amostrais e não comprovam que toda a arquitetura ou todos os módulos funcionam. Trate a conclusão como não verificada até haver evidência e testes específicos.\n";
@@ -833,11 +857,15 @@ impl App {
             }
             ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
             ResultMessage::Chat { answer: Err(error), telemetry } => {
+                if self.thinking_active {
+                    self.output.push_str("\n");
+                    self.thinking_active = false;
+                }
                 self.last_question = None;
                 self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
                 if self.history.last().is_some_and(|m| m.role == "user") { self.history.pop(); }
             }
-            ResultMessage::ChatChunk(_) => unreachable!("handled before completion"),
+            ResultMessage::ChatChunk(_) | ResultMessage::ChatThinking(_) => unreachable!("handled before completion"),
             ResultMessage::Shell(Err(error)) => {
                 self.last_question = None;
                 self.output.push_str(&format!("Error: {error}\n"));
@@ -1093,17 +1121,18 @@ async fn ask_ollama(
         if allow_tools && !tools_enabled {
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\n{}", evidence.coverage(), evidence.read_manifest()))}));
         }
-        // Internal extraction has no UI consumer: request one complete JSON response.
-        // Streaming is only useful when sending ChatChunk updates to the TUI.
-        // Stability first: receive final synthesis as one complete response.
-        // This prevents an audit warning from being the only streamed content.
+        // Stream both answer and Ollama's structured thinking field to the TUI.
+        // Non-interactive extraction keeps its previous fast, non-thinking mode.
         let stream_final = updates.is_some();
+        let show_thinking = stream_final && env::var("DUDE_OLLAMA_THINK")
+            .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
+            .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
         let request_start = Instant::now();
         let payload = json!({
             "model": model,
             "messages": conversation,
             "stream": stream_final,
-            "think": false,
+            "think": show_thinking,
             "options": { "num_ctx": investigation::context_size() },
             "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
         });
@@ -1113,8 +1142,8 @@ async fn ask_ollama(
             serde_json::to_vec(&file_tools::definitions()).map(|body| body.len()).unwrap_or_default()
         } else { 0 };
         let request_label = format!(
-            "ollama_http_round_{round}_tools_{}_stream_{}_messages_{}_payload_bytes_{payload_bytes}_message_bytes_{message_bytes}_tool_bytes_{tool_bytes}",
-            tools_enabled, stream_final, conversation.len()
+            "ollama_http_round_{round}_tools_{}_stream_{}_think_{}_messages_{}_payload_bytes_{payload_bytes}_message_bytes_{message_bytes}_tool_bytes_{tool_bytes}",
+            tools_enabled, stream_final, show_thinking, conversation.len()
         );
         let response = match client
             .post(format!("{host}/api/chat"))
@@ -1143,7 +1172,7 @@ async fn ask_ollama(
             let mut response = response;
             let mut buffer = Vec::<u8>::new();
             let mut answer = String::new();
-            let mut filter = response_filter::ThinkingFilter::default();
+            let mut filter = response_filter::ThinkingFilter::streaming();
             let mut finished = false;
             while let Some(chunk) = response.chunk().await.map_err(|e|format!("Ollama stream error: {e}"))? {
                 buffer.extend_from_slice(&chunk);
@@ -1154,6 +1183,13 @@ async fn ask_ollama(
                     if line.iter().all(u8::is_ascii_whitespace) { continue; }
                     let value: Value = serde_json::from_slice(line).map_err(|e|format!("Ollama stream JSON: {e}"))?;
                     if let Some(error)=value["error"].as_str(){return Err(error.into());}
+                    if let Some(thinking)=value["message"]["thinking"].as_str() {
+                        if !thinking.is_empty() {
+                            if let Some(sender)=&updates {
+                                let _=sender.send(ResultMessage::ChatThinking(thinking.to_owned()));
+                            }
+                        }
+                    }
                     if let Some(delta)=value["message"]["content"].as_str() {
                         let visible = filter.push(delta)?;
                         if !visible.is_empty() {
@@ -1350,7 +1386,7 @@ async fn read_ollama_tool_stream(
 ) -> Result<OllamaReply, String> {
     let mut buffer = Vec::<u8>::new();
     let mut content = String::new();
-    let mut filter = response_filter::ThinkingFilter::default();
+    let mut filter = response_filter::ThinkingFilter::streaming();
     let mut calls: Vec<Value> = Vec::new();
     let mut prompt_eval_count = None;
     let mut eval_count = None;
@@ -1364,6 +1400,13 @@ async fn read_ollama_tool_stream(
             if line.iter().all(u8::is_ascii_whitespace) { continue; }
             let value: Value = serde_json::from_slice(line).map_err(|e| format!("Ollama stream JSON: {e}"))?;
             if let Some(error) = value["error"].as_str() { return Err(error.into()); }
+            if let Some(thinking) = value["message"]["thinking"].as_str() {
+                if !thinking.is_empty() {
+                    if let Some(sender) = updates {
+                        let _ = sender.send(ResultMessage::ChatThinking(thinking.to_owned()));
+                    }
+                }
+            }
             if let Some(delta) = value["message"]["content"].as_str() {
                 let visible = filter.push(delta)?;
                 if !visible.is_empty() {
