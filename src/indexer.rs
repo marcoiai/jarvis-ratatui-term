@@ -194,6 +194,39 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
     #[test]
+    fn respects_gitignore_and_workspace_dudeignore() {
+        let root = std::env::temp_dir().join(format!("dude-index-ignore-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("visible.rs"), "pub fn visible() {}").unwrap();
+        fs::write(root.join("ignored.rs"), "pub fn hidden() {}").unwrap();
+        fs::write(root.join("private.rs"), "pub fn sensitive() {}").unwrap();
+        fs::write(root.join(".gitignore"), "ignored.rs\n").unwrap();
+        fs::write(root.join(".dudeignore"), "private.rs\n").unwrap();
+        refresh(&root).unwrap();
+        let data = load(&root.join(".dude/index.json")).unwrap();
+        assert!(data.files.contains_key("visible.rs"));
+        assert!(!data.files.contains_key("ignored.rs"));
+        assert!(!data.files.contains_key("private.rs"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_persistent_index_state_outside_workspace_via_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("dude-index-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("workspace")).unwrap();
+        fs::create_dir_all(dir.join("external")).unwrap();
+        symlink(dir.join("external"), dir.join("workspace/.dude")).unwrap();
+        assert!(refresh(&dir.join("workspace")).is_err());
+        assert!(status(&dir.join("workspace")).is_err());
+        assert!(!dir.join("external/index.json").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn detects_changes_and_deletions() {
         let root = std::env::temp_dir().join(format!("dude-index-change-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
