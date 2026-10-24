@@ -1635,9 +1635,16 @@ async fn query_direct_ollama(
         !is_greeting, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
     ).await?;
     // A greeting or a simple directory listing needs no read_file evidence.
-    // Report missing source reads only when explicit code analysis was asked.
+    // For an explicit code review, a fluent or pseudo-tool response without
+    // a successful native read_file is NOT a successful investigation.
     if analysis_requested && observed.source_read_count() == 0 {
-        Ok(format!("{answer}\n\n⚠ DUDE: nenhuma leitura real de arquivo-fonte foi concluída nesta resposta. O texto acima não é uma análise verificada do código."))
+        Err(format!(
+            "Revisão não concluída: nenhuma ferramenta read_file leu código do workspace. \
+             O modelo pode ter apenas listado arquivos ou impresso um JSON de ferramenta, \
+             mas isso não confirma leitura. Confira os erros de ferramenta acima, \
+             use caminhos relativos (por exemplo src/main.rs) e tente novamente. \
+             Modelo: {model}."
+        ))
     } else {
         Ok(answer)
     }
