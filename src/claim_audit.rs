@@ -69,7 +69,7 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
         while let Some(chunk) = response.chunk().await
             .map_err(|e| format!("erro lendo stream do Ollama: {e}"))? {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(newline) = buffer.find('\\n') {
+            while let Some(newline) = buffer.find('\n') {
                 let line = buffer[..newline].trim().to_owned();
                 buffer.drain(..=newline);
                 if line.is_empty() { continue; }
