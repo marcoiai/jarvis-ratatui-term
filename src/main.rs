@@ -116,6 +116,7 @@ struct App {
     last_question: Option<String>,
     pending_knowledge: Option<u64>,
     pending_change: Option<(PathBuf, changes::PreparedAction)>,
+    active_request: Option<tokio::task::AbortHandle>,
     roles: roles::Roles,
 }
 
@@ -256,6 +257,7 @@ impl App {
             last_question: None,
             pending_knowledge: None,
             pending_change: None,
+            active_request: None,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
@@ -290,8 +292,45 @@ impl App {
         }
     }
 
+    /// Stop an in-progress model request by dropping its HTTP stream. The
+    /// on-screen partial thinking/answer remains visible but is not persisted
+    /// as a completed assistant message or accepted as project evidence.
+    fn stop_generation(&mut self) {
+        let Some(handle) = self.active_request.take() else {
+            self.output.push_str("Nenhuma geração de IA ativa para interromper.\n");
+            return;
+        };
+        handle.abort();
+        self.busy = false;
+        self.started_at = None;
+        self.chat_stage = "Raciocinando";
+        self.thinking_active = false;
+        self.streamed = false;
+        self.last_question = None;
+        // A canceled user turn must not enter the next model conversation
+        // as if it had received a completed assistant response.
+        if self.history.last().is_some_and(|m| m.role == "user") {
+            self.history.pop();
+        }
+        if let Some(store) = &self.memory {
+            if let Err(error) = store.clear_pending() {
+                self.output.push_str(&format!("Aviso ao limpar pedido cancelado: {error}\n"));
+            }
+        }
+        self.output.push_str("\n🛑 Geração interrompida. Texto anterior é parcial. DUDE continua aberto.\n");
+        self.follow_output = true;
+        if let Err(error) = transcript::save_latest(&self.workspace,&self.output) {
+            self.output.push_str(&format!("Aviso exportação: {error}\n"));
+        }
+    }
+
     fn submit(&mut self, tx: mpsc::UnboundedSender<ResultMessage>, client: reqwest::Client) {
         let input = self.input.trim().to_string();
+        if input == "/stop" {
+            self.input.clear();
+            self.stop_generation();
+            return;
+        }
         // /export also works while the model is streaming or apparently stalled.
         if self.busy {
             if input == "/export" {
@@ -802,7 +841,7 @@ impl App {
                     }
                 }
             }
-            tokio::spawn(async move {
+            let request_task = tokio::spawn(async move {
                 let is_symphony=matches!(&route, router::Route::Symphony);
                 let is_direct=matches!(&route, router::Route::Direct);
                 let start=Instant::now();
@@ -875,6 +914,7 @@ impl App {
                 };
                 let _ = tx.send(ResultMessage::Chat { answer: result, telemetry });
             });
+            self.active_request = Some(request_task.abort_handle());
         }
     }
 
@@ -952,6 +992,9 @@ impl App {
             return;
         }
         let is_chat_completion = matches!(&result, ResultMessage::Chat { .. });
+        if is_chat_completion {
+            self.active_request = None;
+        }
         self.busy = false;
         self.started_at = None;
         match result {
@@ -2249,7 +2292,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         );
 
         let mode_label = if app.roles.mode == "direct" {
-            "Direct | Ollama local | /diff /approve /reject".to_string()
+            "Direct | Ollama | Ctrl+X /stop | /diff /approve /reject".to_string()
         } else if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
                 app.roles.investigator, app.roles.architect, app.roles.reviewer)
@@ -2319,6 +2362,9 @@ async fn run(
                     }
                     match code {
                         KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
+                        KeyCode::Char('x') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.stop_generation();
+                        },
                         KeyCode::Esc => break,
                         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
                         KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
