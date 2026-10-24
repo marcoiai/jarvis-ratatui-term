@@ -1623,10 +1623,14 @@ fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &st
     insert_context_before_latest_user(messages, Message {
         role: "system".into(),
         content: format!(
-            "OBSERVED DUDE WORKSPACE ROOT DIRECTORY LISTING (read-only runtime inventory):\n{inventory}\n\
-             Names above are relative to the workspace root. Use only native read_file calls \ 
-             with a specific relative file path, not '..' or absolute paths. \ 
-             This is a directory listing, NOT source read_file evidence."
+            concat!(
+                "OBSERVED DUDE WORKSPACE ROOT DIRECTORY LISTING (read-only runtime inventory):\n",
+                "{inventory}\n",
+                "Names above are relative to the workspace root. ",
+                "Use only native read_file calls with specific relative filenames, ",
+                "not '..' or absolute paths. ",
+                "This is a directory listing, NOT source read_file evidence."
+            )
         ),
     });
 }
@@ -2231,7 +2235,11 @@ async fn ask_ollama(
             let _ = sender.send(ResultMessage::ChatStage(stage));
             if direct_mode && round == 0 && tools_enabled && !stream_final {
                 let _ = sender.send(ResultMessage::ChatNotice(format!(
-                    "🔎 DUDE: {model} está preparando chamadas de ferramentas.                      Llama 3.1 não fornece um canal de thinking;                      abaixo aparecem etapas reais da investigação, não raciocínio interno."
+                    concat!(
+                        "🔎 DUDE: {model} está preparando chamadas de ferramentas. ",
+                        "Llama 3.1 não fornece um canal de thinking; ",
+                        "as etapas exibidas são ações reais, não raciocínio interno."
+                    )
                 )));
             }
         }
