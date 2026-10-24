@@ -826,6 +826,9 @@ impl App {
                 self.ask_next_knowledge();
             }
             self.follow_output = true;
+            if let Err(error) = transcript::save_latest(&self.workspace, &self.output) {
+                self.output.push_str(&format!("\n⚠ Falha ao atualizar transcript: {error}\n"));
+            }
             return;
         }
         if let ResultMessage::ChatThinking(ref delta) = result {
@@ -1025,7 +1028,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let audit_updates = updates.clone();
 
     let answer = match provider {
-        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
+        "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics.clone(), updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
@@ -1051,14 +1054,17 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
                 "\n\n🧠 Avaliador semântico — stream bruto ao vivo:\n".into()
             ));
         }
-        match crate::claim_audit::semantic_audit(
+        let audit_start = Instant::now();
+        let audit_result = crate::claim_audit::semantic_audit(
             client,
             host,
             local_model,
             &answer,
             &evidence_for_gate,
             audit_updates.as_ref(),
-        ).await {
+        ).await;
+        metrics.stage("semantic_audit", "ollama", audit_start, audit_result.is_ok());
+        match audit_result {
             Ok(audit) => {
                 report.push_str("\n\n--- Avaliação semântica das conclusões ---\n");
                 report.push_str(&audit);
@@ -1109,7 +1115,7 @@ async fn extract_knowledge_after_response(
         Message { role: "user".into(), content: prompt },
     ];
     let started = Instant::now();
-    // This low-priority operation has its own deadline and is not part of
+    // This optional operation has its own deadline and is not part of
     // the answer latency or the interactive request telemetry.
     let discovered = match tokio::time::timeout(
         Duration::from_secs(35),
@@ -1225,6 +1231,9 @@ async fn ask_ollama(
     for round in 0..=rounds {
         // Stop requesting more tools after two rounds without new observations.
         let tools_enabled = allow_tools && round < rounds && stalled_rounds < 2;
+        if let Some(sender) = &updates {
+            let _ = sender.send(ResultMessage::ChatStage("Raciocinando"));
+        }
         if allow_tools && !tools_enabled {
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\n{}", evidence.coverage(), evidence.read_manifest()))}));
         }
