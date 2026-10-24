@@ -1152,6 +1152,26 @@ impl App {
     }
 
     fn complete(&mut self, result: ResultMessage) {
+        // Index events run independently of LLM generation. They must NEVER
+        // clear busy/active_request or interfere with the current chat stream.
+        if let ResultMessage::Index { workspace, generation, update } = result {
+            if workspace != self.workspace || generation != self.index_generation {
+                return;
+            }
+            match update {
+                IndexUpdate::Report(message) =>
+                    self.output.push_str(&format!("\n🗂 {message}\n")),
+                IndexUpdate::Error(error) =>
+                    self.output.push_str(&format!("\n⚠ Erro do indexador: {error}\n")),
+                IndexUpdate::Stopped => {
+                    self.indexer_running = false;
+                    self.indexer_stop = None;
+                    self.output.push_str("\nIndexador parado. Índice persistente preservado.\n");
+                }
+            }
+            self.follow_output = true;
+            return;
+        }
         if self.discard_cancelled_stream && matches!(&result,
             ResultMessage::Chat { .. } |
             ResultMessage::ChatChunk(_) |
@@ -2796,6 +2816,7 @@ async fn run(
             }
         }
     }
+    app.stop_indexing();
     Ok(())
 }
 
