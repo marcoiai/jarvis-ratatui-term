@@ -1734,6 +1734,13 @@ fn looks_like_textual_tool_request(content: &str) -> bool {
         (value.get("parameters").is_some() || value.get("arguments").is_some())
 }
 
+fn should_stream_ollama_response(
+    model: &str, ui_available: bool, direct_mode: bool, tools_enabled: bool
+) -> bool {
+    let is_meta_llama = model.to_ascii_lowercase().starts_with("llama3.");
+    ui_available && !(direct_mode && tools_enabled && is_meta_llama)
+}
+
 fn model_tool_definitions(allow_tools: bool, allow_actions: bool) -> Vec<Value> {
     if !allow_tools { return Vec::new(); }
     let mut tools = file_tools::definitions();
@@ -1777,6 +1784,15 @@ mod meta_llama_tool_handling_tests {
         ).unwrap()["path"], ".");
         assert!(normalize_native_tool_arguments(json!("not-json")).is_err());
         assert!(normalize_native_tool_arguments(json!(["."])).is_err());
+    }
+
+    #[test]
+    fn meta_llama_uses_structured_tool_rounds_but_streams_final_answer() {
+        assert!(!should_stream_ollama_response("llama3.1:8b",true,true,true));
+        assert!(should_stream_ollama_response("llama3.1:8b",true,true,false));
+        assert!(should_stream_ollama_response("qwen3.5:4b",true,true,true));
+        assert!(!should_stream_ollama_response("llama3.1:8b",false,true,false));
+        assert!(should_stream_ollama_response("llama3.1:8b",true,false,true));
     }
 
     #[test]
@@ -1848,8 +1864,9 @@ async fn ask_ollama(
         // rounds, then stream the final answer normally after tools are done.
         // This is only for direct-mode Meta Llama and does not change the
         // existing streaming behavior for the other models.
-        let is_meta_llama = model.to_ascii_lowercase().starts_with("llama3.");
-        let stream_final = updates.is_some() && !(direct_mode && tools_enabled && is_meta_llama);
+        let stream_final = should_stream_ollama_response(
+            model, updates.is_some(), direct_mode, tools_enabled
+        );
         let show_thinking = stream_final && env::var("DUDE_OLLAMA_THINK")
             .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
             .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
