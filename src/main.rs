@@ -13,6 +13,7 @@ mod cloud;
 mod roles;
 mod memory;
 mod file_tools;
+mod transcript;
 mod symphony_checkpoint;
 #[cfg(test)]
 mod consolidation_tests;
@@ -237,6 +238,17 @@ impl App {
         }
     }
 
+    fn export_transcript(&mut self) {
+        match transcript::save_snapshot(&self.workspace, &self.output) {
+            Ok(path) => self.output.push_str(&format!(
+                "\n📄 Transcript exportado: {}\n", path.display()
+            )),
+            Err(error) => self.output.push_str(&format!(
+                "\n⚠ Falha ao exportar transcript: {error}\n"
+            )),
+        }
+    }
+
     fn receive_key(&mut self) {
         if let Some(provider)=self.key_prompt.take() {
             let key=std::mem::take(&mut self.input);
@@ -249,16 +261,26 @@ impl App {
     }
 
     fn submit(&mut self, tx: mpsc::UnboundedSender<ResultMessage>, client: reqwest::Client) {
+        let input = self.input.trim().to_string();
+        // /export also works while the model is streaming or apparently stalled.
         if self.busy {
+            if input == "/export" {
+                self.input.clear();
+                self.export_transcript();
+            }
             return;
         }
-        let input = self.input.trim().to_string();
         if input.is_empty() {
             return;
         }
         self.input.clear();
         self.output.push_str(&format!("\n> {input}\n"));
         self.follow_output = true;
+
+        if input == "/export" {
+            self.export_transcript();
+            return;
+        }
 
         // A simple answer to a knowledge review is handled locally, never sent to an LLM.
         if let Some(id) = self.pending_knowledge {
@@ -831,6 +853,7 @@ impl App {
             self.follow_output = true;
             return;
         }
+        let is_chat_completion = matches!(&result, ResultMessage::Chat { .. });
         self.busy = false;
         self.started_at = None;
         match result {
@@ -895,6 +918,13 @@ impl App {
             }
         }
         self.follow_output = true;
+        if is_chat_completion {
+            if let Err(error) = transcript::save_latest(&self.workspace, &self.output) {
+                self.output.push_str(&format!(
+                    "\n⚠ Falha ao salvar .dude/exports/latest.txt: {error}\n"
+                ));
+            }
+        }
     }
 }
 
