@@ -4,6 +4,14 @@ use serde_json::{json, Value};
 const MAX_BYTES: usize = 32_768;
 const MAX_ENTRIES: usize = 150;
 
+/// Canonical operation boundaries, included in model context when tools are enabled.
+/// These limits apply to file-tool output and traversal, not EvidenceCache storage.
+pub fn limits_description() -> String {
+    format!(
+        "File-tool operation limits: directory traversal/listing considers at most {MAX_ENTRIES} entries, and each tool result is capped at {MAX_BYTES} characters. These are not EvidenceCache storage limits."
+    )
+}
+
 pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type":"function","function":{"name":"list_files","description":"List files in a workspace directory (read-only).","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path, default ."}}}}}),
@@ -135,5 +143,13 @@ mod source_excerpt_contract_tests {
         assert!(whole.contains("complete_file=true"));
         assert!(whole.contains("3: line3"));
         let _=std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn exposes_operation_limits_without_claiming_cache_limits() {
+        let description = limits_description();
+        assert!(description.contains("150"));
+        assert!(description.contains("32768"));
+        assert!(description.contains("not EvidenceCache storage limits"));
     }
 }
