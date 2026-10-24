@@ -1616,6 +1616,21 @@ fn direct_chat_messages(messages: Vec<Message>) -> Vec<Message> {
     result
 }
 
+/// Provide an observed, bounded root directory list for explicit direct-mode
+/// project reviews. This is only a file inventory, never proof of reading code.
+fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &str) {
+    let inventory: String = inventory.chars().take(5000).collect();
+    insert_context_before_latest_user(messages, Message {
+        role: "system".into(),
+        content: format!(
+            "OBSERVED DUDE WORKSPACE ROOT DIRECTORY LISTING (read-only runtime inventory):\n{inventory}\n\
+             Names above are relative to the workspace root. Use only native read_file calls \ 
+             with a specific relative file path, not '..' or absolute paths. \ 
+             This is a directory listing, NOT source read_file evidence."
+        ),
+    });
+}
+
 async fn query_direct_ollama(
     client: &reqwest::Client,
     host: &str,
@@ -1630,8 +1645,29 @@ async fn query_direct_ollama(
     let analysis_requested = direct_source_analysis_intent(&messages);
     let allow_change_proposals = direct_change_intent(&messages);
     let observed = evidence.clone();
+    let mut direct_messages = direct_chat_messages(messages);
+    if analysis_requested {
+        // Deterministic, trusted-in-the-runtime root listing; the model still
+        // has to request real source reads. This avoids asking a small Llama
+        // to discover the workspace by trying '..' (which DUDE forbids).
+        let root = workspace.clone();
+        let cache = evidence.clone();
+        let listing = tokio::task::spawn_blocking(move || {
+            cache.execute_bootstrap(&root, "list_files", &json!({"path":"."}))
+        }).await.map_err(|error|format!("Inventário do workspace falhou: {error}"))?;
+        if listing.starts_with("Tool error:") {
+            let _ = updates.send(ResultMessage::ChatNotice(format!(
+                "⚠ DUDE: não conseguiu listar a raiz do workspace: {listing}"
+            )));
+        } else {
+            let _ = updates.send(ResultMessage::ChatNotice(
+                "📂 DUDE: inventário da raiz verificado; o modelo ainda precisa usar read_file para examinar código.".into()
+            ));
+            insert_direct_workspace_inventory(&mut direct_messages, &listing);
+        }
+    }
     let answer = ask_ollama(
-        client, host, model, direct_chat_messages(messages), workspace,
+        client, host, model, direct_messages, workspace,
         !is_greeting, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
     ).await?;
     // A greeting or a simple directory listing needs no read_file evidence.
@@ -1687,6 +1723,20 @@ mod direct_mode_context_tests {
         assert!(direct_source_analysis_intent(&user("Analise a arquitetura do projeto")));
         assert!(direct_source_analysis_intent(&user("Review current project")));
         assert!(!direct_source_analysis_intent(&user("Liste os arquivos do workspace")));
+    }
+
+    #[test]
+    fn inventory_preserves_the_actual_latest_user_request() {
+        let mut messages = direct_chat_messages(vec![
+            Message { role: "user".into(), content: "deeper review".into() }
+        ]);
+        insert_direct_workspace_inventory(&mut messages, "Cargo.toml\nsrc/\nREADME.md");
+        assert_eq!(messages.last().unwrap().role, "user");
+        assert_eq!(messages.last().unwrap().content, "deeper review");
+        assert!(messages.iter().any(|m|
+            m.role == "system" && m.content.contains("Cargo.toml")
+            && m.content.contains("NOT source read_file evidence")
+        ));
     }
 
     #[test]
