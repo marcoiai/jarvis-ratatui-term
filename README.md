@@ -27,6 +27,9 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 - Ask a normal question to chat with Ollama. Successful exchanges remain in context.
 - `!ls -la` executes a local program directly (no shell interpretation: pipes, globbing and redirects are unsupported).
 - `/model granite-code:latest` changes the model during the session.
+- `/export` saves the full visible DUDE transcript to a timestamped UTF-8 `.txt` file (including streamed Ollama thinking, answers and metrics). Works even while a response is still streaming.
+- After every completed answer or error, DUDE also refreshes `<workspace>/.dude/exports/latest.txt` automatically. Copy or attach that file instead of manually selecting terminal text. `/export` creates `<workspace>/.dude/exports/session-YYYYMMDD-HHMMSS-XXXXXXXXX.txt` without overwriting prior snapshots. The TUI prints the full snapshot path.
+- Exports are **local only** and may contain sensitive prompts, project excerpts, model reasoning or errors. Review them before sharing, and avoid adding `.dude/exports/` to Git.
 - `/clear` clears conversation and screen.
 - `/exit`, `/quit` or `/sair` exits the TUI cleanly (also Esc or Ctrl+C).
 - Up/Down scroll, ESC or Ctrl+C exits.
