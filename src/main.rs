@@ -1056,15 +1056,19 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     }
     let evidence_for_gate = evidence.clone();
     let baseline_event_count = evidence.event_count();
-    if require_project_evidence {
+    // A notice is only streamed with Ollama's answer stream. Cloud adapters
+    // return text at completion: a synthetic ChatChunk would otherwise set
+    // App.streamed=true and accidentally suppress their final answer.
+    if require_project_evidence && provider == "ollama" {
         if let Some(sender) = &updates {
             let _ = sender.send(ResultMessage::ChatChunk(
                 "\n⚠ Revisão em andamento: a resposta do modelo é provisória até a conferência das leituras e citações.\n".into()
             ));
         }
     }
-    // Keep a sender for the semantic auditor after ask_ollama consumes its own copy.
-    let audit_updates = updates.clone();
+    // Only Ollama streams the answer in this branch; do not mix an Ollama
+    // auditor's streamed JSON into a non-streaming cloud answer.
+    let audit_updates = if provider == "ollama" { updates.clone() } else { None };
 
     let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools,
