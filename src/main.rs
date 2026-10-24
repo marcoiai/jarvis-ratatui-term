@@ -2161,9 +2161,13 @@ async fn ask_ollama(
         let stream_final = should_stream_ollama_response(
             model, updates.is_some(), direct_mode, tools_enabled
         );
-        let show_thinking = stream_final && env::var("DUDE_OLLAMA_THINK")
-            .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
-            .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
+        // Llama 3.1 is not a thinking-channel model. Even an explicit
+        // DUDE_OLLAMA_THINK=1 must not ask it for a field it cannot provide.
+        // Thinking-capable Qwen3 keeps its true native thinking stream.
+        let show_thinking = stream_final && !model.to_ascii_lowercase().starts_with("llama3.")
+            && env::var("DUDE_OLLAMA_THINK")
+                .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
+                .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
         if let Some(sender) = &updates {
             let stage = if tools_enabled && !stream_final {
                 "Solicitando ferramentas (sem streaming)"
@@ -2177,7 +2181,7 @@ async fn ask_ollama(
             let _ = sender.send(ResultMessage::ChatStage(stage));
             if direct_mode && round == 0 && tools_enabled && !stream_final {
                 let _ = sender.send(ResultMessage::ChatNotice(format!(
-                    "🔎 DUDE: consultando {model} para solicitar ferramentas nativas.                      Este modelo não fornece um canal de raciocínio separado;                      o andamento exibido representa operações reais do DUDE."
+                    "🔎 DUDE: {model} está preparando chamadas de ferramentas.                      Llama 3.1 não fornece um canal de thinking;                      abaixo aparecem etapas reais da investigação, não raciocínio interno."
                 )));
             }
         }
