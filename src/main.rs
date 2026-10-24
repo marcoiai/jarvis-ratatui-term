@@ -13,6 +13,7 @@ mod cloud;
 mod roles;
 mod memory;
 mod file_tools;
+mod indexer;
 mod symphony_checkpoint;
 #[cfg(test)]
 mod consolidation_tests;
@@ -41,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use unicode_width::UnicodeWidthChar;
-use tokio::{process::Command, sync::mpsc};
+use tokio::{process::Command, sync::{mpsc, watch}};
 
 #[derive(Clone, Serialize)]
 struct Message {
@@ -74,6 +75,7 @@ enum ResultMessage {
     ModelReady(Result<String, String>),
     Chat { answer: Result<String, String>, telemetry: String },
     Shell(Result<String, String>),
+    Index(Result<String, String>),
     ChatChunk(String),
 }
 
@@ -100,6 +102,8 @@ struct App {
     last_question: Option<String>,
     pending_knowledge: Option<u64>,
     roles: roles::Roles,
+    indexer_running: bool,
+    indexer_stop: Option<watch::Sender<bool>>,
 }
 
 // Invalid Knowledge review answers never enter model routing.
@@ -203,6 +207,8 @@ impl App {
             last_question: None,
             pending_knowledge: None,
             roles,
+            indexer_running: false,
+            indexer_stop: None,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
             cloud_allowed: false,
@@ -276,6 +282,70 @@ impl App {
                 return;
             }
             self.pending_knowledge = None;
+        }
+        if input == "/index" || input == "/index status" {
+            let saved = indexer::status(&self.workspace)
+                .unwrap_or_else(|e| format!("Índice indisponível: {e}"));
+            self.output.push_str(&format!(
+                "Indexador: {} | Workspace: {}\n{}\nComandos: /index start | /index stop | /index status\n",
+                if self.indexer_running { "ATIVO (verificação a cada 3s)" } else { "INATIVO" },
+                self.workspace.display(), saved
+            ));
+            return;
+        }
+        if input == "/index start" {
+            if self.indexer_running {
+                self.output.push_str("Indexador já está ativo. Use /index status.\n");
+                return;
+            }
+            let root = self.workspace.clone();
+            let (stop_tx, mut stop_rx) = watch::channel(false);
+            let events = tx.clone();
+            self.indexer_stop = Some(stop_tx);
+            self.indexer_running = true;
+            self.output.push_str("Indexador ativado: criando índice persistente e verificando mudanças a cada 3 segundos.\n");
+            tokio::spawn(async move {
+                let first_root = root.clone();
+                let initial = tokio::task::spawn_blocking(move || indexer::refresh(&first_root))
+                    .await.map_err(|e| e.to_string()).and_then(|r| r);
+                match initial {
+                    Ok(report) => { let _ = events.send(ResultMessage::Index(Ok(report.message))); }
+                    Err(error) => { let _ = events.send(ResultMessage::Index(Err(error))); }
+                }
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(3)) => {},
+                        changed = stop_rx.changed() => {
+                            if changed.is_err() || *stop_rx.borrow() { break; }
+                        }
+                    }
+                    if *stop_rx.borrow() { break; }
+                    let scan_root = root.clone();
+                    let report = tokio::task::spawn_blocking(move || indexer::refresh(&scan_root))
+                        .await.map_err(|e| e.to_string()).and_then(|r| r);
+                    match report {
+                        Ok(report) if report.changed => {
+                            let _ = events.send(ResultMessage::Index(Ok(report.message)));
+                        }
+                        Ok(_) => {},
+                        Err(error) => {
+                            let _ = events.send(ResultMessage::Index(Err(format!("Falha ao atualizar índice: {error}"))));
+                        }
+                    }
+                }
+                let _ = events.send(ResultMessage::Index(Ok("Indexador parado.".into())));
+            });
+            return;
+        }
+        if input == "/index stop" {
+            if let Some(stop) = self.indexer_stop.take() {
+                let _ = stop.send(true);
+                self.indexer_running = false;
+                self.output.push_str("Indexador sendo interrompido; o índice salvo será mantido.\n");
+            } else {
+                self.output.push_str("Indexador não está ativo. Use /index start.\n");
+            }
+            return;
         }
         if input == "/ollama" {
             self.output.push_str(&format!("Ollama endpoint: {} | model: {} | ready: {}\nUse /ollama retry or /ollama host http://IP:11434\n",
@@ -397,6 +467,8 @@ impl App {
                 Ok(path) if path.is_dir() => {
                     match memory::Memory::open(&path) {
                         Ok(store) => {
+                            if let Some(stop) = self.indexer_stop.take() { let _ = stop.send(true); }
+                            self.indexer_running = false;
                             self.workspace = path;
                             self.environment = environment::Environment::detect(&self.workspace);
                             self.history.truncate(2);
@@ -792,8 +864,10 @@ impl App {
             self.follow_output = true;
             return;
         }
-        self.busy = false;
-        self.started_at = None;
+        if !matches!(&result, ResultMessage::Index(_)) {
+            self.busy = false;
+            self.started_at = None;
+        }
         match result {
             ResultMessage::ModelReady(Ok(model)) => {
                 self.model = model.clone();
@@ -832,6 +906,8 @@ impl App {
                 self.ask_next_knowledge();
             }
             ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
+            ResultMessage::Index(Ok(text)) => self.output.push_str(&format!("{text}\n")),
+            ResultMessage::Index(Err(error)) => self.output.push_str(&format!("Erro do indexador: {error}\n")),
             ResultMessage::Chat { answer: Err(error), telemetry } => {
                 self.last_question = None;
                 self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
