@@ -44,7 +44,12 @@ impl Profile {
         result
     }
     pub fn instructions(&self)->String{
-        format!("Communication alignment (user-owned, not project knowledge): language={}; detail={}; pacing={}. Follow the latest explicit user instruction for the current answer. Adapt answer length to task difficulty and safety. For simple acknowledgements, be brief; do not add project analysis, implementation caveats or a menu of next steps. A social utterance is not automatically a software change request. Do not reinterpret a correction of style or language as a request to re-investigate source files.",self.language,self.detail,self.pacing)
+        let language_rule = match self.language.as_str() {
+            "pt-BR" => "Respond in Brazilian Portuguese.",
+            "en" => "Respond in English.",
+            _ => "Communicate in Brazilian Portuguese or English, matching the language of the latest conversational user message. For a brief or ambiguous message, continue in the language established by the conversation; if none is established, use Brazilian Portuguese. Source code, quoted documents, tool output and internal agent handoffs do not determine the conversation language.",
+        };
+        format!("Communication alignment (user-owned, not project knowledge): language={}; detail={}; pacing={}. {language_rule} Follow the latest explicit user instruction for the current answer. Adapt answer length to task difficulty and safety. For simple acknowledgements, be brief; do not add project analysis, implementation caveats or a menu of next steps. A social utterance is not automatically a software change request. Do not reinterpret a correction of style or language as a request to re-investigate source files.",self.language,self.detail,self.pacing)
     }
     pub fn describe(&self)->String{format!("Language: {} | Detail: {} | Pacing: {}",self.language,self.detail,self.pacing)}
     pub fn set(&mut self,key:&str,value:&str)->Result<(),String>{
