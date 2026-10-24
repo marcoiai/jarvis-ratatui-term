@@ -521,13 +521,19 @@ impl App {
             self.stop_generation();
             return;
         }
-        // /export also works while the model is streaming or apparently stalled.
+        // Index lifecycle and /export are local, independent of Ollama; they
+        // remain responsive while an answer is streaming.
         if self.busy {
             if input == "/export" {
                 self.input.clear();
                 self.export_transcript();
+                return;
             }
-            return;
+            if !matches!(input.as_str(),
+                "/index" | "/index status" | "/index start" | "/index stop"
+            ) {
+                return;
+            }
         }
         if input.is_empty() {
             return;
