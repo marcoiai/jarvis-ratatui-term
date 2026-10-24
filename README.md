@@ -36,6 +36,25 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 
 DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
 
+## Temporary direct local-model mode
+
+To use Ollama much like a normal chat assistant **without DUDE's experimental
+auditor/reviewer pipeline**, switch to **direct** mode inside the TUI:
+
+```text
+/mode direct
+/model qwen3:4b
+review the current project
+can you review more?
+```
+
+- The mode is saved per workspace in `.dude/roles.json` until you select `/mode solo` or `/mode symphony`.
+- Direct uses the **local Ollama provider**, ignoring Solo's optional cloud-role assignments. To use another locally installed model, type `/model MODEL_NAME` (for example `/model qwen3.5:4b` if installed on your Ollama server). Check availability using `/ollama` and `/ollama retry`.
+- Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, auto-baseline, evidence gates, second-pass semantic audit and automatic knowledge extraction are bypassed.
+- Ollama still decides whether to use the read-only `list_files`, `read_file` and `search_text` tools; thinking/answer streaming and `/export` remain available. Direct does **not** guarantee that the model will call tools, or that every claim is independently verified. Treat results as practical assistant responses, not audited reviews.
+- The Ollama endpoint comes from `OLLAMA_HOST` (default `http://127.0.0.1:11434`); this works with Ollama running on the Mac and the DUDE client running on Linux as long as the endpoint is reachable.
+- For the former stricter behavior, use `/mode solo` (or `/mode symphony` for role orchestration).
+
 ## AI file tools (read-only)
 
 DUDE can ask Ollama to call `list_files`, `read_file` (line ranges, similar to `sed -n`), and `search_text` (literal grep-style matches with line numbers). These are Rust implementations, not unrestricted shell commands. Tool-capable Ollama models are required; support varies by model.
