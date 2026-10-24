@@ -288,6 +288,27 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn distinct_source_files_after_bootstrap_are_counted_by_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-source-delta-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("b.rs"), "fn b() {}\n").unwrap();
+        let evidence = EvidenceCache::default();
+        evidence.execute(&root, "read_file", &json!({"path":"a.rs"}));
+        let after_bootstrap = evidence.event_count();
+        assert_eq!(evidence.source_files_since(after_bootstrap), 0);
+        evidence.execute(&root, "list_files", &json!({"path":"."}));
+        evidence.execute(&root, "read_file", &json!({"path":"a.rs"}));
+        evidence.execute(&root, "read_file", &json!({"path":"a.rs"}));
+        assert_eq!(evidence.source_files_since(after_bootstrap), 1);
+        evidence.execute(&root, "read_file", &json!({"path":"b.rs"}));
+        assert_eq!(evidence.source_files_since(after_bootstrap), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn file_reads_cache_and_invalidate() {
         let root = std::env::temp_dir().join(format!("dude-evidence-{}",std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
