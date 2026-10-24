@@ -39,7 +39,9 @@ DUDE can ask Ollama to call `list_files`, `read_file` (line ranges, similar to `
 
 Set `DUDE_WORKSPACE=/path/to/project` to restrict AI file reads to a selected directory. Defaults to current directory. Some sensitive paths and symlinks are blocked, but this is **not a security sandbox**: launch DUDE in a trusted, non-sensitive workspace and don't allow untrusted content there. AI file tools do not modify files. User-typed `!command` still runs external programs under the user's permissions.
 
-No API key is necessary. The Rust application communicates using HTTP JSON with `/api/chat` and `stream: false`.
+No API key is necessary. The Rust application communicates using HTTP JSON with `/api/chat`. Interactive Ollama replies use `stream: true`, forwarding `message.thinking` and `message.content` separately to the TUI. Non-interactive knowledge extraction remains non-streaming.
+
+For thinking-capable Qwen3 models, DUDE enables Ollama's thinking stream by default. The thinking text is shown live under **🧠 Raciocínio (Ollama)**, followed by the streamed **💬 Resposta**. Thinking is not added to the persisted conversation history. Set `DUDE_OLLAMA_THINK=0` to disable thinking (and reduce generation work), or `DUDE_OLLAMA_THINK=1` to request it explicitly with another compatible model. Non-thinking-capable models may reject `think: true`; leave it unset or use `0` for those models.
 This branch replaces the original Gemini shell script. The obsolete Gemini shell scripts and tracked key-export script were removed from this branch. **Revoke the previously exposed credential** and clean Git history separately if required; deleting files does not erase older commits.
 
 ## Notes
