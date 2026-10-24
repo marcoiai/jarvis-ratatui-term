@@ -11,13 +11,13 @@ An AI-powered development companion for the terminal, built with Rust, Ratatui a
 
 - Rust toolchain (edition 2024)
 - Ollama running at `http://127.0.0.1:11434`
-- Ollama running (DUDE downloads `qwen3:4b` automatically when missing)
+- Ollama running (DUDE downloads `llama3.1:8b` automatically when missing)
 
 ## Run
 
 ```sh
 ollama serve  # only if Ollama is not already running
-OLLAMA_MODEL=qwen3:4b cargo run --bin dude
+OLLAMA_MODEL=llama3.1:8b cargo run --bin dude
 ```
 
 If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
@@ -26,7 +26,7 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 
 - Ask a normal question to chat with Ollama. Successful exchanges remain in context.
 - `!ls -la` executes a local program directly (no shell interpretation: pipes, globbing and redirects are unsupported).
-- `/model granite-code:latest` changes the model during the session.
+- `/model llama3.1:8b` selects and verifies the model during the session (checking installed models and downloading if needed); DUDE marks it ready only after verification.
 - `/export` saves the full visible DUDE transcript to a timestamped UTF-8 `.txt` file (including streamed Ollama thinking, answers and metrics). Works even while a response is still streaming.
 - After every completed answer or error, DUDE also refreshes `<workspace>/.dude/exports/latest.txt` automatically. Copy or attach that file instead of manually selecting terminal text. `/export` creates `<workspace>/.dude/exports/session-YYYYMMDD-HHMMSS-XXXXXXXXX.txt` without overwriting prior snapshots. The TUI prints the full snapshot path.
 - Exports are **local only** and may contain sensitive prompts, project excerpts, model reasoning or errors. Review them before sharing, and avoid adding `.dude/exports/` to Git.
@@ -34,7 +34,7 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 - `/exit`, `/quit` or `/sair` exits the TUI cleanly (also Esc or Ctrl+C).
 - Up/Down scroll, ESC or Ctrl+C exits.
 
-DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
+DUDE prefers `llama3.1:8b` (Meta Llama 3.1 8B) and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
 
 ## Temporary direct local-model mode
 
@@ -43,13 +43,13 @@ auditor/reviewer pipeline**, switch to **direct** mode inside the TUI:
 
 ```text
 /mode direct
-/model qwen3:4b
+/model llama3.1:8b
 review the current project
 can you review more?
 ```
 
 - The mode is saved per workspace in `.dude/roles.json` until you select `/mode solo` or `/mode symphony`.
-- Direct uses the **local Ollama provider**, ignoring Solo's optional cloud-role assignments. To use another locally installed model, type `/model MODEL_NAME` (for example `/model qwen3.5:4b` if installed on your Ollama server). Check availability using `/ollama` and `/ollama retry`.
+- Direct uses the **local Ollama provider**, ignoring Solo's optional cloud-role assignments. To use another locally installed model, type `/model MODEL_NAME` (for example `/model llama3.1:8b`). The model is rechecked when you switch, and stale checks for previous selections are ignored. Check availability using `/ollama` and `/ollama retry`.
 - Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, auto-baseline, evidence gates, second-pass semantic audit and automatic knowledge extraction are bypassed.
 - Ollama still decides whether to use the read-only `list_files`, `read_file` and `search_text` tools; thinking/answer streaming and `/export` remain available. Direct does **not** guarantee that the model will call tools, or that every claim is independently verified. Treat results as practical assistant responses, not audited reviews.
 - **Cancel an in-progress thinking/response (including macOS):** press **`Esc` while a model is generating**, `Control+X`, `Control+G`, or enter `/stop` while DUDE is busy. On Mac use the **Control** key, not Command (`⌘`); Command+X is generally handled by the terminal. `Esc` is the recommended macOS fallback. While idle, `Esc` and `Ctrl+C` still exit the application. The UI processes streamed token events in bounded batches so keyboard input remains responsive, and queued stale stream fragments are ignored after cancellation. The visible partial output is not saved as a completed assistant answer; Ollama may take a moment to release backend work.
@@ -133,7 +133,7 @@ The selected providers are saved per workspace in `.dude/roles.json`. In **Solo*
 
 `/mode symfony` is an alias. `/cloud deny` revokes cloud permission for the current session. Permission is **off on startup and after workspace changes**. A cloud role receives conversation history, project memory/context and results of explicitly requested read-only file tools; do not enable cloud for proprietary workspaces unless authorized. Shell commands (`!command`) remain explicitly user initiated.
 
-Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `qwen3:4b`); Groq (`GROQ_API_KEY`, optional `GROQ_MODEL`, default `openai/gpt-oss-120b`); Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_MODEL`, default `gemini-2.5-flash`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
+Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `llama3.1:8b`); Groq (`GROQ_API_KEY`, optional `GROQ_MODEL`, default `openai/gpt-oss-120b`); Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_MODEL`, default `gemini-2.5-flash`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
 
 If any Symphony stage errors, DUDE displays an error instead of silently treating partial results as a complete three-role answer. Shared tools are read-only, and each provider is limited to eight rounds of tool calls.
 
