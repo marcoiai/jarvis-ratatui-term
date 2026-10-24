@@ -189,6 +189,48 @@ mod generation_cancel_tests {
 }
 
 #[cfg(test)]
+mod ollama_model_selection_tests {
+    use super::*;
+
+    #[test]
+    fn outdated_model_check_does_not_override_selected_llama() {
+        let mut app = App::new();
+        app.model = "llama3.1:8b".into();
+        app.model_ready = false;
+        let current_endpoint = app.ollama_url.clone();
+        app.complete(ResultMessage::ModelReady {
+            requested: "qwen3.5:4b".into(),
+            endpoint: current_endpoint.clone(),
+            result: Ok("qwen3.5:4b".into()),
+        });
+        assert_eq!(app.model, "llama3.1:8b");
+        assert!(!app.model_ready, "stale readiness must not mark Llama ready");
+
+        app.complete(ResultMessage::ModelReady {
+            requested: "llama3.1:8b".into(),
+            endpoint: current_endpoint,
+            result: Ok("llama3.1:8b".into()),
+        });
+        assert_eq!(app.model, "llama3.1:8b");
+        assert!(app.model_ready);
+    }
+
+    #[test]
+    fn checks_for_previous_server_are_ignored() {
+        let mut app = App::new();
+        app.model = "llama3.1:8b".into();
+        app.ollama_url = "http://127.0.0.1:11434".into();
+        app.model_ready = false;
+        app.complete(ResultMessage::ModelReady {
+            requested: "llama3.1:8b".into(),
+            endpoint: "http://10.0.0.1:11434".into(),
+            result: Ok("llama3.1:8b".into()),
+        });
+        assert!(!app.model_ready);
+    }
+}
+
+#[cfg(test)]
 mod ollama_thinking_ui_tests {
     use super::{App, ResultMessage};
 
