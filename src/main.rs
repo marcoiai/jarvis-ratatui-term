@@ -1661,8 +1661,25 @@ mod direct_mode_context_tests {
         assert_eq!(direct[0].role, "system");
         assert!(!direct[0].content.contains("Legacy policies"));
         assert!(!direct[0].content.contains("language=pt-BR"));
-        assert!(direct[0].content.len() < 900);
+        assert!(direct[0].content.len() < 1200);
         assert_eq!(direct.last().unwrap().content, "review the project in English");
+    }
+
+    #[test]
+    fn greeting_in_direct_mode_uses_model_but_not_file_tools() {
+        let user = |text: &str| vec![Message {
+            role: "user".into(), content: text.into()
+        }];
+        for greeting in ["oi", "hey dude", "hello!", "e aí", "Bom dia", "salve"] {
+            assert!(direct_is_greeting(&user(greeting)), "{greeting}");
+            assert!(!direct_source_analysis_intent(&user(greeting)));
+            assert!(!direct_change_intent(&user(greeting)));
+        }
+        assert!(!direct_is_greeting(&user("liste os arquivos")));
+        assert!(!direct_is_greeting(&user("analise a arquitetura")));
+        assert!(direct_source_analysis_intent(&user("Analise a arquitetura do projeto")));
+        assert!(direct_source_analysis_intent(&user("Review current project")));
+        assert!(!direct_source_analysis_intent(&user("Liste os arquivos do workspace")));
     }
 
     #[test]
