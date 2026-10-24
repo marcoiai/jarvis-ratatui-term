@@ -25,7 +25,13 @@ pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool
         return previous_user.is_some_and(|previous| is_technical(previous)
             || needs_baseline(previous));
     }
-    is_technical(question) || is_code_change_request(question)
+    if is_technical(question) || is_code_change_request(question) { return true; }
+    let q = question.trim().to_lowercase();
+    let correction = q.chars().count() <= 110 && ["já tem", "ja tem", "só quero",
+        "so quero", "não é isso", "nao e isso", "esse comando", "o existente"]
+        .iter().any(|term| q.contains(term));
+    correction && previous_user.is_some_and(|previous|
+        is_technical(previous) || is_code_change_request(previous))
 }
 
 /// Requests to change an existing project must inspect the implementation first.
@@ -302,7 +308,7 @@ mod intent_tests {
         assert!(investigation_intent("analise o arquivo main.rs", None));
         assert!(investigation_intent("ajustar o comando para o ps3", None));
         assert!(investigation_intent("eu quero ajustar o rom launcher", None));
-        assert!(investigation_intent("mas ja tem eu so quero ajustar", Some("ajustar o comando para o ps3")) == false);
+        assert!(investigation_intent("mas ja tem eu so quero ajustar", Some("ajustar o comando para o ps3")));
     }
     #[test]
     fn conversation_does_not_trigger_investigation() {
