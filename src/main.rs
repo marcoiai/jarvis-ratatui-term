@@ -136,6 +136,14 @@ mod ollama_thinking_ui_tests {
     use super::{App, ResultMessage};
 
     #[test]
+    fn stage_updates_do_not_mark_inflight_answer_complete() {
+        let mut app = App::new();
+        app.busy = true;
+        app.complete(ResultMessage::ChatStage("Auditando evidências"));
+        assert!(app.busy);
+        assert_eq!(app.chat_stage, "Auditando evidências");
+    }
+    #[test]
     fn thinking_stream_is_shown_separately_from_the_answer() {
         let mut app = App::new();
         let history_before = app.history.len();
