@@ -25,7 +25,21 @@ pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool
         return previous_user.is_some_and(|previous| is_technical(previous)
             || needs_baseline(previous));
     }
-    is_technical(question)
+    is_technical(question) || is_code_change_request(question)
+}
+
+/// Requests to change an existing project must inspect the implementation first.
+/// Match common user language without requiring words like "código" or "arquivo".
+pub fn is_code_change_request(question: &str) -> bool {
+    let q = question.trim().to_lowercase();
+    let action = ["ajust", "alter", "corrig", "consert", "modific", "atualiz",
+        "muda", "mudar", "change", "fix ", "update", "adapt", "configur",
+        "implementar", "implemente"].iter().any(|term| q.contains(term));
+    let target = ["comando", "launcher", "rom", "emulador", "ps3", "rpcs3",
+        "ps2", "pcsx2", "script", "execução", "execut", "launch",
+        "função", "funcao", "sistema", "config", "rota", "endpoint",
+        "tela", "interface", "projeto"].iter().any(|term| q.contains(term));
+    action && target
 }
 
 pub fn context_size() -> usize { setting("OLLAMA_NUM_CTX", 16384, 4096, 131072) }
@@ -270,7 +284,8 @@ pub fn is_technical(question: &str) -> bool {
         "arquitet", "architect", "implement", "debug", "refator", "refactor",
         "função", "funcao", "function", "modulo", "módulo", "module",
         "test", "compil", "build", "query", "sql", "api", "dependenc", "dependênc",
-        "analise", "análise", "analis", "investig", "review", "audit", "aprofund"]
+        "analise", "análise", "analis", "investig", "review", "audit", "aprofund",
+        "launcher", "emulador", "rpcs3", "pcsx2", "roms", "rom launcher"]
         .iter().any(|word|q.contains(word))
 }
 
@@ -285,6 +300,9 @@ mod intent_tests {
         assert!(!investigation_intent("faça uma análise mais profunda", Some("bom dia")));
         assert!(!investigation_intent("faça uma análise mais profunda", None));
         assert!(investigation_intent("analise o arquivo main.rs", None));
+        assert!(investigation_intent("ajustar o comando para o ps3", None));
+        assert!(investigation_intent("eu quero ajustar o rom launcher", None));
+        assert!(investigation_intent("mas ja tem eu so quero ajustar", Some("ajustar o comando para o ps3")) == false);
     }
     #[test]
     fn conversation_does_not_trigger_investigation() {
