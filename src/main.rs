@@ -879,6 +879,8 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
     }
     let evidence_for_gate = evidence.clone();
+    // Keep a sender for the semantic auditor after ask_ollama consumes its own copy.
+    let audit_updates = updates.clone();
 
     let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools, evidence, metrics, updates).await,
@@ -898,21 +900,36 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
             &coverage,
             has_supported_citation,
         );
+        if let Some(sender) = &audit_updates {
+            let _ = sender.send(ResultMessage::ChatChunk(
+                "\n\n🧠 Avaliador semântico — stream bruto ao vivo:\n".into()
+            ));
+        }
         match crate::claim_audit::semantic_audit(
             client,
             host,
             local_model,
             &answer,
             &evidence_for_gate,
+            audit_updates.as_ref(),
         ).await {
             Ok(audit) => {
                 report.push_str("\n\n--- Avaliação semântica das conclusões ---\n");
                 report.push_str(&audit);
+                if let Some(sender) = &audit_updates {
+                    let _ = sender.send(ResultMessage::ChatChunk(
+                        format!("\n\n--- Resultado interpretado ---\n{audit}\n")
+                    ));
+                }
             }
             Err(error) => {
-                report.push_str(&format!(
+                let failure = format!(
                     "\n\n⚠ AUDITORIA SEMÂNTICA NÃO EXECUTADA\n- Motivo: {error}\n- As conclusões do relatório permanecem sem validação semântica. Os alertas por palavras-chave são apenas heurísticos."
-                ));
+                );
+                report.push_str(&failure);
+                if let Some(sender) = &audit_updates {
+                    let _ = sender.send(ResultMessage::ChatChunk(failure));
+                }
             }
         }
         return Ok(report);
