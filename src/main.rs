@@ -1316,7 +1316,8 @@ impl App {
                 self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
                 if self.history.last().is_some_and(|m| m.role == "user") { self.history.pop(); }
             }
-            ResultMessage::ActionProposal { .. } | ResultMessage::ChatChunk(_) | ResultMessage::ChatNotice(_) | ResultMessage::ChatThinking(_) |
+            ResultMessage::ActionProposal { .. } | ResultMessage::Index { .. } |
+            ResultMessage::ChatChunk(_) | ResultMessage::ChatNotice(_) | ResultMessage::ChatThinking(_) |
             ResultMessage::ChatStage(_) | ResultMessage::KnowledgeUpdate(_) =>
                 unreachable!("handled before completion"),
             ResultMessage::Shell(Err(error)) => {
