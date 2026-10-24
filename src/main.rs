@@ -214,6 +214,38 @@ mod indexer_runtime_tests {
         assert_eq!(app.output, before);
     }
 
+    #[tokio::test]
+    async fn index_start_builds_persistent_file_and_stop_preserves_it() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-index-tui-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"\n").unwrap();
+
+        let mut app = App::new();
+        app.workspace = root.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.input = "/index start".into();
+        app.submit(tx.clone(), reqwest::Client::new());
+        assert!(app.indexer_running);
+
+        let event = tokio::time::timeout(Duration::from_secs(5),rx.recv())
+            .await.expect("initial index event timed out")
+            .expect("indexer dropped event channel");
+        app.complete(event);
+        assert!(root.join(".dude/index.json").is_file());
+        assert!(app.output.contains("Index refresh"));
+
+        app.input = "/index stop".into();
+        app.submit(tx, reqwest::Client::new());
+        assert!(!app.indexer_running);
+        assert!(root.join(".dude/index.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn indexer_background_stop_does_not_interrupt_chat() {
         let mut app = App::new();
