@@ -2080,6 +2080,19 @@ fn looks_like_textual_tool_request(content: &str) -> bool {
     })
 }
 
+fn should_request_thinking(
+    model: &str, streaming: bool, setting: Option<&str>
+) -> bool {
+    // Llama 3.1/3.2 do not expose native Ollama message.thinking. Do not
+    // accidentally send unsupported think=true when users enable the env var.
+    if !streaming || model.to_ascii_lowercase().starts_with("llama3.") {
+        return false;
+    }
+    setting.map(|value| matches!(
+        value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"
+    )).unwrap_or_else(|| model.to_ascii_lowercase().starts_with("qwen3"))
+}
+
 fn should_stream_ollama_response(
     model: &str, ui_available: bool, direct_mode: bool, tools_enabled: bool
 ) -> bool {
@@ -2136,6 +2149,17 @@ mod meta_llama_tool_handling_tests {
         ).unwrap()["path"], ".");
         assert!(normalize_native_tool_arguments(json!("not-json")).is_err());
         assert!(normalize_native_tool_arguments(json!(["."])).is_err());
+    }
+
+    #[test]
+    fn only_native_thinking_models_request_the_thinking_channel() {
+        assert!(!should_request_thinking("llama3.1:8b", true, None));
+        assert!(!should_request_thinking("llama3.1:8b", true, Some("1")));
+        assert!(should_request_thinking("qwen3.5:4b", true, None));
+        assert!(!should_request_thinking("qwen3.5:4b", false, None));
+        assert!(!should_request_thinking("qwen3.5:4b", true, Some("0")));
+        assert!(should_request_thinking("qwen3.5:4b", true, Some("true")));
+        assert!(!should_request_thinking("granite-code:latest", true, None));
     }
 
     #[test]
@@ -2216,13 +2240,11 @@ async fn ask_ollama(
         let stream_final = should_stream_ollama_response(
             model, updates.is_some(), direct_mode, tools_enabled
         );
-        // Llama 3.1 is not a thinking-channel model. Even an explicit
-        // DUDE_OLLAMA_THINK=1 must not ask it for a field it cannot provide.
-        // Thinking-capable Qwen3 keeps its true native thinking stream.
-        let show_thinking = stream_final && !model.to_ascii_lowercase().starts_with("llama3.")
-            && env::var("DUDE_OLLAMA_THINK")
-                .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
-                .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
+        // Qwen3 may stream its native thinking field; Llama 3.1 cannot.
+        let think_setting = env::var("DUDE_OLLAMA_THINK").ok();
+        let show_thinking = should_request_thinking(
+            model, stream_final, think_setting.as_deref()
+        );
         if let Some(sender) = &updates {
             let stage = if tools_enabled && !stream_final {
                 "Solicitando ferramentas (sem streaming)"
