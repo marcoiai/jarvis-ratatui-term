@@ -1365,7 +1365,7 @@ async fn query_direct_ollama(
     let allow_change_proposals = direct_change_intent(&messages);
     ask_ollama(
         client, host, model, direct_chat_messages(messages), workspace,
-        true, allow_change_proposals, 0, 0, evidence, metrics, Some(updates),
+        true, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
     ).await
 }
 
@@ -1489,7 +1489,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
 
     let answer = match provider {
         "ollama" => ask_ollama(client, host, local_model, messages, workspace, allow_tools,
-            false, minimum_new_reads, baseline_event_count, evidence, metrics.clone(), updates).await,
+            false, false, minimum_new_reads, baseline_event_count, evidence, metrics.clone(), updates).await,
         "groq" => cloud::groq(client, groq_model, messages, workspace, allow_tools, evidence, metrics.clone()).await,
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics.clone()).await,
         other => Err(format!("Unsupported provider: {other}")),
@@ -1690,6 +1690,41 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     Err("Symphony ended without a review".into())
 }
 
+/// Native tool calls have structured fields in Ollama's response. Some
+/// model templates serialize arguments as a JSON string instead of an object;
+/// decode them only AFTER Ollama has identified an actual tool call.
+fn normalize_native_tool_arguments(value: Value) -> Result<Value,String> {
+    let value = match value {
+        Value::String(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|e|format!("JSON de argumentos inválido: {e}"))?,
+        other => other,
+    };
+    if !value.is_object() {
+        return Err("argumentos precisam ser um objeto JSON".into());
+    }
+    Ok(value)
+}
+
+/// Detect model-generated pseudo tool calls so they are NEVER mistaken for
+/// successful workspace inspection. In particular, do not deserialize model
+/// message.content into an executable action.
+fn looks_like_textual_tool_request(content: &str) -> bool {
+    let content = content.trim();
+    if content.len() > 16_000 { return false; }
+    let json_text = if let Some(start) = content.find("```json") {
+        let remainder = &content[start + "```json".len()..];
+        let Some(end) = remainder.find("```") else { return false; };
+        remainder[..end].trim()
+    } else {
+        content
+    };
+    let Ok(value) = serde_json::from_str::<Value>(json_text) else { return false };
+    let Some(name) = value.get("name").and_then(Value::as_str) else { return false };
+    (matches!(name, "list_files" | "read_file" | "search_text") ||
+        changes::is_action(name)) &&
+        (value.get("parameters").is_some() || value.get("arguments").is_some())
+}
+
 fn model_tool_definitions(allow_tools: bool, allow_actions: bool) -> Vec<Value> {
     if !allow_tools { return Vec::new(); }
     let mut tools = file_tools::definitions();
@@ -1723,6 +1758,7 @@ async fn ask_ollama(
     workspace: PathBuf,
     allow_tools: bool,
     allow_actions: bool,
+    direct_mode: bool,
     minimum_new_reads: usize,
     baseline_event_count: usize,
     evidence: evidence::EvidenceCache,
@@ -1735,6 +1771,7 @@ async fn ask_ollama(
     let rounds = if allow_tools { investigation::tool_rounds() } else { 0 };
     let mut stalled_rounds = 0usize;
     let mut review_retry_issued = false;
+    let mut pseudo_tool_retry_issued = false;
     for round in 0..=rounds {
         // Stop requesting more tools after two rounds without new observations.
         let tools_enabled = allow_tools && round < rounds && stalled_rounds < 2;
@@ -1749,7 +1786,13 @@ async fn ask_ollama(
         }
         // Stream both answer and Ollama's structured thinking field to the TUI.
         // Non-interactive extraction keeps its previous fast, non-thinking mode.
-        let stream_final = updates.is_some();
+        // Meta's smaller Llama variants sometimes produce tool-call-shaped
+        // text when streamed. Prefer one structured JSON response during tool
+        // rounds, then stream the final answer normally after tools are done.
+        // This is only for direct-mode Meta Llama and does not change the
+        // existing streaming behavior for the other models.
+        let is_meta_llama = model.to_ascii_lowercase().starts_with("llama3.");
+        let stream_final = updates.is_some() && !(direct_mode && tools_enabled && is_meta_llama);
         let show_thinking = stream_final && env::var("DUDE_OLLAMA_THINK")
             .map(|flag| matches!(flag.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
             .unwrap_or_else(|_| model.to_ascii_lowercase().starts_with("qwen3"));
@@ -1921,6 +1964,22 @@ async fn ask_ollama(
         metrics.stage(&request_label, "ollama", request_start, true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
+            if direct_mode && tools_enabled && looks_like_textual_tool_request(&reply.message.content) {
+                if pseudo_tool_retry_issued {
+                    return Err(format!(
+                        "{model} escreveu uma chamada de ferramenta como texto duas vezes, sem tool_calls nativas. Nada foi executado. Tente um pedido mais específico ou use um modelo com tool calling mais consistente, como Qwen."
+                    ));
+                }
+                pseudo_tool_retry_issued = true;
+                if let Some(sender) = &updates {
+                    let _ = sender.send(ResultMessage::ChatNotice(
+                        "⚠ O modelo escreveu JSON de ferramenta como texto. Nenhum código foi executado; tentando obter uma chamada nativa uma vez.".into()
+                    ));
+                }
+                conversation.push(json!({"role":"user","content":
+                    "Your previous response described or printed a tool call; that was NOT executed. Do NOT write JSON, XML, fenced code or tool instructions in message.content. If inspection is needed, send an actual native message.tool_calls invoking list_files(path='.') or read_file with a valid relative filename. Otherwise explicitly say you could not inspect the workspace."}));
+                continue;
+            }
             if evidence.source_files_since(baseline_event_count) < minimum_new_reads {
                 if tools_enabled && !review_retry_issued {
                     // Give the model one opportunity to execute real tools.
@@ -2002,7 +2061,19 @@ async fn ask_ollama(
         }
         for call in reply.message.tool_calls {
             let name = call.function.name;
-            let args = call.function.arguments;
+            let args = match normalize_native_tool_arguments(call.function.arguments) {
+                Ok(value) => value,
+                Err(error) => {
+                    if let Some(sender) = &updates {
+                        let _ = sender.send(ResultMessage::ChatNotice(format!(
+                            "⚠ Ferramenta {name}: argumentos inválidos: {error}"
+                        )));
+                    }
+                    conversation.push(json!({"role":"tool","tool_name":name,
+                        "content":format!("Tool error: invalid arguments: {error}")}));
+                    continue;
+                }
+            };
             if changes::is_action(&name) {
                 if !allow_actions {
                     conversation.push(json!({"role":"tool","content":"Tool not enabled in this mode."}));
@@ -2029,10 +2100,19 @@ async fn ask_ollama(
             }
             let root = workspace.clone();
             let evidence = evidence.clone();
+            let tool_name = name.clone();
+            let tool_path = args.get("path").and_then(Value::as_str).unwrap_or(".").to_string();
             let output = tokio::task::spawn_blocking(move || {
                 evidence.execute(&root, &name, &args)
             }).await.map_err(|e| e.to_string())?;
-            conversation.push(json!({"role":"tool","content":output}));
+            if output.starts_with("Tool error:") {
+                if let Some(sender) = &updates {
+                    let _ = sender.send(ResultMessage::ChatNotice(format!(
+                        "⚠ Ferramenta {tool_name} (caminho {tool_path:?}) falhou: {output}"
+                    )));
+                }
+            }
+            conversation.push(json!({"role":"tool","tool_name":tool_name,"content":output}));
         }
         if evidence.len() == previous_evidence { stalled_rounds += 1; }
         else { stalled_rounds = 0; }
