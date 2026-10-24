@@ -150,8 +150,10 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
             "unsupported" => "NÃO SUSTENTADA",
             _ => "NÃO AVALIÁVEL",
         };
+        // A bad citation proves only that the citation was not verified. It does
+        // not prove the underlying claim false or unsupported.
         if !invalid_refs.is_empty() {
-            status = "NÃO SUSTENTADA";
+            status = "NÃO AVALIÁVEL";
         } else if valid_refs.is_empty() && status != "NÃO SUSTENTADA" {
             status = "NÃO AVALIÁVEL";
         }
@@ -160,7 +162,11 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
             output.push_str(&format!("\n  Referências confirmadas: {}", valid_refs.join(", ")));
         }
         if !invalid_refs.is_empty() {
-            output.push_str(&format!("\n  Referências rejeitadas (não observadas): {}", invalid_refs.join(", ")));
+            output.push_str(&format!(
+                "\n  Referências não confirmadas (não observadas na coleta): {}",
+                invalid_refs.join(", ")
+            ));
+            output.push_str("\n  A referência inválida não determina, por si só, se a afirmação é verdadeira ou falsa.");
         }
     }
     output.push_str("\n- Limite: avaliação de modelo assistida por evidências, não prova formal nem execução de testes.");
