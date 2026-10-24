@@ -63,18 +63,19 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
 
     // Ollama returns newline-delimited JSON (NDJSON) when stream=true.
     // Read chunks as they arrive, but only parse the final assembled JSON document.
-    let mut buffer = String::new();
+    let mut buffer = Vec::<u8>::new();
     let mut raw = String::new();
     let mut finished = false;
     let stream_result = tokio::time::timeout(Duration::from_secs(40), async {
         while let Some(chunk) = response.chunk().await
             .map_err(|e| format!("erro lendo stream do Ollama: {e}"))? {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(newline) = buffer.find('\n') {
-                let line = buffer[..newline].trim().to_owned();
-                buffer.drain(..=newline);
-                if line.is_empty() { continue; }
-                let event: Value = serde_json::from_str(&line)
+            buffer.extend_from_slice(&chunk);
+            while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+                let mut line: Vec<u8> = buffer.drain(..=newline).collect();
+                line.pop();
+                if line.last() == Some(&b'\r') { line.pop(); }
+                if line.iter().all(u8::is_ascii_whitespace) { continue; }
+                let event: Value = serde_json::from_slice(&line)
                     .map_err(|e| format!("evento NDJSON inválido do Ollama: {e}"))?;
                 if let Some(content) = event["message"]["content"].as_str() {
                     raw.push_str(content);
@@ -91,9 +92,8 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
                 if event["done"] == true { finished = true; }
             }
         }
-        let trailing = buffer.trim();
-        if !trailing.is_empty() {
-            let event: Value = serde_json::from_str(trailing)
+        if !buffer.iter().all(u8::is_ascii_whitespace) {
+            let event: Value = serde_json::from_slice(&buffer)
                 .map_err(|e| format!("evento NDJSON final inválido: {e}"))?;
             if let Some(content) = event["message"]["content"].as_str() {
                 raw.push_str(content);
