@@ -851,11 +851,67 @@ impl App {
     }
 }
 
+/// Keep the model's active conversation and a bounded project-memory summary.
+/// Older exchanges remain in the local journal, not repeated on every request.
+fn compact_model_messages(messages: Vec<Message>) -> Vec<Message> {
+    const MAX_RECENT_MESSAGES: usize = 10;
+    const MAX_MEMORY_CHARS: usize = 1800;
+    let mut system = Vec::new();
+    let mut dialogue = Vec::new();
+    for (index, mut message) in messages.into_iter().enumerate() {
+        if message.role == "system" {
+            // The third initial system message contains persisted workspace memory.
+            if index >= 2 && message.content.chars().count() > MAX_MEMORY_CHARS {
+                message.content = format!(
+                    "{}\n[Older workspace memory omitted from prompt; available locally.]",
+                    message.content.chars().take(MAX_MEMORY_CHARS).collect::<String>()
+                );
+            }
+            system.push(message);
+        } else {
+            dialogue.push(message);
+        }
+    }
+    let keep_from = dialogue.len().saturating_sub(MAX_RECENT_MESSAGES);
+    system.extend(dialogue.into_iter().skip(keep_from));
+    system
+}
+
+#[cfg(test)]
+mod compact_context_tests {
+    use super::*;
+    #[test]
+    fn keeps_recent_conversation_and_system_rules() {
+        let mut messages = vec![Message { role: "system".into(), content: "rules".into() }];
+        for n in 0..20 {
+            messages.push(Message { role: if n % 2 == 0 { "user" } else { "assistant" }.into(),
+                content: format!("turn-{n}") });
+        }
+        let compact = compact_model_messages(messages);
+        assert_eq!(compact.len(), 11);
+        assert_eq!(compact[0].content, "rules");
+        assert_eq!(compact[1].content, "turn-10");
+        assert_eq!(compact.last().unwrap().content, "turn-19");
+    }
+    #[test]
+    fn memory_is_bounded_without_breaking_utf8() {
+        let messages = vec![
+            Message { role: "system".into(), content: "rules".into() },
+            Message { role: "system".into(), content: "alignment".into() },
+            Message { role: "system".into(), content: "🦀".repeat(4000) },
+            Message { role: "user".into(), content: "ei".into() },
+        ];
+        let compact = compact_model_messages(messages);
+        assert!(compact[2].content.chars().count() < 1900);
+        assert_eq!(compact[3].content, "ei");
+    }
+}
+
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
     updates: Option<mpsc::UnboundedSender<ResultMessage>>) -> Result<String,String> {
-    let mut messages = messages;
+    let mut messages = compact_model_messages(messages);
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
