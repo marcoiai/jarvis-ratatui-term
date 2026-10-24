@@ -14,6 +14,7 @@ mod roles;
 mod memory;
 mod file_tools;
 mod changes;
+mod indexer;
 mod transcript;
 mod symphony_checkpoint;
 #[cfg(test)]
@@ -43,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use unicode_width::UnicodeWidthChar;
-use tokio::{process::Command, sync::mpsc};
+use tokio::{process::Command, sync::{mpsc, watch}};
 
 #[derive(Clone, Serialize)]
 struct Message {
@@ -81,6 +82,7 @@ enum ResultMessage {
     // until the user explicitly approves the proposal in the TUI.
     ActionProposal { workspace: PathBuf, action: changes::PreparedAction },
     ActionApplied(Result<String, String>),
+    Index { workspace: PathBuf, generation: u64, update: IndexUpdate },
     /// Runtime evidence status, shown without being mistaken for model output.
     ChatNotice(String),
     /// Ollama's own streamed thinking channel; display only, never persist as answer.
@@ -89,6 +91,12 @@ enum ResultMessage {
     KnowledgeUpdate(String),
     /// Current stage of the interactive answer pipeline (not a completion).
     ChatStage(&'static str),
+}
+
+enum IndexUpdate {
+    Report(String),
+    Error(String),
+    Stopped,
 }
 
 struct App {
@@ -118,6 +126,9 @@ struct App {
     pending_change: Option<(PathBuf, changes::PreparedAction)>,
     active_request: Option<tokio::task::AbortHandle>,
     discard_cancelled_stream: bool,
+    indexer_running: bool,
+    indexer_stop: Option<watch::Sender<bool>>,
+    index_generation: u64,
     roles: roles::Roles,
 }
 
@@ -349,6 +360,9 @@ impl App {
             pending_change: None,
             active_request: None,
             discard_cancelled_stream: false,
+            indexer_running: false,
+            indexer_stop: None,
+            index_generation: 0,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
