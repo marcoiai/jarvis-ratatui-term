@@ -213,6 +213,17 @@ impl EvidenceCache {
         }
         false
     }
+    /// Distinct source file paths read since the supplied event index.
+    /// This excludes directory listings and reads from prior stages.
+    pub fn source_files_since(&self, event_start: usize) -> usize {
+        self.events.lock().map(|events| events.iter().skip(event_start)
+            .filter(|e| e["tool"] == "read_file" && e["success"] == true)
+            .filter_map(|e| e["path"].as_str())
+            .collect::<BTreeSet<_>>().len()).unwrap_or(0)
+    }
+    pub fn event_count(&self) -> usize {
+        self.events.lock().map(|events| events.len()).unwrap_or(0)
+    }
     pub fn source_read_count(&self) -> usize {
         self.events.lock().map(|events| events.iter()
             .filter(|event| event["tool"] == "read_file" && event["success"] == true).count())
