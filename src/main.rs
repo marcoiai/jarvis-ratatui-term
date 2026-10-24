@@ -1309,7 +1309,7 @@ fn direct_change_intent(messages: &[Message]) -> bool {
         "rode os testes", "run tests", "edit ", "modify ", "change code",
         "fix the code", "implement ", "refactor ", "create file",
         "run cargo", "run command",
-    ].iter().any(|term| latest.contains(term))
+    ].iter().any(|term| latest.contains(*term))
 }
 
 /// Thin path for everyday local-model use: dialogue, a small prompt and
