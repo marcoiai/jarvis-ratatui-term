@@ -29,6 +29,7 @@ pub async fn semantic_audit(
     model: &str,
     answer: &str,
     evidence: &crate::evidence::EvidenceCache,
+    updates: Option<&tokio::sync::mpsc::UnboundedSender<crate::ResultMessage>>,
 ) -> Result<String, String> {
     let source = evidence.export();
     let source: String = source.chars().take(12_000).collect();
@@ -77,6 +78,9 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
                     .map_err(|e| format!("evento NDJSON inválido do Ollama: {e}"))?;
                 if let Some(content) = event["message"]["content"].as_str() {
                     raw.push_str(content);
+                    if let Some(sender) = updates {
+                        let _ = sender.send(crate::ResultMessage::ChatChunk(content.to_owned()));
+                    }
                     if raw.len() > 64_000 {
                         return Err("stream do avaliador excedeu 64 KB; resultado rejeitado".to_string());
                     }
@@ -93,6 +97,9 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
                 .map_err(|e| format!("evento NDJSON final inválido: {e}"))?;
             if let Some(content) = event["message"]["content"].as_str() {
                 raw.push_str(content);
+                if let Some(sender) = updates {
+                    let _ = sender.send(crate::ResultMessage::ChatChunk(content.to_owned()));
+                }
             }
             if event["error"].as_str().is_some() {
                 return Err(format!("erro informado pelo Ollama: {}", event["error"]));
