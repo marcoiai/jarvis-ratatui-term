@@ -118,15 +118,29 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     // git repositories (common while testing or indexing unpacked sources).
     walker.hidden(false).git_ignore(true).git_exclude(true).parents(true)
         .follow_links(false).require_git(false);
+    // IMPORTANT: check each directory BEFORE descending into it. Merely
+    // skipping ignored files in the iteration still traverses a large ignored
+    // tree, making indexing slow and potentially inspecting private paths.
+    let filter_root = root.clone();
+    walker.filter_entry(move |entry| {
+        if entry.depth() == 0 { return true; }
+        let path = entry.path();
+        let relative = match path.strip_prefix(&filter_root) {
+            Ok(relative) => relative,
+            Err(_) => return false,
+        };
+        if excluded(relative) { return false; }
+        let Some(kind) = entry.file_type() else { return false };
+        if kind.is_symlink() { return false; }
+        !rules.matched_path_or_any_parents(path, kind.is_dir()).is_ignore()
+    });
     for entry in walker.build() {
         let entry = match entry { Ok(e) => e, Err(_) => continue };
         let path = entry.path();
         if path == root { continue; }
-        let relative = path.strip_prefix(&root).unwrap_or(path);
-        if excluded(relative) { continue; }
         let Some(kind) = entry.file_type() else { continue };
-        if rules.matched_path_or_any_parents(path, kind.is_dir()).is_ignore() { continue; }
         if kind.is_dir() || !kind.is_file() { continue; }
+        let relative = path.strip_prefix(&root).unwrap_or(path);
         if next.len() >= MAX_FILES { capped = true; break; }
         let meta = match fs::metadata(path) { Ok(m) => m, Err(_) => continue };
         if meta.len() > MAX_FILE_BYTES { skipped_large += 1; continue; }
