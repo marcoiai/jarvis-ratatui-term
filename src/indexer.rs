@@ -114,7 +114,10 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     let mut skipped_large = 0usize;
     let mut capped = false;
     let mut walker = WalkBuilder::new(&root);
-    walker.hidden(false).git_ignore(true).git_exclude(true).parents(true).follow_links(false);
+    // Honor local .gitignore files even for workspaces that are not themselves
+    // git repositories (common while testing or indexing unpacked sources).
+    walker.hidden(false).git_ignore(true).git_exclude(true).parents(true)
+        .follow_links(false).require_git(false);
     for entry in walker.build() {
         let entry = match entry { Ok(e) => e, Err(_) => continue };
         let path = entry.path();
