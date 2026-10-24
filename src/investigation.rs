@@ -34,6 +34,34 @@ pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool
         is_technical(previous) || is_code_change_request(previous))
 }
 
+/// A focused follow-up to a verified project-review request. This is only a
+/// guardrail for requiring *new* evidence; it never decides which tool to call.
+/// The model still chooses the actual read-only workspace operations.
+pub fn review_followup(question: &str, previous_user: Option<&str>) -> bool {
+    let Some(previous) = previous_user else { return false; };
+    if !(needs_baseline(previous) || is_deep_followup(previous)) {
+        return false;
+    }
+    let q = question.trim().to_lowercase();
+    if q.chars().count() > 160 { return false; }
+    // Require a continuation word AND a review/investigation referent, rather
+    // than routing all mentions of "more" into a project audit.
+    let continuation = [
+        "review more", "review further", "deeper review", "analyze more",
+        "analyse more", "dig deeper", "go deeper", "look deeper",
+        "aprofund", "analise mais", "análise mais", "revisar mais",
+        "revise mais", "investigue melhor", "continue a análise",
+        "continue a investig", "more details on the review",
+    ];
+    continuation.iter().any(|phrase| q.contains(phrase))
+}
+
+/// Explicit request for an evidence-based project review, including a
+/// context-grounded follow-up. This gates evidence checks, not tool access.
+pub fn project_review_requested(question: &str, previous_user: Option<&str>) -> bool {
+    needs_baseline(question) || review_followup(question, previous_user)
+}
+
 /// Requests to change an existing project must inspect the implementation first.
 /// Match common user language without requiring words like "código" or "arquivo".
 pub fn is_code_change_request(question: &str) -> bool {
@@ -309,6 +337,17 @@ mod intent_tests {
         assert!(investigation_intent("ajustar o comando para o ps3", None));
         assert!(investigation_intent("eu quero ajustar o rom launcher", None));
         assert!(investigation_intent("mas ja tem eu so quero ajustar", Some("ajustar o comando para o ps3")));
+    }
+    #[test]
+    fn review_more_inherits_prior_project_review_but_not_social_conversation() {
+        let previous = Some("can you review curret project?");
+        assert!(project_review_requested("ok, can you review more?", previous));
+        assert!(project_review_requested("please go deeper", previous));
+        assert!(project_review_requested("pode aprofundar a análise?", previous));
+        assert!(!project_review_requested("ok, can you review more?", Some("hey dude")));
+        assert!(!project_review_requested("what about food?", previous));
+        assert!(!project_review_requested("review more", None));
+        assert!(project_review_requested("review current project", None));
     }
     #[test]
     fn conversation_does_not_trigger_investigation() {
