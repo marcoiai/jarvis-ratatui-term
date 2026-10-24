@@ -867,7 +867,6 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     );
     // The model decides whether to call read-only tools. Keyword heuristics must
     // never remove tools from an otherwise authorized request.
-    let allow_tools = allow_tools;
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")
