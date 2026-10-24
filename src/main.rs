@@ -1524,6 +1524,39 @@ fn insert_context_before_latest_user(messages: &mut Vec<Message>, context: Messa
     messages.insert(insertion, context);
 }
 
+fn direct_latest_user_text(messages: &[Message]) -> String {
+    messages.iter().rev().find(|m| m.role == "user")
+        .map(|m| m.content.trim().to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Greetings in direct mode should still reach Ollama, but they have no
+/// reason to trigger a project scan or a warning about missing source reads.
+fn direct_is_greeting(messages: &[Message]) -> bool {
+    let text = direct_latest_user_text(messages);
+    let normalized = text.trim_matches(|c: char| c.is_whitespace() ||
+        matches!(c, '!' | '?' | '.' | ','));
+    matches!(normalized,
+        "oi" | "olá" | "ola" | "hey" | "hi" | "hello" |
+        "hey dude" | "hey buddy" | "hi dude" | "hello dude" |
+        "eae" | "e aí" | "e ai" | "salve" |
+        "bom dia" | "boa tarde" | "boa noite" | "tudo bem" |
+        "valeu" | "obrigado")
+}
+
+/// A directory listing or a friendly greeting does not require code-level
+/// evidence. The warning is relevant to explicit reviews or code analysis.
+fn direct_source_analysis_intent(messages: &[Message]) -> bool {
+    let latest = direct_latest_user_text(messages);
+    [
+        "analise", "análise", "analisar", "revisar", "revise o código",
+        "revisão", "arquitetura", "architecture", "review", "inspect",
+        "analyze", "investigue", "investigate", "examine", "auditoria",
+        "audit", "explique o código", "explain the code",
+        "entenda o projeto", "understand the project",
+    ].iter().any(|term| latest.contains(*term))
+}
+
 /// Select mutation PROPOSALS only when the user explicitly asks for code
 /// changes. Analysis-only requests get three read tools instead of six, which
 /// is easier for smaller local models to use correctly.
@@ -1555,6 +1588,8 @@ fn direct_chat_messages(messages: Vec<Message>) -> Vec<Message> {
             "You are DUDE, a practical local programming assistant. ",
             "Use Brazilian Portuguese by default unless explicitly asked otherwise. ",
             "Give concrete answers and concise architecture summaries. ",
+            "For greetings or casual conversation, respond briefly and naturally; ",
+            "do not list files or discuss source evidence unless asked. ",
             "For workspace questions, use NATIVE Ollama tool_calls (not JSON or ",
             "a code block in your message). Paths must be relative to workspace; ",
             "use list_files with path '.' to discover files, then read_file with ",
@@ -1591,16 +1626,17 @@ async fn query_direct_ollama(
     metrics: metrics::Metrics,
     updates: mpsc::UnboundedSender<ResultMessage>,
 ) -> Result<String, String> {
+    let is_greeting = direct_is_greeting(&messages);
+    let analysis_requested = direct_source_analysis_intent(&messages);
     let allow_change_proposals = direct_change_intent(&messages);
     let observed = evidence.clone();
     let answer = ask_ollama(
         client, host, model, direct_chat_messages(messages), workspace,
-        true, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
+        !is_greeting, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
     ).await?;
-    // The response is not an evidence-backed source analysis when only tool
-    // failures, directory listings, or empty calls happened. Say so even
-    // when the model writes a fluent answer.
-    if !observed.events().is_empty() && observed.source_read_count() == 0 {
+    // A greeting or a simple directory listing needs no read_file evidence.
+    // Report missing source reads only when explicit code analysis was asked.
+    if analysis_requested && observed.source_read_count() == 0 {
         Ok(format!("{answer}\n\n⚠ DUDE: nenhuma leitura real de arquivo-fonte foi concluída nesta resposta. O texto acima não é uma análise verificada do código."))
     } else {
         Ok(answer)
