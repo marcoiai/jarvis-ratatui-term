@@ -13,6 +13,7 @@ mod cloud;
 mod roles;
 mod memory;
 mod file_tools;
+mod changes;
 mod transcript;
 mod symphony_checkpoint;
 #[cfg(test)]
@@ -76,6 +77,10 @@ enum ResultMessage {
     Chat { answer: Result<String, String>, telemetry: String },
     Shell(Result<String, String>),
     ChatChunk(String),
+    // A native model tool requested a change, but no side effect is permitted
+    // until the user explicitly approves the proposal in the TUI.
+    ActionProposal { workspace: PathBuf, action: changes::PreparedAction },
+    ActionApplied(Result<String, String>),
     /// Runtime evidence status, shown without being mistaken for model output.
     ChatNotice(String),
     /// Ollama's own streamed thinking channel; display only, never persist as answer.
@@ -110,6 +115,7 @@ struct App {
     memory: Option<memory::Memory>,
     last_question: Option<String>,
     pending_knowledge: Option<u64>,
+    pending_change: Option<(PathBuf, changes::PreparedAction)>,
     roles: roles::Roles,
 }
 
@@ -249,6 +255,7 @@ impl App {
             memory,
             last_question: None,
             pending_knowledge: None,
+            pending_change: None,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
@@ -302,6 +309,48 @@ impl App {
 
         if input == "/export" {
             self.export_transcript();
+            return;
+        }
+
+        if input == "/diff" {
+            match &self.pending_change {
+                Some((_, action)) => self.output.push_str(&format!(
+                    "\n📝 Proposta aguardando aprovação:\n{}\nUse /approve para executar ou /reject para descartar.\n",
+                    action.preview()
+                )),
+                None => self.output.push_str("Nenhuma proposta pendente.\n"),
+            }
+            return;
+        }
+        if input == "/reject" {
+            if self.pending_change.take().is_some() {
+                self.output.push_str("🛑 Proposta descartada. Nenhum arquivo foi alterado.\n");
+            } else {
+                self.output.push_str("Nenhuma proposta pendente.\n");
+            }
+            return;
+        }
+        if input == "/approve" {
+            if let Some((workspace,action)) = self.pending_change.take() {
+                if self.roles.mode != "direct" || workspace != self.workspace {
+                    self.output.push_str("Proposta cancelada: modo ou workspace mudou.\n");
+                    return;
+                }
+                self.busy = true;
+                self.chat_stage = "Aplicando operação aprovada";
+                self.started_at = Some(Instant::now());
+                self.output.push_str("⚙ Executando somente a operação aprovada...\n");
+                tokio::spawn(async move {
+                    let result = changes::apply(workspace,action).await;
+                    let _ = tx.send(ResultMessage::ActionApplied(result));
+                });
+            } else {
+                self.output.push_str("Nenhuma proposta pendente.\n");
+            }
+            return;
+        }
+        if self.pending_change.is_some() {
+            self.output.push_str("⚠ Existe uma proposta pendente. Use /diff, /approve ou /reject antes de continuar.\n");
             return;
         }
 
@@ -879,6 +928,19 @@ impl App {
             self.follow_output = true;
             return;
         }
+        if let ResultMessage::ActionProposal { workspace, action } = result {
+            if self.roles.mode == "direct" && workspace == self.workspace {
+                self.output.push_str(&format!(
+                    "\n📝 DUDE propôs uma operação; NADA foi executado.\n{}\nDigite /approve para executar exatamente esta operação, /reject para cancelar ou /diff para rever.\n",
+                    action.preview()
+                ));
+                self.pending_change = Some((workspace,action));
+            } else {
+                self.output.push_str("\n⚠ Proposta ignorada: workspace ou modo não coincide.\n");
+            }
+            self.follow_output = true;
+            return;
+        }
         if let ResultMessage::ChatChunk(ref chunk) = result {
             if self.thinking_active {
                 self.output.push_str("\n\n💬 Resposta:\n");
@@ -934,6 +996,22 @@ impl App {
                 if self.roles.mode != "direct" { self.ask_next_knowledge(); }
             }
             ResultMessage::Shell(Ok(text)) => self.output.push_str(&format!("{text}\n")),
+            ResultMessage::ActionApplied(result) => {
+                match result {
+                    Ok(message) => {
+                        self.output.push_str(&format!("✅ {message}\n"));
+                        // Make the approval result part of the next direct
+                        // conversation without claiming it was model-generated.
+                        self.history.push(Message {
+                            role: "assistant".into(),
+                            content: format!("DUDE runtime: a operação proposta foi aprovada e concluída. {message}"),
+                        });
+                    }
+                    Err(error) => self.output.push_str(&format!(
+                        "❌ Operação não concluída: {error}\n"
+                    )),
+                }
+            },
             ResultMessage::Chat { answer: Err(error), telemetry } => {
                 if self.thinking_active {
                     self.output.push_str("\n");
@@ -943,7 +1021,7 @@ impl App {
                 self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
                 if self.history.last().is_some_and(|m| m.role == "user") { self.history.pop(); }
             }
-            ResultMessage::ChatChunk(_) | ResultMessage::ChatNotice(_) | ResultMessage::ChatThinking(_) |
+            ResultMessage::ActionProposal { .. } | ResultMessage::ChatChunk(_) | ResultMessage::ChatNotice(_) | ResultMessage::ChatThinking(_) |
             ResultMessage::ChatStage(_) | ResultMessage::KnowledgeUpdate(_) =>
                 unreachable!("handled before completion"),
             ResultMessage::Shell(Err(error)) => {
@@ -2087,7 +2165,9 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             let elapsed = app.started_at.map(|start| start.elapsed()).unwrap_or_default();
             let frame = FRAMES[((elapsed.as_millis() / 100) as usize) % FRAMES.len()];
             format!("Answer {frame} {}... {}s", app.chat_stage, elapsed.as_secs())
-        } else if !app.model_ready && app.roles.mode == "solo" && app.roles.selected_provider() == "ollama" {
+        } else if !app.model_ready &&
+            (app.roles.mode == "direct" ||
+             (app.roles.mode == "solo" && app.roles.selected_provider() == "ollama")) {
             "Answer · Preparing model".to_owned()
         } else {
             "Answer · Ready".to_owned()
@@ -2116,7 +2196,9 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
             chunks[4],
         );
 
-        let mode_label = if app.roles.mode == "symphony" {
+        let mode_label = if app.roles.mode == "direct" {
+            "Direct | Ollama local | /diff /approve /reject".to_string()
+        } else if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
                 app.roles.investigator, app.roles.architect, app.roles.reviewer)
         } else {
