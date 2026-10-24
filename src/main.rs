@@ -1108,8 +1108,12 @@ async fn ask_ollama(
             "tools": if tools_enabled { file_tools::definitions() } else { Vec::new() },
         });
         let payload_bytes = serde_json::to_vec(&payload).map(|body| body.len()).unwrap_or_default();
+        let message_bytes = serde_json::to_vec(&conversation).map(|body| body.len()).unwrap_or_default();
+        let tool_bytes = if tools_enabled {
+            serde_json::to_vec(&file_tools::definitions()).map(|body| body.len()).unwrap_or_default()
+        } else { 0 };
         let request_label = format!(
-            "ollama_http_round_{round}_tools_{}_stream_{}_messages_{}_payload_bytes_{payload_bytes}",
+            "ollama_http_round_{round}_tools_{}_stream_{}_messages_{}_payload_bytes_{payload_bytes}_message_bytes_{message_bytes}_tool_bytes_{tool_bytes}",
             tools_enabled, stream_final, conversation.len()
         );
         let response = match client
