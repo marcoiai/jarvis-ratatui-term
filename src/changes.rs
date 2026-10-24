@@ -194,7 +194,7 @@ pub fn prepare(root: &Path, tool: &str, args: &Value) -> Result<PreparedAction, 
             let mut argv = Vec::new();
             for item in args {
                 let value = item.as_str().ok_or("Argumentos precisam ser strings")?;
-                if value.len() > 256 || value.contains(['\0','\n','\r']) {
+                if value.len() > 256 || value.chars().any(|ch| matches!(ch, '\0' | '\n' | '\r')) {
                     return Err("Argumento inválido".into());
                 }
                 argv.push(value.to_string());
