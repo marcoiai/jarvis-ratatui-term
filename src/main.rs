@@ -117,6 +117,7 @@ struct App {
     pending_knowledge: Option<u64>,
     pending_change: Option<(PathBuf, changes::PreparedAction)>,
     active_request: Option<tokio::task::AbortHandle>,
+    discard_cancelled_stream: bool,
     roles: roles::Roles,
 }
 
@@ -140,9 +141,26 @@ mod knowledge_review_input_tests {
     }
 }
 
+fn is_cancel_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    let standard = modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(code, KeyCode::Char('x' | 'X' | 'g' | 'G'));
+    // Some macOS terminals may report raw control characters without
+    // modifiers; recognize those as well as normalized crossterm events.
+    standard || matches!(code, KeyCode::Char('\u{18}' | '\u{7}'))
+}
+
 #[cfg(test)]
 mod generation_cancel_tests {
     use super::*;
+    #[test]
+    fn mac_terminal_shortcuts_are_recognized() {
+        assert!(is_cancel_shortcut(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert!(is_cancel_shortcut(KeyCode::Char('X'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
+        assert!(is_cancel_shortcut(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(is_cancel_shortcut(KeyCode::Char('\u{18}'), KeyModifiers::NONE));
+        assert!(!is_cancel_shortcut(KeyCode::Char('x'), KeyModifiers::NONE));
+    }
+
     #[tokio::test]
     async fn stopping_thinking_aborts_request_but_keeps_the_session_open() {
         let mut app = App::new();
@@ -158,7 +176,12 @@ mod generation_cancel_tests {
         assert!(model_task.await.unwrap_err().is_cancelled());
         assert!(!app.busy);
         assert!(!app.thinking_active);
+        assert!(app.discard_cancelled_stream);
         assert!(app.active_request.is_none());
+        let earlier = app.output.clone();
+        app.complete(ResultMessage::ChatThinking("stale thinking".into()));
+        app.complete(ResultMessage::ChatChunk("stale answer".into()));
+        assert_eq!(app.output, earlier, "stale streamed tokens must be ignored");
         assert!(app.last_question.is_none());
         assert!(app.history.last().is_some_and(|m| m.role != "user"));
         assert!(app.output.contains("Geração interrompida"));
@@ -283,6 +306,7 @@ impl App {
             pending_knowledge: None,
             pending_change: None,
             active_request: None,
+            discard_cancelled_stream: false,
             roles,
             groq_model: env::var("GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into()),
             gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.8-flash".into()),
@@ -326,6 +350,9 @@ impl App {
             return;
         };
         handle.abort();
+        // The task may have already queued thinking/answer tokens; never allow
+        // those stale messages to resume rendering after cancellation.
+        self.discard_cancelled_stream = true;
         self.busy = false;
         self.started_at = None;
         self.chat_stage = "Raciocinando";
@@ -784,6 +811,7 @@ impl App {
         }
 
         self.busy = true;
+        self.discard_cancelled_stream = false;
         self.streamed = false;
         self.thinking_active = false;
         self.chat_stage = "Raciocinando";
@@ -962,6 +990,16 @@ impl App {
     }
 
     fn complete(&mut self, result: ResultMessage) {
+        if self.discard_cancelled_stream && matches!(&result,
+            ResultMessage::Chat { .. } |
+            ResultMessage::ChatChunk(_) |
+            ResultMessage::ChatThinking(_) |
+            ResultMessage::ChatNotice(_) |
+            ResultMessage::ChatStage(_) |
+            ResultMessage::ActionProposal { .. }
+        ) {
+            return;
+        }
         if let ResultMessage::ChatStage(stage) = result {
             self.chat_stage = stage;
             return;
@@ -2317,7 +2355,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         );
 
         let mode_label = if app.roles.mode == "direct" {
-            "Direct | Ollama | Ctrl+X /stop | /diff /approve /reject".to_string()
+            "Direct | Ollama | Esc/Ctrl+X/Ctrl+G /stop | /diff /approve /reject".to_string()
         } else if app.roles.mode == "symphony" {
             format!("Symphony | Investigator: {} | Architect: {} | Reviewer: {}",
                 app.roles.investigator, app.roles.architect, app.roles.reviewer)
@@ -2370,11 +2408,14 @@ async fn run(
         .timeout(Duration::from_secs(600))
         .build()?;
     loop {
-        while let Ok(result) = rx.try_recv() {
+        // Bound the incoming token batch so a fast local model cannot starve
+        // keyboard handling on macOS or other terminal frontends.
+        for _ in 0..64 {
+            let Ok(result) = rx.try_recv() else { break };
             app.complete(result);
         }
         draw(terminal, &mut app)?;
-        if event::poll(Duration::from_millis(80))? {
+        if event::poll(Duration::from_millis(if app.busy { 12 } else { 80 }))? {
             match event::read()? {
                 // Treat clipboard content atomically: embedded newlines stay inside one prompt.
                 Event::Paste(pasted) => {
@@ -2387,9 +2428,11 @@ async fn run(
                     }
                     match code {
                         KeyCode::Esc if app.key_prompt.is_some() => { app.key_prompt=None; app.input.clear(); app.output.push_str("API key entry canceled.\n"); },
-                        KeyCode::Char('x') if modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.stop_generation();
-                        },
+                        // Esc cancels a busy model rather than closing DUDE.
+                        // This is also a reliable macOS fallback if the terminal
+                        // intercepts Control+X.
+                        KeyCode::Esc if app.active_request.is_some() => app.stop_generation(),
+                        code if is_cancel_shortcut(code, modifiers) => app.stop_generation(),
                         KeyCode::Esc => break,
                         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => break,
                         KeyCode::Enter if app.key_prompt.is_some() => app.receive_key(),
