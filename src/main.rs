@@ -2000,20 +2000,22 @@ fn normalize_native_tool_arguments(value: Value) -> Result<Value,String> {
 /// successful workspace inspection. In particular, do not deserialize model
 /// message.content into an executable action.
 fn looks_like_textual_tool_request(content: &str) -> bool {
-    let content = content.trim();
     if content.len() > 16_000 { return false; }
-    let json_text = if let Some(start) = content.find("```json") {
-        let remainder = &content[start + "```json".len()..];
-        let Some(end) = remainder.find("```") else { return false; };
-        remainder[..end].trim()
-    } else {
-        content
-    };
-    let Ok(value) = serde_json::from_str::<Value>(json_text) else { return false };
-    let Some(name) = value.get("name").and_then(Value::as_str) else { return false };
-    (matches!(name, "list_files" | "read_file" | "search_text") ||
-        changes::is_action(name)) &&
-        (value.get("parameters").is_some() || value.get("arguments").is_some())
+    // Llama 3.1 may print a fake call AFTER normal paragraphs:
+    // "Vou acessar o arquivo...\\n{\"name\":\"read_file\",...}".
+    // Check bounded candidate JSON objects anywhere in message.content.
+    // This detection NEVER turns printed JSON into an executable tool call.
+    content.match_indices('{').take(64).any(|(offset, _)| {
+        let mut values = serde_json::Deserializer::from_str(&content[offset..])
+            .into_iter::<Value>();
+        let Some(Ok(value)) = values.next() else { return false };
+        let Some(name) = value.get("name").and_then(Value::as_str) else {
+            return false;
+        };
+        (matches!(name, "list_files" | "read_file" | "search_text") ||
+            changes::is_action(name)) &&
+            (value.get("parameters").is_some() || value.get("arguments").is_some())
+    })
 }
 
 fn should_stream_ollama_response(
@@ -2043,6 +2045,12 @@ mod meta_llama_tool_handling_tests {
         assert!(looks_like_textual_tool_request(fake));
         assert!(looks_like_textual_tool_request(
             r#"{"name":"read_file","arguments":{"path":"src/main.rs"}}"#
+        ));
+        assert!(looks_like_textual_tool_request(
+            "Vou tentar acessar o arquivo src/main.rs para uma análise mais profunda.\\n\\n{\"name\": \"read_file\", \"parameters\": {\"path\": \"src/main.rs\"}}"
+        ));
+        assert!(looks_like_textual_tool_request(
+            "Tool plan:\\n```json\\n{\"name\":\"list_files\",\"parameters\":{\"path\":\".\"}}\\n```\\n"
         ));
         assert!(!looks_like_textual_tool_request(
             "I inspected the source code using list_files."
