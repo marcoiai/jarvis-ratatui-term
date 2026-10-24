@@ -228,6 +228,59 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn dudeignore_prunes_nested_directories_and_removes_previous_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-index-ignore-dirs-{}",
+            std::process::id(),
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("generated/deep")).unwrap();
+        fs::create_dir_all(root.join("src/private")).unwrap();
+        fs::create_dir_all(root.join("src/public")).unwrap();
+        fs::write(root.join("generated/deep/secret.rs"), "fn secret() {}").unwrap();
+        fs::write(root.join("src/private/internal.rs"), "fn internal() {}").unwrap();
+        fs::write(root.join("src/public/visible.rs"), "fn visible() {}").unwrap();
+        fs::write(root.join("debug.log"), "debug trace").unwrap();
+
+        let first = refresh(&root).unwrap();
+        assert!(first.message.contains("4 files"));
+        fs::write(root.join(".dudeignore"), "generated/\nsrc/private/\n*.log\n").unwrap();
+
+        // A new scan must prune ignored directories and remove anything that
+        // was indexed before the exclusion rules were introduced.
+        let updated = refresh(&root).unwrap();
+        assert!(updated.changed);
+        assert!(updated.message.contains("removed 3"));
+        let saved = load(&root.join(".dude/index.json")).unwrap();
+        assert_eq!(saved.files.len(), 1);
+        assert!(saved.files.contains_key("src/public/visible.rs"));
+        assert!(!saved.files.contains_key("generated/deep/secret.rs"));
+        assert!(!saved.files.contains_key("src/private/internal.rs"));
+        assert!(!saved.files.contains_key("debug.log"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dudeignore_can_exclude_nested_directory_by_root_pattern() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-index-ignore-root-{}",
+            std::process::id(),
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("docs/private")).unwrap();
+        fs::create_dir_all(root.join("docs/public")).unwrap();
+        fs::write(root.join("docs/private/secret.md"), "sensitive").unwrap();
+        fs::write(root.join("docs/public/readme.md"), "public").unwrap();
+        fs::write(root.join(".dudeignore"), "/docs/private/\n").unwrap();
+        refresh(&root).unwrap();
+        let saved = load(&root.join(".dude/index.json")).unwrap();
+        assert!(saved.files.contains_key("docs/public/readme.md"));
+        assert!(!saved.files.contains_key("docs/private/secret.md"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn refuses_persistent_index_state_outside_workspace_via_symlink() {
