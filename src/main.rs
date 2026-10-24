@@ -756,57 +756,34 @@ impl App {
                         if solo_provider=="groq"{selected}else{&groq_model},
                         if solo_provider=="gemini"{selected}else{&gemini_model}, true,
                         evidence.clone(), metrics.clone(), Some(tx.clone())).await;
-                    // Knowledge extraction is a separate, read-only pass. Never send
-                    // extraction JSON to the UI or let a model promote memory itself.
+                    // Do NOT hold the user's answer hostage to optional knowledge
+                    // extraction. The main response and its telemetry complete first;
+                    // a best-effort, read-only extraction reports back separately.
                     metrics.stage("solo_primary_response", &solo_provider, primary_start, result.is_ok());
-                    let result = match result {
-                        Ok(answer) if evidence.len() > 0 => {
-                            let evidence_text = evidence.export();
-                            let prompt = format!(
-                                "Extract up to 6 durable, project-specific architectural decisions, conventions, or non-obvious confirmed behaviors from the answer below. Never propose source declarations, signatures, structs, enums, or transient implementation details. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
-                                question.chars().take(500).collect::<String>(),
-                                answer.chars().take(3000).collect::<String>(),
-                                evidence_text.chars().take(5000).collect::<String>()
-                            );
-                            let extraction = vec![
-                                Message {role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into()},
-                                Message {role: "user".into(), content: prompt},
-                            ];
-                            // Best-effort secondary inference: never spend another full
-                            // investigation deadline extracting optional knowledge.
-                            let extraction_start = Instant::now();
-                            let discovered = match tokio::time::timeout(
-                                Duration::from_secs(75),
-                                query_provider(&client, &solo_provider, extraction, workspace.clone(),
-                                    &url,
-                                    if solo_provider=="ollama"{selected}else{&ollama_model},
-                                    if solo_provider=="groq"{selected}else{&groq_model},
-                                    if solo_provider=="gemini"{selected}else{&gemini_model}, false,
-                                    evidence.clone(), metrics.clone(), None),
-                            ).await {
-                                Ok(result) => result,
-                                Err(_) => Err("prazo de 75 s da extração excedido".into()),
-                            };
-                            metrics.stage("knowledge_extraction", &solo_provider, extraction_start, discovered.is_ok());
-                            match discovered {
-                                Ok(raw) => {
-                                    let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
-                                        .trim_end_matches("```").trim();
-                                    match serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
-                                        Ok(drafts) => match knowledge::propose(&workspace, &question, &drafts, &evidence) {
-                                            Ok(ids) if !ids.is_empty() =>
-                                                Ok(format!("{answer}\\n\\n🧠 Knowledge: {} candidato(s) aguardando tua aprovação.", ids.len())),
-                                            Ok(_) => Ok(format!("{answer}\\n\\n🧠 Knowledge: nenhum candidato novo verificável. Use /knowledge para consultar pendências.")),
-                                            Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: falha ao guardar candidatos: {error}")),
-                                        },
-                                        Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração inválida ({error}). Nenhum conhecimento novo foi salvo.")),
-                                    }
-                                }
-                                Err(error) => Ok(format!("{answer}\\n\\n🧠 Knowledge: extração indisponível ({error}). Nenhum conhecimento novo foi salvo.")),
-                            }
+                    if let Ok(answer) = &result {
+                        if evidence.len() > 0 {
+                            let extraction_client = client.clone();
+                            let extraction_provider = solo_provider.clone();
+                            let extraction_workspace = workspace.clone();
+                            let extraction_host = url.clone();
+                            let extraction_ollama_model = if solo_provider=="ollama" { selected.to_owned() } else { ollama_model.clone() };
+                            let extraction_groq_model = if solo_provider=="groq" { selected.to_owned() } else { groq_model.clone() };
+                            let extraction_gemini_model = if solo_provider=="gemini" { selected.to_owned() } else { gemini_model.clone() };
+                            let extraction_evidence = evidence.clone();
+                            let extraction_tx = tx.clone();
+                            let extraction_answer = answer.clone();
+                            tokio::spawn(async move {
+                                let status = extract_knowledge_after_response(
+                                    &extraction_client, &extraction_provider,
+                                    &extraction_workspace, &extraction_host,
+                                    &extraction_ollama_model, &extraction_groq_model,
+                                    &extraction_gemini_model, &question,
+                                    &extraction_answer, &extraction_evidence,
+                                ).await;
+                                let _ = extraction_tx.send(ResultMessage::KnowledgeUpdate(status));
+                            });
                         }
-                        other => other,
-                    };
+                    }
                     metrics.stage("Solo",&solo_provider,solo_start,result.is_ok());
                     result
                 };
@@ -1104,6 +1081,65 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         return Ok(report);
     }
     Ok(answer)
+}
+
+/// Optional second-pass learning. Never delays the user's primary response,
+/// and never turns inferred facts into approved knowledge without review.
+async fn extract_knowledge_after_response(
+    client: &reqwest::Client,
+    provider: &str,
+    workspace: &std::path::Path,
+    host: &str,
+    ollama_model: &str,
+    groq_model: &str,
+    gemini_model: &str,
+    question: &str,
+    answer: &str,
+    evidence: &evidence::EvidenceCache,
+) -> String {
+    let evidence_text = evidence.export();
+    let prompt = format!(
+        "Extract up to 6 durable, project-specific architectural decisions, conventions, or non-obvious confirmed behaviors from the answer below. Never propose source declarations, signatures, structs, enums, or transient implementation details. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\n\nQuestion: {}\n\nAnswer: {}\n\nTool observations:\n{}",
+        question.chars().take(500).collect::<String>(),
+        answer.chars().take(3000).collect::<String>(),
+        evidence_text.chars().take(5000).collect::<String>()
+    );
+    let extraction = vec![
+        Message { role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into() },
+        Message { role: "user".into(), content: prompt },
+    ];
+    let started = Instant::now();
+    // This low-priority operation has its own deadline and is not part of
+    // the answer latency or the interactive request telemetry.
+    let discovered = match tokio::time::timeout(
+        Duration::from_secs(35),
+        query_provider(
+            client, provider, extraction, workspace.to_owned(), host,
+            ollama_model, groq_model, gemini_model, false,
+            evidence.clone(), metrics::Metrics::default(), None,
+        ),
+    ).await {
+        Ok(result) => result,
+        Err(_) => Err("tempo limite de 35 s para extração auxiliar".into()),
+    };
+    let elapsed = started.elapsed().as_secs();
+    match discovered {
+        Ok(raw) => {
+            let raw = raw.trim().trim_start_matches(char::from(96))
+                .trim_start_matches("json").trim_start_matches(char::from(96))
+                .trim_end_matches(char::from(96)).trim();
+            match serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
+                Ok(drafts) => match knowledge::propose(workspace, question, &drafts, evidence) {
+                    Ok(ids) if !ids.is_empty() =>
+                        format!("{} candidato(s) para revisar em /knowledge ({elapsed}s).", ids.len()),
+                    Ok(_) => format!("Nenhum candidato verificável nesta análise ({elapsed}s)."),
+                    Err(error) => format!("Falha ao salvar candidatos ({elapsed}s): {error}"),
+                },
+                Err(error) => format!("JSON de extração inválido ({elapsed}s): {error}"),
+            }
+        }
+        Err(error) => format!("Extração opcional indisponível ({elapsed}s): {error}"),
+    }
 }
 
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
