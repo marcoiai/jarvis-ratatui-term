@@ -66,12 +66,27 @@ fn symbols(content: &str) -> Vec<String> {
     }
     out
 }
+fn reject_symlink(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() =>
+            Err(format!("Indexador não acessa caminhos simbólicos: {}", path.display())),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Não foi possível verificar {}: {error}", path.display())),
+    }
+}
+
 fn load(path: &Path) -> Result<IndexData, String> {
+    reject_symlink(path)?;
+    if path.exists() && fs::metadata(path).map_err(|e|e.to_string())?.len() > 64 * 1024 * 1024 {
+        return Err("Índice persistente excede o limite de leitura (64 MiB)".into());
+    }
     if !path.exists() { return Ok(IndexData::default()); }
     serde_json::from_str(&fs::read_to_string(path).map_err(|e| format!("Cannot read index: {e}"))?)
         .map_err(|e| format!("Index JSON is invalid: {e}"))
 }
 pub fn status(workspace: &Path) -> Result<String, String> {
+    reject_symlink(&workspace.join(".dude"))?;
     let path = workspace.join(".dude").join(INDEX_FILE);
     if !path.exists() { return Ok("No persistent index yet. Run /index start.".into()); }
     let index = load(&path)?;
@@ -82,6 +97,7 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     let root = workspace.canonicalize().map_err(|e| format!("Cannot resolve workspace: {e}"))?;
     if !root.is_dir() { return Err("Workspace is not a directory".into()); }
     let state = root.join(".dude");
+    reject_symlink(&state)?;
     fs::create_dir_all(&state).map_err(|e| format!("Cannot create .dude: {e}"))?;
     let index_path = state.join(INDEX_FILE);
     let mut old = load(&index_path)?;
@@ -140,10 +156,21 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     old.workspace = root.to_string_lossy().into_owned();
     old.updated_unix = now();
     old.files = next;
-    let tmp = state.join("index.json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(&old).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Cannot write index: {e}"))?;
-    fs::rename(&tmp, &index_path).map_err(|e| format!("Cannot finalize index: {e}"))?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?.as_nanos();
+    let tmp = state.join(format!("index.json.{}-{stamp}.tmp", std::process::id()));
+    let result = (|| -> Result<(), String> {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)
+            .map_err(|e| format!("Cannot create index snapshot: {e}"))?;
+        file.write_all(&serde_json::to_vec_pretty(&old).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Cannot write index: {e}"))?;
+        file.sync_all().map_err(|e| format!("Cannot sync index: {e}"))?;
+        fs::rename(&tmp, &index_path).map_err(|e| format!("Cannot finalize index: {e}"))?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_file(&tmp); }
+    result?;
     Ok(RefreshReport { changed, message: format!(
         "Index refresh: {} files | added {added} | changed {updated} | removed {removed} | skipped oversized {skipped_large}{}",
         old.files.len(), if capped { " | LIMIT REACHED: index incomplete" } else { "" }) })
