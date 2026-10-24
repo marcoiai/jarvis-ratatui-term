@@ -1041,7 +1041,7 @@ async fn ask_ollama(
         // Streaming is only useful when sending ChatChunk updates to the TUI.
         // Stability first: receive final synthesis as one complete response.
         // This prevents an audit warning from being the only streamed content.
-        let stream_final = false;
+        let stream_final = updates.is_some();
         let request_start = Instant::now();
         let payload = json!({
             "model": model,
@@ -1079,7 +1079,7 @@ async fn ask_ollama(
             }
             return Err(format!("Ollama HTTP {status}: {body}"));
         }
-        if stream_final {
+        if stream_final && !tools_enabled {
             let mut response = response;
             let mut buffer = Vec::<u8>::new();
             let mut answer = String::new();
@@ -1180,11 +1180,21 @@ async fn ask_ollama(
             }
             return Ok(answer);
         }
-        let reply: OllamaReply = match response.json().await {
-            Ok(reply) => reply,
-            Err(error) => {
-                metrics.stage(&request_label, "ollama", request_start, false);
-                return Err(format!("Invalid response: {error}"));
+        let reply: OllamaReply = if stream_final {
+            match read_ollama_tool_stream(response, updates.as_ref()).await {
+                Ok(reply) => reply,
+                Err(error) => {
+                    metrics.stage(&request_label, "ollama", request_start, false);
+                    return Err(error);
+                }
+            }
+        } else {
+            match response.json().await {
+                Ok(reply) => reply,
+                Err(error) => {
+                    metrics.stage(&request_label, "ollama", request_start, false);
+                    return Err(format!("Invalid response: {error}"));
+                }
             }
         };
         metrics.stage(&request_label, "ollama", request_start, true);
@@ -1269,6 +1279,89 @@ async fn ask_ollama(
         else { stalled_rounds = 0; }
     }
     Err("Ollama ended without a final response".into())
+}
+
+
+/// Read streamed Ollama responses with tool calling enabled. Tool-call arguments
+/// arrive in indexed fragments, while ordinary answer tokens are sent to the TUI.
+async fn read_ollama_tool_stream(
+    mut response: reqwest::Response,
+    updates: Option<&mpsc::UnboundedSender<ResultMessage>>,
+) -> Result<OllamaReply, String> {
+    let mut buffer = Vec::<u8>::new();
+    let mut content = String::new();
+    let mut filter = response_filter::ThinkingFilter::default();
+    let mut calls: Vec<Value> = Vec::new();
+    let mut prompt_eval_count = None;
+    let mut eval_count = None;
+    let mut done = false;
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("Ollama stream error: {e}"))? {
+        buffer.extend_from_slice(&chunk);
+        if buffer.len() > 2_000_000 { return Err("Ollama stream buffer limit exceeded".into()); }
+        while let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = buffer.drain(..=pos).collect();
+            let line = line.strip_suffix(b"\n").unwrap_or(&line);
+            if line.iter().all(u8::is_ascii_whitespace) { continue; }
+            let value: Value = serde_json::from_slice(line).map_err(|e| format!("Ollama stream JSON: {e}"))?;
+            if let Some(error) = value["error"].as_str() { return Err(error.into()); }
+            if let Some(delta) = value["message"]["content"].as_str() {
+                let visible = filter.push(delta)?;
+                if !visible.is_empty() {
+                    content.push_str(&visible);
+                    if calls.is_empty() {
+                        if let Some(sender) = updates { let _ = sender.send(ResultMessage::ChatChunk(visible)); }
+                    }
+                }
+            }
+            if let Some(parts) = value["message"]["tool_calls"].as_array() {
+                for (position, part) in parts.iter().enumerate() {
+                    let index = part["index"].as_u64().map(|n| n as usize).unwrap_or(position);
+                    if index >= 32 { return Err("Too many streamed tool calls".into()); }
+                    while calls.len() <= index {
+                        calls.push(json!({"type":"function","function":{"name":"","arguments":""}}));
+                    }
+                    if let Some(name) = part["function"]["name"].as_str() {
+                        let old = calls[index]["function"]["name"].as_str().unwrap_or("");
+                        calls[index]["function"]["name"] = json!(format!("{old}{name}"));
+                    }
+                    if let Some(args) = part["function"]["arguments"].as_str() {
+                        let old = calls[index]["function"]["arguments"].as_str().unwrap_or("");
+                        calls[index]["function"]["arguments"] = json!(format!("{old}{args}"));
+                    } else if part["function"]["arguments"].is_object() {
+                        calls[index]["function"]["arguments"] = part["function"]["arguments"].clone();
+                    }
+                }
+            }
+            if value["done"].as_bool() == Some(true) {
+                done = true;
+                prompt_eval_count = value["prompt_eval_count"].as_u64();
+                eval_count = value["eval_count"].as_u64();
+            }
+        }
+    }
+    if !done { return Err("Ollama stream ended without done=true".into()); }
+    let tail = filter.finish()?;
+    if !tail.is_empty() {
+        content.push_str(&tail);
+        if calls.is_empty() {
+            if let Some(sender) = updates { let _ = sender.send(ResultMessage::ChatChunk(tail)); }
+        }
+    }
+    let mut parsed = Vec::new();
+    for mut call in calls {
+        if let Some(raw) = call["function"]["arguments"].as_str() {
+            let args: Value = serde_json::from_str(raw)
+                .map_err(|e| format!("Incomplete streamed tool arguments: {e}"))?;
+            call["function"]["arguments"] = args;
+        }
+        parsed.push(serde_json::from_value::<ToolCall>(call)
+            .map_err(|e| format!("Invalid streamed tool call: {e}"))?);
+    }
+    Ok(OllamaReply {
+        message: MessageReply { content, tool_calls: parsed },
+        prompt_eval_count,
+        eval_count,
+    })
 }
 
 /// A known Ollama tool-call parser failure, not an arbitrary server error.
