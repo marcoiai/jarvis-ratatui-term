@@ -141,6 +141,31 @@ mod knowledge_review_input_tests {
 }
 
 #[cfg(test)]
+mod generation_cancel_tests {
+    use super::*;
+    #[tokio::test]
+    async fn stopping_thinking_aborts_request_but_keeps_the_session_open() {
+        let mut app = App::new();
+        app.history.push(Message { role:"user".into(), content:"review the project".into() });
+        app.last_question = Some("review the project".into());
+        app.busy = true;
+        app.thinking_active = true;
+        let model_task = tokio::spawn(async {
+            std::future::pending::<()>().await
+        });
+        app.active_request = Some(model_task.abort_handle());
+        app.stop_generation();
+        assert!(model_task.await.unwrap_err().is_cancelled());
+        assert!(!app.busy);
+        assert!(!app.thinking_active);
+        assert!(app.active_request.is_none());
+        assert!(app.last_question.is_none());
+        assert!(app.history.last().is_some_and(|m| m.role != "user"));
+        assert!(app.output.contains("Geração interrompida"));
+    }
+}
+
+#[cfg(test)]
 mod ollama_thinking_ui_tests {
     use super::{App, ResultMessage};
 
