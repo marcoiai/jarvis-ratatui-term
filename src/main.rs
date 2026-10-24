@@ -860,6 +860,11 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         .map(|m|m.content.as_str()).unwrap_or("");
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
     let require_project_evidence = allow_tools && investigation::needs_baseline(question);
+    let require_change_evidence = allow_tools && (
+        investigation::is_code_change_request(question)
+        || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
+            && investigation::investigation_intent(question, Some(previous)))
+    );
     let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
     if allow_tools {
         let root = workspace.clone();
@@ -888,6 +893,9 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
     }?;
+    if require_change_evidence && evidence_for_gate.source_read_count() == 0 {
+        return Err("Não foi possível verificar a implementação existente: nenhum arquivo-fonte foi lido. Não vou sugerir caminhos, funções ou comandos específicos sem evidências. Confira /workspace e tente novamente.".into());
+    }
     if require_project_evidence {
         investigation::require_evidence_for_overview(evidence_for_gate.source_read_count())?;
         if answer.trim().is_empty() {
