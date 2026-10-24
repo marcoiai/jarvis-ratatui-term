@@ -1363,10 +1363,19 @@ async fn query_direct_ollama(
     updates: mpsc::UnboundedSender<ResultMessage>,
 ) -> Result<String, String> {
     let allow_change_proposals = direct_change_intent(&messages);
-    ask_ollama(
+    let observed = evidence.clone();
+    let answer = ask_ollama(
         client, host, model, direct_chat_messages(messages), workspace,
         true, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
-    ).await
+    ).await?;
+    // The response is not an evidence-backed source analysis when only tool
+    // failures, directory listings, or empty calls happened. Say so even
+    // when the model writes a fluent answer.
+    if !observed.events().is_empty() && observed.source_read_count() == 0 {
+        Ok(format!("{answer}\n\n⚠ DUDE: nenhuma leitura real de arquivo-fonte foi concluída nesta resposta. O texto acima não é uma análise verificada do código."))
+    } else {
+        Ok(answer)
+    }
 }
 
 #[cfg(test)]
