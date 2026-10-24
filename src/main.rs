@@ -865,23 +865,30 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
             && investigation::investigation_intent(question, Some(previous)))
     );
-    let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
+    // The model decides whether to call read-only tools. Keyword heuristics must
+    // never remove tools from an otherwise authorized request.
+    let allow_tools = allow_tools;
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")
             .map(|m|m.content.clone()).unwrap_or_default();
         let bootstrap = investigation::needs_baseline(&question);
         let cache = evidence.clone();
-        let overview = tokio::task::spawn_blocking(move || {
-            let mut overview = investigation::overview(&root);
-            if bootstrap {
+        messages.push(Message { role: "system".into(), content: format!(
+            "{} The read-only file tools are available. Decide whether to use them based on the user's intent and conversation context, not keyword matching. For a request to change or diagnose existing project behavior, inspect the relevant implementation before giving file-specific instructions. For ordinary conversation, respond without tools. Never pretend to have inspected files.",
+            investigation::GUIDANCE
+        ) });
+        // Expensive project-wide context is only injected for broad overview requests.
+        // Focused changes let the model discover and read the relevant files itself.
+        if bootstrap {
+            let overview = tokio::task::spawn_blocking(move || {
+                let mut overview = investigation::overview(&root);
                 overview.push('\n');
                 overview.push_str(&investigation::baseline(&root, &cache));
-            }
-            overview
-        }).await.map_err(|e| e.to_string())?;
-        messages.push(Message { role: "system".into(), content: investigation::GUIDANCE.into() });
-        messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
+                overview
+            }).await.map_err(|e| e.to_string())?;
+            messages.push(Message { role: "user".into(), content: format!("{overview}\n\n{}", evidence.read_manifest()) });
+        }
     }
     let evidence_for_gate = evidence.clone();
     // Keep a sender for the semantic auditor after ask_ollama consumes its own copy.
