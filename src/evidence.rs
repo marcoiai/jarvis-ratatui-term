@@ -138,6 +138,51 @@ impl EvidenceCache {
         }
         (start..=end).all(|line| seen.contains(&line))
     }
+    /// Find source files named in inline Markdown code that were not actually
+    /// read during this request. A real read of src/main.rs satisfies a
+    /// shorthand mention of `main.rs`, but listing files does NOT satisfy it.
+    /// This only detects evidence *absence*, never validates claims about files
+    /// that were read (a semantic audit may still be needed).
+    pub fn uninspected_source_mentions(&self, report: &str) -> Vec<String> {
+        let Ok(events) = self.events.lock() else { return Vec::new() };
+        let inspected: BTreeSet<String> = events.iter()
+            .filter(|event| event["tool"] == "read_file" && event["success"] == true)
+            .filter_map(|event| event["path"].as_str())
+            .map(|path| path.trim_start_matches("./").replace('\\', "/"))
+            .collect();
+        let mut unread = BTreeSet::new();
+        for (index, snippet) in report.split('`').enumerate() {
+            // Only explicit Markdown inline source-file mentions; not code
+            // blocks, arbitrary prose, tool calls, or command arguments.
+            if index % 2 == 0 { continue; }
+            let snippet = snippet.trim();
+            if snippet.len() > 180 || snippet.contains(char::is_whitespace) { continue; }
+            let without_lines = snippet.rsplit_once(':')
+                .filter(|(_, lines)| !lines.is_empty() &&
+                    lines.chars().all(|ch| ch.is_ascii_digit() || ch == '-'))
+                .map(|(path, _)| path).unwrap_or(snippet);
+            let file = without_lines.trim_start_matches("./");
+            if file.is_empty() || file.contains("..") || file.contains('*') ||
+                file.contains('{') || file.contains('}') || file.ends_with('/') {
+                continue;
+            }
+            let extension = Path::new(file).extension()
+                .and_then(|extension| extension.to_str()).unwrap_or("");
+            if !matches!(extension,
+                "rs" | "java" | "php" | "py" | "js" | "jsx" | "ts" |
+                "tsx" | "c" | "h" | "cpp" | "hpp" | "go" | "rb" |
+                "sql" | "toml" | "yml" | "yaml" | "md" | "json"
+            ) { continue; }
+            let checked = inspected.iter().any(|path| {
+                path == file || path.ends_with(&format!("/{file}"))
+            });
+            if !checked {
+                unread.insert(file.to_owned());
+            }
+        }
+        unread.into_iter().collect()
+    }
+
     /// Collect declaration candidates exclusively from numbered read_file source lines.
     /// This is a syntax observation, not proof of runtime behavior.
     pub fn declaration_drafts(&self, limit: usize) -> Vec<crate::knowledge::CandidateDraft> {
@@ -274,6 +319,40 @@ impl EvidenceCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_mentions_require_actual_reads_not_just_directory_listing() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-mention-check-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("src/file_tools.rs"), "pub fn execute() {}").unwrap();
+        std::fs::write(root.join("src/knowledge.rs"), "pub fn approve() {}").unwrap();
+        let evidence = EvidenceCache::default();
+        evidence.execute(&root, "list_files", &json!({"path":"src"}));
+        evidence.execute(&root, "read_file", &json!({"path":"./src/main.rs"}));
+        evidence.execute(&root, "read_file", &json!({"path":"src/file_tools.rs"}));
+        let response = "Inspecionei `main.rs` e `src/file_tools.rs:1`.             O módulo `knowledge.rs` possui as funções `execute`, `resolve` e `scan`.             Use `cargo check` para compilar.";
+        assert_eq!(evidence.uninspected_source_mentions(response), vec!["knowledge.rs"]);
+        evidence.execute(&root, "read_file", &json!({"path":"src/knowledge.rs"}));
+        assert!(evidence.uninspected_source_mentions(response).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_mentions_only_check_explicit_file_names() {
+        let evidence = EvidenceCache::default();
+        assert!(evidence.uninspected_source_mentions(
+            "Faça `cargo run`, depois use `/index status`."
+        ).is_empty());
+        assert_eq!(evidence.uninspected_source_mentions(
+            "O arquivo `src/knowledge.rs` gerencia memória e `Cargo.toml` define dependências."
+        ), vec!["Cargo.toml", "src/knowledge.rs"]);
+    }
+
     #[test]
     fn only_observed_source_lines_can_be_cited() {
         let root = std::env::temp_dir().join(format!("dude-reference-{}", std::process::id()));
