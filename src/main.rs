@@ -161,6 +161,76 @@ fn is_cancel_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
 }
 
 #[cfg(test)]
+mod indexer_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn index_events_do_not_end_active_model_stream() {
+        let mut app = App::new();
+        app.busy = true;
+        app.indexer_running = true;
+        app.index_generation = 7;
+        let workspace = app.workspace.clone();
+        app.complete(ResultMessage::Index {
+            workspace, generation: 7,
+            update: IndexUpdate::Report("3 files indexed".into())
+        });
+        assert!(app.busy, "indexing must not mark Ollama completion");
+        assert!(app.indexer_running);
+        assert!(app.output.contains("3 files indexed"));
+    }
+
+    #[test]
+    fn late_index_events_from_old_generation_or_workspace_are_ignored() {
+        let mut app = App::new();
+        app.indexer_running = true;
+        app.index_generation = 4;
+        let before = app.output.clone();
+        app.complete(ResultMessage::Index {
+            workspace: app.workspace.clone(), generation: 3,
+            update: IndexUpdate::Report("stale update".into()),
+        });
+        app.complete(ResultMessage::Index {
+            workspace: app.workspace.join("previous-workspace"), generation: 4,
+            update: IndexUpdate::Stopped,
+        });
+        assert_eq!(app.output, before);
+        assert!(app.indexer_running);
+    }
+
+    #[test]
+    fn indexer_stop_invalidates_pending_scan_results() {
+        let mut app = App::new();
+        app.indexer_running = true;
+        app.index_generation = 8;
+        assert!(app.stop_indexing());
+        assert_eq!(app.index_generation, 9);
+        assert!(!app.indexer_running);
+        let before = app.output.clone();
+        app.complete(ResultMessage::Index {
+            workspace: app.workspace.clone(), generation: 8,
+            update: IndexUpdate::Report("old scan completed".into()),
+        });
+        assert_eq!(app.output, before);
+    }
+
+    #[test]
+    fn indexer_background_stop_does_not_interrupt_chat() {
+        let mut app = App::new();
+        app.busy = true;
+        app.indexer_running = true;
+        app.index_generation = 1;
+        app.complete(ResultMessage::Index {
+            workspace: app.workspace.clone(), generation: 1,
+            update: IndexUpdate::Stopped,
+        });
+        assert!(app.busy);
+        assert!(!app.indexer_running);
+        assert!(app.output.contains("Indexador parado"));
+    }
+}
+
+#[cfg(test)]
 mod generation_cancel_tests {
     use super::*;
     #[test]
