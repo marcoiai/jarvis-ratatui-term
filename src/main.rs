@@ -78,6 +78,10 @@ enum ResultMessage {
     ChatChunk(String),
     /// Ollama's own streamed thinking channel; display only, never persist as answer.
     ChatThinking(String),
+    /// Optional post-response knowledge extraction completed asynchronously.
+    KnowledgeUpdate(String),
+    /// Current stage of the interactive answer pipeline (not a completion).
+    ChatStage(&'static str),
 }
 
 struct App {
@@ -90,6 +94,7 @@ struct App {
     busy: bool,
     streamed: bool,
     thinking_active: bool,
+    chat_stage: &'static str,
     started_at: Option<Instant>,
     model_ready: bool,
     model: String,
@@ -218,6 +223,7 @@ impl App {
             busy: false,
             streamed: false,
             thinking_active: false,
+            chat_stage: "Raciocinando",
             started_at: None,
             model_ready: false,
             workspace,
@@ -650,6 +656,7 @@ impl App {
         self.busy = true;
         self.streamed = false;
         self.thinking_active = false;
+        self.chat_stage = "Raciocinando";
         self.started_at = Some(Instant::now());
         if let Some(command) = input.strip_prefix('!') {
             let command = command.trim().to_owned();
@@ -832,6 +839,18 @@ impl App {
     }
 
     fn complete(&mut self, result: ResultMessage) {
+        if let ResultMessage::ChatStage(stage) = result {
+            self.chat_stage = stage;
+            return;
+        }
+        if let ResultMessage::KnowledgeUpdate(status) = result {
+            self.output.push_str(&format!("\n🧠 Conhecimento (extração auxiliar): {status}\n"));
+            if !self.busy && self.pending_knowledge.is_none() {
+                self.ask_next_knowledge();
+            }
+            self.follow_output = true;
+            return;
+        }
         if let ResultMessage::ChatThinking(ref delta) = result {
             if !delta.is_empty() {
                 if !self.thinking_active {
@@ -907,7 +926,9 @@ impl App {
                 self.output.push_str(&format!("Error: {error}\n{telemetry}\n"));
                 if self.history.last().is_some_and(|m| m.role == "user") { self.history.pop(); }
             }
-            ResultMessage::ChatChunk(_) | ResultMessage::ChatThinking(_) => unreachable!("handled before completion"),
+            ResultMessage::ChatChunk(_) | ResultMessage::ChatThinking(_) |
+            ResultMessage::ChatStage(_) | ResultMessage::KnowledgeUpdate(_) =>
+                unreachable!("handled before completion"),
             ResultMessage::Shell(Err(error)) => {
                 self.last_question = None;
                 self.output.push_str(&format!("Error: {error}\n"));
@@ -1048,6 +1069,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
             has_supported_citation,
         );
         if let Some(sender) = &audit_updates {
+            let _ = sender.send(ResultMessage::ChatStage("Auditando evidências"));
             let _ = sender.send(ResultMessage::ChatChunk(
                 "\n\n🧠 Avaliador semântico — stream bruto ao vivo:\n".into()
             ));
@@ -1410,6 +1432,9 @@ async fn ask_ollama(
         }).collect();
         conversation.push(json!({"role":"assistant","content":reply.message.content,"tool_calls": calls}));
         let previous_evidence = evidence.len();
+        if let Some(sender) = &updates {
+            let _ = sender.send(ResultMessage::ChatStage("Investigando arquivos"));
+        }
         for call in reply.message.tool_calls {
             let root = workspace.clone();
             let name = call.function.name;
@@ -1744,7 +1769,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io:
         let title = if app.busy {
             let elapsed = app.started_at.map(|start| start.elapsed()).unwrap_or_default();
             let frame = FRAMES[((elapsed.as_millis() / 100) as usize) % FRAMES.len()];
-            format!("Answer {frame} Thinking... {}s", elapsed.as_secs())
+            format!("Answer {frame} {}... {}s", app.chat_stage, elapsed.as_secs())
         } else if !app.model_ready && app.roles.mode == "solo" && app.roles.selected_provider() == "ollama" {
             "Answer · Preparing model".to_owned()
         } else {
