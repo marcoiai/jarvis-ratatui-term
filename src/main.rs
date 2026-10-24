@@ -1733,6 +1733,54 @@ fn model_tool_definitions(allow_tools: bool, allow_actions: bool) -> Vec<Value> 
 }
 
 #[cfg(test)]
+mod meta_llama_tool_handling_tests {
+    use super::*;
+
+    #[test]
+    fn printed_json_is_not_a_native_tool_call() {
+        let fake = r#"Here is the JSON object for the function call:
+```json
+{"name":"list_files","parameters":{"path":"."}}
+```"#;
+        assert!(looks_like_textual_tool_request(fake));
+        assert!(looks_like_textual_tool_request(
+            r#"{"name":"read_file","arguments":{"path":"src/main.rs"}}"#
+        ));
+        assert!(!looks_like_textual_tool_request(
+            "I inspected the source code using list_files."
+        ));
+        assert!(!looks_like_textual_tool_request(
+            r#"{"name":"totally_unknown","parameters":{"path":"."}}"#
+        ));
+        assert!(!looks_like_textual_tool_request(
+            r#"{"name":"edit_file","parameters":"malformed"# 
+        ));
+    }
+
+    #[test]
+    fn decode_arguments_only_from_structured_tool_calls() {
+        let args = normalize_native_tool_arguments(
+            json!("{\\"path\\":\\"src/main.rs\\"}")
+        ).unwrap();
+        assert_eq!(args["path"], "src/main.rs");
+        assert_eq!(normalize_native_tool_arguments(
+            json!({"path":"."})
+        ).unwrap()["path"], ".");
+        assert!(normalize_native_tool_arguments(json!("not-json")).is_err());
+        assert!(normalize_native_tool_arguments(json!(["."])).is_err());
+    }
+
+    #[test]
+    fn change_tools_are_not_exposed_for_read_only_questions() {
+        let ask = |content| vec![Message { role:"user".into(), content: content.into() }];
+        assert!(!direct_change_intent(&ask("Analise a arquitetura deste projeto")));
+        assert!(!direct_change_intent(&ask("try again")));
+        assert!(direct_change_intent(&ask("Corrija esta função")));
+        assert!(direct_change_intent(&ask("Edit src/main.rs to fix the bug")));
+    }
+}
+
+#[cfg(test)]
 mod action_tool_contract_tests {
     use super::*;
     #[test]
