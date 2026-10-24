@@ -125,6 +125,25 @@ mod knowledge_review_input_tests {
     }
 }
 
+#[cfg(test)]
+mod ollama_thinking_ui_tests {
+    use super::{App, ResultMessage};
+
+    #[test]
+    fn thinking_stream_is_shown_separately_from_the_answer() {
+        let mut app = App::new();
+        let history_before = app.history.len();
+        app.complete(ResultMessage::ChatThinking("analisando ".into()));
+        app.complete(ResultMessage::ChatThinking("o pedido".into()));
+        assert!(app.output.contains("🧠 Raciocínio (Ollama):\nanalisando o pedido"));
+        assert!(!app.streamed, "thinking alone is not a final answer");
+        app.complete(ResultMessage::ChatChunk("Olá, buddy!".into()));
+        assert!(app.output.contains("💬 Resposta:\nOlá, buddy!"));
+        assert!(app.streamed);
+        assert_eq!(app.history.len(), history_before, "thinking must not enter dialogue history");
+    }
+}
+
 impl App {
     fn logo(&self) -> Text<'static> {
         // Terminal adaptation of the provided ENOVA Business Solutions reference:
