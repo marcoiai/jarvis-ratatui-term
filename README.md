@@ -78,6 +78,25 @@ This branch replaces the original Gemini shell script. The obsolete Gemini shell
 - For safety, `!` runs programs without `sh -c` or `bash -c`. It is still arbitrary command execution by the local user.
 - `/apikey` manages saved Gemini/Groq credentials.
 
+## Persistent project indexer (restored from existing feature branch)
+
+The `/index` command reports status. It does **not** start indexing automatically.
+Use the following commands inside the DUDE terminal:
+
+```text
+/workspace
+/index start
+/index status
+/index stop
+```
+
+- `/index start` creates a persistent **structural** index in `<workspace>/.dude/index.json`, then scans for file additions, edits and deletions every 3 seconds during the current DUDE session.
+- `/index` and `/index status` report whether scanning is active and how many files are saved in the index. `/index stop` stops polling but **keeps** the index on disk.
+- Changing workspaces automatically stops the previous workspace's indexer, so results from a previous scan cannot interfere with the new workspace.
+- The index records relative file paths, sizes, timestamps, fingerprints, language guesses and likely symbol declarations. It does **not** store source bodies, embeddings, or promise that the model has read those files. The index is not yet semantic search.
+- The scanner respects Git ignore rules and a root `.dudeignore` file, excludes sensitive and commonly generated/dependency paths, never follows symlinks, skips binary and oversized files, and caps each scan at 100,000 files. It uses the existing `ignore` Rust crate dependency from the original feature branch.
+- Polling runs separately from the model request; an index update must not interrupt the active Ollama generation. Indexing is started manually after each DUDE restart.
+
 ## Persistent AI Co-Engineering memory
 
 DUDE uses a project-local `.dude/` directory (relative to `DUDE_WORKSPACE`, or current directory). It creates:
