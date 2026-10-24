@@ -1760,7 +1760,7 @@ mod meta_llama_tool_handling_tests {
     #[test]
     fn decode_arguments_only_from_structured_tool_calls() {
         let args = normalize_native_tool_arguments(
-            json!("{\\"path\\":\\"src/main.rs\\"}")
+            json!(r#"{"path":"src/main.rs"}"#)
         ).unwrap();
         assert_eq!(args["path"], "src/main.rs");
         assert_eq!(normalize_native_tool_arguments(
