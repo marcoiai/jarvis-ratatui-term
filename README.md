@@ -11,13 +11,13 @@ An AI-powered development companion for the terminal, built with Rust, Ratatui a
 
 - Rust toolchain (edition 2024)
 - Ollama running at `http://127.0.0.1:11434`
-- Ollama running (DUDE downloads `qwen3:4b` automatically when missing)
+- Ollama running (DUDE downloads `llama3.1:8b` automatically when missing)
 
 ## Run
 
 ```sh
 ollama serve  # only if Ollama is not already running
-OLLAMA_MODEL=qwen3:4b cargo run --bin dude
+OLLAMA_MODEL=llama3.1:8b cargo run --bin dude
 ```
 
 If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
@@ -26,12 +26,38 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 
 - Ask a normal question to chat with Ollama. Successful exchanges remain in context.
 - `!ls -la` executes a local program directly (no shell interpretation: pipes, globbing and redirects are unsupported).
-- `/model granite-code:latest` changes the model during the session.
+- `/model llama3.1:8b` selects and verifies the model during the session (checking installed models and downloading if needed); DUDE marks it ready only after verification.
+- `/export` saves the full visible DUDE transcript to a timestamped UTF-8 `.txt` file (including streamed Ollama thinking, answers and metrics). Works even while a response is still streaming.
+- After every completed answer or error, DUDE also refreshes `<workspace>/.dude/exports/latest.txt` automatically. Copy or attach that file instead of manually selecting terminal text. `/export` creates `<workspace>/.dude/exports/session-YYYYMMDD-HHMMSS-XXXXXXXXX.txt` without overwriting prior snapshots. The TUI prints the full snapshot path.
+- Exports are **local only** and may contain sensitive prompts, project excerpts, model reasoning or errors. Review them before sharing, and avoid adding `.dude/exports/` to Git.
 - `/clear` clears conversation and screen.
 - `/exit`, `/quit` or `/sair` exits the TUI cleanly (also Esc or Ctrl+C).
 - Up/Down scroll, ESC or Ctrl+C exits.
 
-DUDE prefers `qwen3:4b` and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
+DUDE prefers `llama3.1:8b` (Meta Llama 3.1 8B) and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
+
+## Temporary direct local-model mode
+
+To use Ollama much like a normal chat assistant **without DUDE's experimental
+auditor/reviewer pipeline**, switch to **direct** mode inside the TUI:
+
+```text
+/mode direct
+/model llama3.1:8b
+review the current project
+can you review more?
+```
+
+- The mode is saved per workspace in `.dude/roles.json` until you select `/mode solo` or `/mode symphony`.
+- Direct uses the **local Ollama provider**, ignoring Solo's optional cloud-role assignments. To use another locally installed model, type `/model MODEL_NAME` (for example `/model llama3.1:8b`). The model is rechecked when you switch, and stale checks for previous selections are ignored. Check availability using `/ollama` and `/ollama retry`.
+- Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, auto-baseline, evidence gates, second-pass semantic audit and automatic knowledge extraction are bypassed.
+- Ollama still decides whether to use the read-only `list_files`, `read_file` and `search_text` tools. For explicit source reviews in Direct mode, DUDE first gathers a **read-only root-directory inventory** with Rust, labels it as a directory listing (not a code read), and then lets the model choose native `read_file` calls. A source review with **zero successful read_file operations fails visibly** instead of being reported as a completed code analysis. Direct does **not** guarantee that a model successfully calls tools.
+- **Cancel an in-progress thinking/response (including macOS):** press **`Esc` while a model is generating**, `Control+X`, `Control+G`, or enter `/stop` while DUDE is busy. On Mac use the **Control** key, not Command (`⌘`); Command+X is generally handled by the terminal. `Esc` is the recommended macOS fallback. While idle, `Esc` and `Ctrl+C` still exit the application. The UI processes streamed token events in bounded batches so keyboard input remains responsive, and queued stale stream fragments are ignored after cancellation. The visible partial output is not saved as a completed assistant answer; Ollama may take a moment to release backend work.
+- **Optional code changes (direct mode only):** the model may propose `edit_file`, `create_file` or `run_command` for builds/tests. The runtime only **prepares** one proposed action; it never writes or runs the proposed command automatically. The TUI displays the change/command, `/diff` repeats the preview, `/approve` performs only that proposal, and `/reject` discards it. Each new change requires separate approval. `edit_file` replaces one uniquely matching text fragment in a regular workspace file; `create_file` needs a nonexistent path in an existing directory. Sensitive paths, symlinks and traversal outside the workspace are blocked, and file content is checked again before writing.
+- **Command warning:** build/test scripts can run arbitrary project-defined code with the current user permissions. Review the exact command and work only in a trusted workspace. Approval is local to this DUDE TUI session and is not a permission grant to future model actions.
+
+- **Meta Llama 3.1 8B and workspace tools:** Direct mode offers `list_files`, `read_file`, and `search_text` for ordinary analysis. It only offers mutation **proposals** (`edit_file`, `create_file`, `run_command`) on explicit change/test requests. Llama 3.1 8B sometimes prints tool-call-shaped JSON in ordinary text. DUDE requests non-streaming, structured tool responses during Meta Llama tool rounds, detects pseudo-calls even when embedded in prose, and retries once for a **native** `message.tool_calls`. It **never executes JSON printed as text**. It displays verified DUDE investigation stages and tool successes/failures (not a fabricated model thought trace); no native file read means no verified source review. On source review requests, a bounded root-directory inventory is injected ahead of the latest user request to encourage relative paths and prevent `..` attempts. Final synthesis may stream when tools are disabled. Native tool reliability varies by model.\n- The Ollama endpoint comes from `OLLAMA_HOST` (default `http://127.0.0.1:11434`); this works with Ollama running on the Mac and the DUDE client running on Linux as long as the endpoint is reachable.
+- For the former stricter behavior, use `/mode solo` (or `/mode symphony` for role orchestration).
 
 ## AI file tools (read-only)
 
@@ -39,7 +65,11 @@ DUDE can ask Ollama to call `list_files`, `read_file` (line ranges, similar to `
 
 Set `DUDE_WORKSPACE=/path/to/project` to restrict AI file reads to a selected directory. Defaults to current directory. Some sensitive paths and symlinks are blocked, but this is **not a security sandbox**: launch DUDE in a trusted, non-sensitive workspace and don't allow untrusted content there. AI file tools do not modify files. User-typed `!command` still runs external programs under the user's permissions.
 
-No API key is necessary. The Rust application communicates using HTTP JSON with `/api/chat` and `stream: false`.
+No API key is necessary. The Rust application communicates using HTTP JSON with `/api/chat`. Ollama responses normally stream; **Meta Llama tool rounds deliberately use `stream: false`** to favor structured native tool calls. During those rounds the TUI shows actual DUDE stage/tool events instead of hidden model reasoning. Thinking-capable models (such as Qwen3.5) may stream `message.thinking` separately from final `message.content`.
+
+**Project-review continuity (PR #32):** Requests such as `review current project` and the contextual follow-up `can you review more?` keep read-only file tools available for the model to choose. The initial review requires at least one `read_file` observation made after the automatic bootstrap; a follow-up requires observations of at least two distinct source files during that turn. Directory listings and textual pseudo-tool calls inside `message.thinking` do not count. When the model returns without sufficient native tool observations, DUDE asks once for new source reads, then reports the review as incomplete rather than claiming success. The TUI marks streaming review text as provisional until evidence checks finish and records the actual runtime source counts. Bootstrap excerpts are reference data, not a replacement user turn. These checks do not establish full security or correctness.
+
+**Thinking versus investigation progress:** Meta `llama3.1:8b` does **not** provide a separate Ollama `message.thinking` channel, so DUDE cannot display its private reasoning. In Meta Llama tool rounds, the UI instead shows real steps, including which read-only tools executed and whether they succeeded. If you want Ollama's actual **🧠 Raciocínio (Ollama)** stream, choose a thinking-capable model such as `qwen3.5:4b` using `/model qwen3.5:4b`; Qwen3 models request thinking by default. `DUDE_OLLAMA_THINK=0` disables that stream; `DUDE_OLLAMA_THINK=1` enables it for compatible models, but never forces it for Llama 3.1. Thinking is not persisted as assistant answers. Llama tool-call reliability is limited for long multi-turn dialogue; switching to Qwen is recommended when native tool execution matters more than testing Meta.
 This branch replaces the original Gemini shell script. The obsolete Gemini shell scripts and tracked key-export script were removed from this branch. **Revoke the previously exposed credential** and clean Git history separately if required; deleting files does not erase older commits.
 
 ## Notes
@@ -47,6 +77,39 @@ This branch replaces the original Gemini shell script. The obsolete Gemini shell
 - One active request at a time; the UI stays interactive.
 - For safety, `!` runs programs without `sh -c` or `bash -c`. It is still arbitrary command execution by the local user.
 - `/apikey` manages saved Gemini/Groq credentials.
+
+## Persistent project indexer (restored from existing feature branch)
+
+The `/index` command reports status. It does **not** start indexing automatically.
+Use the following commands inside the DUDE terminal:
+
+```text
+/workspace
+/index start
+/index status
+/index stop
+```
+
+- `/index start` creates a persistent **structural** index in `<workspace>/.dude/index.json`, then scans for file additions, edits and deletions every 3 seconds during the current DUDE session.
+- `/index` and `/index status` report whether scanning is active and how many files are saved in the index. `/index stop` stops polling but **keeps** the index on disk.
+- Changing workspaces automatically stops the previous workspace's indexer, so results from a previous scan cannot interfere with the new workspace.
+- The index records relative file paths, sizes, timestamps, fingerprints, language guesses and likely symbol declarations. It does **not** store source bodies, embeddings, or promise that the model has read those files. The index is not yet semantic search.
+- The scanner respects Git ignore rules and a root `.dudeignore` file. **Ignored directories are pruned before traversal**, not just filtered from the saved index. Excluded and commonly generated/dependency paths are also pruned; symlinks are not followed. Binary/oversized files are skipped and each scan is capped at 100,000 files. The scanner uses the `ignore` Rust crate dependency from the original feature branch.
+- Edit `<workspace>/.dudeignore` as a gitignore-style text file, for example:
+
+```gitignore
+# Do not traverse or index these directories
+node_modules/
+target/
+vendor/
+build/
+docs/private/
+# Ignore traces
+*.log
+```
+
+  Patterns are reloaded on each 3-second scan. A new ignore rule removes previously indexed files from `.dude/index.json` on the next refresh. `/index status` shows the remaining indexed file count.
+- Polling runs separately from the model request; an index update must not interrupt the active Ollama generation. Indexing is started manually after each DUDE restart.
 
 ## Persistent AI Co-Engineering memory
 
@@ -103,7 +166,7 @@ The selected providers are saved per workspace in `.dude/roles.json`. In **Solo*
 
 `/mode symfony` is an alias. `/cloud deny` revokes cloud permission for the current session. Permission is **off on startup and after workspace changes**. A cloud role receives conversation history, project memory/context and results of explicitly requested read-only file tools; do not enable cloud for proprietary workspaces unless authorized. Shell commands (`!command`) remain explicitly user initiated.
 
-Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `qwen3:4b`); Groq (`GROQ_API_KEY`, optional `GROQ_MODEL`, default `openai/gpt-oss-120b`); Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_MODEL`, default `gemini-2.5-flash`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
+Supported runtime adapters: Ollama local (`OLLAMA_MODEL`, default `llama3.1:8b`); Groq (`GROQ_API_KEY`, optional `GROQ_MODEL`, default `openai/gpt-oss-120b`); Gemini (`GEMINI_API_KEY` or `GOOGLE_API_KEY`, optional `GEMINI_MODEL`, default `gemini-2.5-flash`). Gemini API access and quota are separate from the consumer Google AI Pro subscription. OpenAI stays a configurable placeholder and will fail closed if selected.
 
 If any Symphony stage errors, DUDE displays an error instead of silently treating partial results as a complete three-role answer. Shared tools are read-only, and each provider is limited to eight rounds of tool calls.
 
