@@ -386,6 +386,18 @@ impl App {
         }
     }
 
+    fn stop_indexing(&mut self) -> bool {
+        let was_running = self.indexer_running;
+        if let Some(stop) = self.indexer_stop.take() {
+            let _ = stop.send(true);
+        }
+        self.indexer_running = false;
+        // A background scan may finish after /index stop or /workspace.
+        // Ignore those stale updates instead of polluting the new workspace.
+        self.index_generation = self.index_generation.wrapping_add(1);
+        was_running
+    }
+
     fn receive_key(&mut self) {
         if let Some(provider)=self.key_prompt.take() {
             let key=std::mem::take(&mut self.input);
@@ -541,6 +553,79 @@ impl App {
             }
             self.pending_knowledge = None;
         }
+        if input == "/index" || input == "/index status" {
+            let saved = indexer::status(&self.workspace)
+                .unwrap_or_else(|error| format!("Índice indisponível: {error}"));
+            self.output.push_str(&format!(
+                "Indexador: {} | Workspace: {}\n{}\nComandos: /index start | /index status | /index stop\n",
+                if self.indexer_running { "ATIVO (varredura a cada 3s)" } else { "INATIVO" },
+                self.workspace.display(), saved,
+            ));
+            return;
+        }
+        if input == "/index start" {
+            if self.indexer_running {
+                self.output.push_str("Indexador já está ativo. Use /index status.\n");
+                return;
+            }
+            let workspace = self.workspace.clone();
+            let generation = self.index_generation.wrapping_add(1);
+            self.index_generation = generation;
+            let (stop_tx, mut stop_rx) = watch::channel(false);
+            self.indexer_stop = Some(stop_tx);
+            self.indexer_running = true;
+            self.output.push_str("🗂 Indexador iniciado: criando índice persistente e verificando mudanças a cada 3 segundos.\n");
+            let events = tx.clone();
+            tokio::spawn(async move {
+                let notify = |update: IndexUpdate| {
+                    let _ = events.send(ResultMessage::Index {
+                        workspace: workspace.clone(), generation, update
+                    });
+                };
+                let root = workspace.clone();
+                let initial = tokio::task::spawn_blocking(move || indexer::refresh(&root))
+                    .await.map_err(|error| error.to_string()).and_then(|result| result);
+                match initial {
+                    Ok(report) => notify(IndexUpdate::Report(report.message)),
+                    Err(error) => {
+                        notify(IndexUpdate::Error(error));
+                        notify(IndexUpdate::Stopped);
+                        return;
+                    }
+                }
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(3)) => {},
+                        change = stop_rx.changed() => {
+                            if change.is_err() || *stop_rx.borrow() { break; }
+                        }
+                    }
+                    if *stop_rx.borrow() { break; }
+                    let root = workspace.clone();
+                    let scanned = tokio::task::spawn_blocking(move || indexer::refresh(&root))
+                        .await.map_err(|error| error.to_string()).and_then(|result| result);
+                    match scanned {
+                        Ok(report) if report.changed => notify(IndexUpdate::Report(report.message)),
+                        Ok(_) => {},
+                        Err(error) => {
+                            notify(IndexUpdate::Error(error));
+                            break;
+                        }
+                    }
+                }
+                notify(IndexUpdate::Stopped);
+            });
+            return;
+        }
+        if input == "/index stop" {
+            if self.stop_indexing() {
+                self.output.push_str("Indexador interrompendo; índice salvo mantido em .dude/index.json.\n");
+            } else {
+                self.output.push_str("Indexador não está ativo. Use /index start.\n");
+            }
+            return;
+        }
+
         if input == "/ollama" {
             self.output.push_str(&format!("Ollama endpoint: {} | model: {} | ready: {}\nUse /ollama retry or /ollama host http://IP:11434\n",
                 self.ollama_url, self.model, self.model_ready));
@@ -663,6 +748,7 @@ impl App {
                 Ok(path) if path.is_dir() => {
                     match memory::Memory::open(&path) {
                         Ok(store) => {
+                            self.stop_indexing();
                             self.workspace = path;
                             self.environment = environment::Environment::detect(&self.workspace);
                             self.history.truncate(2);
