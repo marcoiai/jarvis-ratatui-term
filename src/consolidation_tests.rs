@@ -55,7 +55,7 @@ fn reply(text: &str) -> String {
 async fn ask(host: &str, workspace: &Workspace, tools: bool, cache: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String, String> {
     let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
     ask_ollama(&client, host, "test-model", vec![Message {role:"user".into(), content:"review".into()}],
-        workspace.0.clone(), tools, cache, metrics, None).await
+        workspace.0.clone(), tools, false, false, 0, 0, cache, metrics, None).await
 }
 
 #[tokio::test]
