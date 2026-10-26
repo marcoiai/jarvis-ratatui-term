@@ -1545,6 +1545,24 @@ fn direct_is_greeting(messages: &[Message]) -> bool {
         "eae" | "e aí" | "e ai" | "salve" |
         "bom dia" | "boa tarde" | "boa noite" | "tudo bem" |
         "valeu" | "obrigado")
+        || {
+            // Friendly stretched greetings, e.g. "hey duuude!!!".
+            // Only treat exactly two words as a greeting, so
+            // "hey duuude inspect src/main.rs" can still use file tools.
+            let mut words = normalized.split_whitespace();
+            let first = words.next().unwrap_or("");
+            let nickname = words.next().unwrap_or("");
+            let nickname = nickname.trim_matches(|c: char| !c.is_alphabetic());
+            let emphatic_dude = nickname.strip_prefix('d')
+                .and_then(|rest| {
+                    let remainder = rest.trim_start_matches('u');
+                    if remainder.len() < rest.len() { remainder.strip_prefix('d') } else { None }
+                })
+                .is_some_and(|end| !end.is_empty() && end.chars().all(|c| c == 'e'));
+            matches!(first, "hey" | "hi" | "hello")
+                && words.next().is_none()
+                && emphatic_dude
+        }
 }
 
 /// A directory listing or a friendly greeting does not require code-level
@@ -1738,13 +1756,14 @@ mod direct_mode_context_tests {
         let user = |text: &str| vec![Message {
             role: "user".into(), content: text.into()
         }];
-        for greeting in ["oi", "hey dude", "hello!", "e aí", "Bom dia", "salve"] {
+        for greeting in ["oi", "hey dude", "hey duuude", "hey duuuude!!!", "hello!", "e aí", "Bom dia", "salve"] {
             assert!(direct_is_greeting(&user(greeting)), "{greeting}");
             assert!(!direct_source_analysis_intent(&user(greeting)));
             assert!(!direct_change_intent(&user(greeting)));
         }
         assert!(!direct_is_greeting(&user("liste os arquivos")));
         assert!(!direct_is_greeting(&user("analise a arquitetura")));
+        assert!(!direct_is_greeting(&user("hey duuude analise a arquitetura")));
         assert!(direct_source_analysis_intent(&user("Analise a arquitetura do projeto")));
         assert!(direct_source_analysis_intent(&user("Review current project")));
         assert!(!direct_source_analysis_intent(&user("Liste os arquivos do workspace")));
