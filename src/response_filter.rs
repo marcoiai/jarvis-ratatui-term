@@ -9,12 +9,20 @@ const MAX_BUFFER: usize = 1_000_000;
 pub struct ThinkingFilter {
     pending: String,
     phase: Phase,
+    stream_plain: bool,
 }
 
 #[derive(Default)]
 enum Phase { #[default] Initial, Thinking, Visible }
 
 impl ThinkingFilter {
+    /// Ollama's structured `message.thinking` is handled separately by the UI.
+    /// Stream ordinary `message.content` as soon as it is distinguishable
+    /// from an inline opening <think> delimiter.
+    pub fn streaming() -> Self {
+        Self { stream_plain: true, ..Self::default() }
+    }
+
     pub fn push(&mut self, chunk: &str) -> Result<String, String> {
         self.pending.push_str(chunk);
         if self.pending.len() > MAX_BUFFER && !matches!(self.phase, Phase::Visible) {
@@ -29,11 +37,17 @@ impl ThinkingFilter {
                         self.pending.drain(..consumed);
                         self.phase = Phase::Thinking;
                     } else if let Some(end) = self.pending.find(CLOSE) {
-                        // Missing <think>: hold ALL early content until a closing delimiter.
+                        // Legacy models may omit <think>; retain filtering for a
+                        // complete delimiter already present in the buffered text.
                         self.pending.drain(..end + CLOSE.len());
                         self.phase = Phase::Visible;
+                    } else if self.stream_plain && !trimmed.is_empty() && !OPEN.starts_with(trimmed) {
+                        // Ordinary Ollama content has no think tags. The old
+                        // filter buffered ALL of it until done=true, defeating
+                        // streaming even for a simple greeting.
+                        self.phase = Phase::Visible;
                     } else {
-                        // No delimiter yet: do not expose internal text to the TUI.
+                        // Wait for a possibly split opening delimiter.
                         return Ok(String::new());
                     }
                 }
@@ -92,6 +106,21 @@ mod tests {
         let mut f=ThinkingFilter::default();
         assert_eq!(f.push("Olá, buddy!").unwrap(), "");
         assert_eq!(f.finish().unwrap(), "Olá, buddy!");
+    }
+    #[test]
+    fn ordinary_streaming_content_is_visible_before_finish() {
+        let mut filter = ThinkingFilter::streaming();
+        assert_eq!(filter.push("Olá, ").unwrap(), "Olá, ");
+        assert_eq!(filter.push("buddy!").unwrap(), "buddy!");
+        assert_eq!(filter.finish().unwrap(), "");
+    }
+    #[test]
+    fn streaming_still_hides_split_inline_think_tags() {
+        let mut filter = ThinkingFilter::streaming();
+        assert_eq!(filter.push("<thi").unwrap(), "");
+        assert_eq!(filter.push("nk>internal").unwrap(), "");
+        assert_eq!(filter.push("</think>Oi").unwrap(), "Oi");
+        assert_eq!(filter.finish().unwrap(), "");
     }
     #[test]
     fn completed_response_filters_both_templates() {

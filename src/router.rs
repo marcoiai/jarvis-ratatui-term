@@ -2,12 +2,13 @@
 use crate::roles::Roles;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Route { Local(String), Solo, Symphony }
+pub enum Route { Local(String), Direct, Solo, Symphony }
 
 impl Route {
     pub fn needs_ollama(&self, roles:&Roles)->bool {
         match self {
             Self::Local(_)=>false,
+            Self::Direct=>true,
             Self::Solo=>roles.selected_provider()=="ollama",
             Self::Symphony=>[&roles.investigator,&roles.architect,&roles.reviewer].iter().any(|p|p.as_str()=="ollama"),
         }
@@ -17,9 +18,12 @@ pub fn route(input:&str, mode:&str, language:&str)->Route {
     let query=input.trim();
     let lower=query.to_lowercase();
     if matches!(lower.as_str(), "?" | "help" | "/help") {
-        if language == "pt-BR" { return Route::Local("Comandos do DUDE: /help, /roles, /mode solo|symphony, /solo ROLE, /role ROLE PROVIDER, /workspace PATH, /memory, /knowledge, /cloud allow|deny, /clear, /provider PROVIDER, /model NAME, /apikey, /apikey gemini|groq, /apikey clear PROVIDER, /env, /align, /metrics, /recover, /recover discard, /exit, /quit, /sair.\nOllama: OLLAMA_NUM_CTX (padrão 16384). Investigação: DUDE_TOOL_ROUNDS (padrão 8, máximo 32).\nFaça uma pergunta para começar. Para usar todos os agentes, digite: symphony: SUA PERGUNTA.".into()); }
-        return Route::Local("DUDE commands: /help, /roles, /mode solo|symphony, /solo ROLE, /role ROLE PROVIDER, /workspace PATH, /memory, /knowledge, /cloud allow|deny, /clear, /provider PROVIDER, /model NAME, /apikey, /apikey gemini|groq (masked entry), /apikey clear PROVIDER, /env, /align, /metrics, /recover, /recover discard, /exit, /quit, /sair.\nOllama: OLLAMA_NUM_CTX (default 16384). Investigation: DUDE_TOOL_ROUNDS (default 8, max 32).\nAsk a specific question to begin. Force full orchestration with 'symphony: YOUR QUESTION'.".into());
+        if language == "pt-BR" { return Route::Local("Comandos do DUDE: /help, /roles, /mode direct|solo|symphony, /solo ROLE, /role ROLE PROVIDER, /workspace PATH, /memory, /knowledge, /cloud allow|deny, /clear, /provider PROVIDER, /model NAME, /apikey, /apikey gemini|groq, /apikey clear PROVIDER, /env, /align, /metrics, /export, /stop, /diff, /approve, /reject, /index start|status|stop, /recover, /recover discard, /exit, /quit, /sair.\nOllama: OLLAMA_NUM_CTX (padrão 16384). Investigação: DUDE_TOOL_ROUNDS (padrão 8, máximo 32).\nFaça uma pergunta para começar. Para usar todos os agentes, digite: symphony: SUA PERGUNTA.".into()); }
+        return Route::Local("DUDE commands: /help, /roles, /mode direct|solo|symphony, /solo ROLE, /role ROLE PROVIDER, /workspace PATH, /memory, /knowledge, /cloud allow|deny, /clear, /provider PROVIDER, /model NAME, /apikey, /apikey gemini|groq (masked entry), /apikey clear PROVIDER, /env, /align, /metrics, /export, /stop, /diff, /approve, /reject, /index start|status|stop, /recover, /recover discard, /exit, /quit, /sair.\nOllama: OLLAMA_NUM_CTX (default 16384). Investigation: DUDE_TOOL_ROUNDS (default 8, max 32).\nAsk a specific question to begin. Force full orchestration with 'symphony: YOUR QUESTION'.".into());
     }
+    // In direct mode even greetings go to the local model, making this a
+    // useful baseline for comparing model behavior without routing shortcuts.
+    if mode == "direct" { return Route::Direct; }
     if matches!(lower.as_str(),"oi"|"olá"|"ola"|"hey"|"hi"|"hello"|"bom dia"|"boa tarde"|"boa noite"|"eae"|"e aí") {
         return Route::Local(if language == "pt-BR" { "E aí, buddy! O que vamos construir hoje? Use /help para ver os comandos. 🦀" } else { "Hey dude! Ask me something about your project. Use /help for commands. 🦀" }.into());
     }
@@ -51,6 +55,13 @@ mod tests {
     }
     #[test] fn trivial_is_local() {
         for input in ["?","/help","oi","Bom dia"] {assert!(matches!(route(input,"symphony","pt-BR"),Route::Local(_))); }
+    }
+    #[test] fn direct_routes_greetings_and_reviews_to_the_local_model() {
+        let roles = Roles::default();
+        assert_eq!(route("hey", "direct", "pt-BR"), Route::Direct);
+        assert_eq!(route("review current project", "direct", "en"), Route::Direct);
+        assert!(Route::Direct.needs_ollama(&roles));
+        assert!(matches!(route("/help", "direct", "pt-BR"), Route::Local(_)));
     }
     #[test] fn simple_in_symphony_uses_solo() {
         assert_eq!(route("O que é Tokio?","symphony","pt-BR"),Route::Solo);
