@@ -1,11 +1,19 @@
 //! Persistent, read-only structural project index for DUDE.
 use ignore::{WalkBuilder, gitignore::{Gitignore, GitignoreBuilder}};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, hash::{Hash, Hasher}, path::Path, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::BTreeMap, fs, hash::{Hash, Hasher}, path::{Component, Path}, time::{SystemTime, UNIX_EPOCH}};
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_FILES: usize = 100_000;
 const INDEX_FILE: &str = "index.json";
+const INDEX_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct IndexedSymbol {
+    name: String,
+    kind: String,
+    line: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct IndexedFile {
@@ -15,6 +23,9 @@ struct IndexedFile {
     fingerprint: String,
     language: String,
     symbols: Vec<String>,
+    // V1 indices are readable until the next refresh migrates them.
+    #[serde(default)]
+    declarations: Vec<IndexedSymbol>,
 }
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct IndexData {
@@ -47,24 +58,36 @@ fn language(path: &Path) -> String {
         "dart"=>"dart", "vue"=>"vue", "svelte"=>"svelte", "txt"=>"text", ""=>"unknown", _=>"other"
     }.to_string()
 }
-fn symbols(content: &str) -> Vec<String> {
+fn symbols(content: &str) -> (Vec<String>, Vec<IndexedSymbol>) {
     let prefixes = ["pub fn ","async fn ","fn ","pub struct ","struct ","pub enum ","enum ",
         "pub trait ","trait ","pub type ","type ","pub const ","const ","pub static ","static ",
         "class ","interface ","def ","function ","export function ","export class ",
         "export interface ","export type ","func ","CREATE TABLE ","CREATE VIEW "];
-    let mut out = Vec::new();
-    for line in content.lines() {
+    let mut labels = Vec::new();
+    let mut declarations = Vec::new();
+    for (index, line) in content.lines().enumerate() {
         let line = line.trim();
         for prefix in prefixes {
             if let Some(rest) = line.strip_prefix(prefix) {
                 let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
-                if !name.is_empty() { out.push(format!("{}{}", prefix.trim(), name)); }
+                if !name.is_empty() {
+                    labels.push(format!("{prefix}{name}"));
+                    let kind = if prefix.contains("fn ") || matches!(prefix, "def " | "func " | "function " | "export function ") {
+                        "function"
+                    } else if prefix.contains("struct ") || prefix.contains("class ") {
+                        "struct"
+                    } else if prefix.contains("enum ") { "enum" }
+                    else if prefix.contains("trait ") || prefix.contains("interface ") { "interface" }
+                    else if prefix.contains("TABLE ") || prefix.contains("VIEW ") { "sql" }
+                    else { "declaration" };
+                    declarations.push(IndexedSymbol { name, kind: kind.into(), line: index + 1 });
+                }
                 break;
             }
         }
-        if out.len() >= 100 { break; }
+        if labels.len() >= 100 { break; }
     }
-    out
+    (labels, declarations)
 }
 fn reject_symlink(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -93,6 +116,59 @@ pub fn status(workspace: &Path) -> Result<String, String> {
     Ok(format!("Saved structural index: {} files | updated Unix timestamp: {} | version: {}",
         index.files.len(), index.updated_unix, index.version))
 }
+/// A bounded index lookup: navigation hints, never verified source evidence.
+pub fn search(workspace: &Path, query: &str, limit: usize) -> Result<String, String> {
+    let root = workspace.canonicalize().map_err(|e| e.to_string())?;
+    reject_symlink(&root.join(".dude"))?;
+    let index = load(&root.join(".dude").join(INDEX_FILE))?;
+    if index.version != INDEX_VERSION || index.workspace != root.to_string_lossy()
+        || index.files.is_empty() {
+        return Err("No current structural index for this workspace. Use /index start".into());
+    }
+    let terms: Vec<String> = query.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| w.chars().count() >= 3).map(str::to_lowercase)
+        .filter(|w| !matches!(w.as_str(), "que" | "para" | "com" | "dos" | "das" |
+            "the" | "and" | "from" | "como" | "uma" | "por" | "seja" | "cite" |
+            "analise" | "análise" | "projeto" | "atual"))
+        .take(24).collect();
+    let mut ranked: Vec<(i32, &str, &IndexedFile)> = Vec::new();
+    for (path, file) in &index.files {
+        let relative = Path::new(path);
+        if file.path != *path || relative.components().any(|c| !matches!(c, Component::Normal(_)))
+            || excluded(relative) { continue; }
+        let path_lower = path.to_lowercase();
+        let names = file.declarations.iter().map(|s| s.name.as_str())
+            .collect::<Vec<_>>().join(" ").to_lowercase();
+        let mut score = if path == "src/main.rs" { 9 }
+            else if path.starts_with("src/") { 3 } else { 0 };
+        if matches!(path.as_str(), "src/router.rs" | "src/roles.rs" | "src/providers.rs" |
+            "src/investigation.rs" | "src/evidence.rs" | "src/file_tools.rs") { score += 2; }
+        if file.language == "documentation" { score -= 2; }
+        for term in &terms {
+            if path_lower.contains(term) { score += 12; }
+            if names.contains(term) { score += 7; }
+            if file.language.contains(term) { score += 2; }
+        }
+        ranked.push((score, path, file));
+    }
+    ranked.sort_by(|a,b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+    let mut result = String::from("STRUCTURAL INDEX NAVIGATION (metadata only; not source evidence):\n");
+    for (_, path, file) in ranked.into_iter().take(limit.clamp(1, 12)) {
+        let matches: Vec<&IndexedSymbol> = file.declarations.iter()
+            .filter(|d| terms.iter().any(|t| d.name.to_lowercase().contains(t)))
+            .take(3).collect();
+        let selected: Vec<&IndexedSymbol> = if matches.is_empty() {
+            file.declarations.iter().take(2).collect()
+        } else { matches };
+        let display = selected.iter().map(|d| format!("{} {}:{}", d.kind, d.name, d.line))
+            .collect::<Vec<_>>().join(", ");
+        result.push_str(&format!("- {path} [{}]{}\n", file.language,
+            if display.is_empty() { String::new() } else { format!(" — {display}") }));
+    }
+    result.push_str("Index paths and declaration lines are navigation hints only. Use native read_file on relevant paths to verify current contents and obtain citeable evidence.");
+    Ok(result)
+}
+
 pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     let root = workspace.canonicalize().map_err(|e| format!("Cannot resolve workspace: {e}"))?;
     if !root.is_dir() { return Err("Workspace is not a directory".into()); }
@@ -147,7 +223,8 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
         let modified_nanos = meta.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_nanos()).unwrap_or(0);
         let rel = relative.to_string_lossy().replace('\\', "/");
-        if let Some(previous) = old.files.get(&rel)
+        if old.version == INDEX_VERSION
+            && let Some(previous) = old.files.get(&rel)
             && previous.bytes == meta.len()
             && previous.modified_nanos == modified_nanos {
                 next.insert(rel, previous.clone());
@@ -159,8 +236,9 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         bytes.hash(&mut hasher);
         let fingerprint = format!("{:016x}", hasher.finish());
+        let (symbols, declarations) = symbols(content);
         next.insert(rel.clone(), IndexedFile { path: rel, bytes: meta.len(), modified_nanos,
-            fingerprint, language: language(path), symbols: symbols(content) });
+            fingerprint, language: language(path), symbols, declarations });
     }
     if capped {
         return Err(format!("Workspace exceeds the {MAX_FILES}-file index limit; refusing to replace the saved index with an incomplete scan."));
@@ -168,8 +246,8 @@ pub fn refresh(workspace: &Path) -> Result<RefreshReport, String> {
     let added = next.keys().filter(|p| !old.files.contains_key(*p)).count();
     let updated = next.iter().filter(|(p,f)| old.files.get(*p).is_some_and(|prior| prior != *f)).count();
     let removed = old.files.keys().filter(|p| !next.contains_key(*p)).count();
-    let changed = added + updated + removed > 0 || old.version != 1 || old.workspace != root.to_string_lossy().to_string();
-    old.version = 1;
+    let changed = added + updated + removed > 0 || old.version != INDEX_VERSION || old.workspace != root.to_string_lossy().to_string();
+    old.version = INDEX_VERSION;
     old.workspace = root.to_string_lossy().into_owned();
     old.updated_unix = now();
     old.files = next;
@@ -208,6 +286,13 @@ mod tests {
         let saved = load(&root.join(".dude/index.json")).unwrap();
         assert_eq!(saved.files.len(), 1);
         assert!(saved.files["src/lib.rs"].symbols.iter().any(|s| s == "pub fn hello"));
+        assert_eq!(saved.version, INDEX_VERSION);
+        assert_eq!(saved.files["src/lib.rs"].declarations[0],
+            IndexedSymbol { name: "hello".into(), kind: "function".into(), line: 1 });
+        assert_eq!(saved.files["src/lib.rs"].declarations[1].line, 2);
+        let nav = search(&root,"hello",5).unwrap();
+        assert!(nav.contains("src/lib.rs"));
+        assert!(nav.contains("function hello:1"));
         let _ = fs::remove_dir_all(&root);
     }
     #[test]
@@ -294,6 +379,45 @@ mod tests {
         assert!(status(&dir.join("workspace")).is_err());
         assert!(!dir.join("external/index.json").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn v1_index_migrates_and_does_not_serve_stale_navigation() {
+        let root = std::env::temp_dir().join(format!("dude-index-v1-{}",std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".dude")).unwrap();
+        fs::write(root.join("file.rs"), "pub fn migrated() {}\n").unwrap();
+        let old = serde_json::json!({
+            "version":1, "workspace":root.to_string_lossy(), "updated_unix":1,
+            "files":{"file.rs":{"path":"file.rs","bytes":0,"modified_nanos":0,
+                "fingerprint":"old","language":"rust","symbols":["pub fnmigrated"]}}
+        });
+        fs::write(root.join(".dude/index.json"),old.to_string()).unwrap();
+        assert!(load(&root.join(".dude/index.json")).unwrap().files["file.rs"].declarations.is_empty());
+        assert!(search(&root,"migrated",5).is_err());
+        refresh(&root).unwrap();
+        let updated = load(&root.join(".dude/index.json")).unwrap();
+        assert_eq!(updated.files["file.rs"].declarations[0].name, "migrated");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn index_hints_are_not_source_evidence_and_are_workspace_scoped() {
+        let base = std::env::temp_dir().join(format!("dude-index-nav-{}",std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let a = base.join("a");
+        let b = base.join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(b.join(".dude")).unwrap();
+        fs::write(a.join("worker.rs"), "fn process_order() { /* PRIVATE_BODY */ }\n").unwrap();
+        refresh(&a).unwrap();
+        let hints = search(&a,"process_order",4).unwrap();
+        assert!(hints.contains("worker.rs"));
+        assert!(hints.contains("function process_order:1"));
+        assert!(!hints.contains("PRIVATE_BODY"));
+        fs::copy(a.join(".dude/index.json"),b.join(".dude/index.json")).unwrap();
+        assert!(search(&b,"process_order",4).is_err());
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
