@@ -7,7 +7,7 @@ Experimentos de avaliação e supervisão para o DUDE. **Fixtures sintéticas** 
 - COACH_SYSTEM.md: política de observação, evidência, segurança e comunicação.
 - golden_cases.jsonl: 37 exemplos revisáveis (treino).
 - sft_messages.jsonl: os 37 exemplos no formato chat.
-- tool_trajectories.jsonl: 12 cenários sintéticos com uso de ferramentas.
+- tool_trajectories.jsonl: 12 trajetórias sintéticas de ferramentas, incluindo duas recusas sem chamada de ferramenta.
 - holdout_eval.jsonl: 12 avaliações separadas dos exemplos de treino.
 - eval_local.py: baseline do modelo bruto pelo Ollama; não mede o runtime Rust.
 
