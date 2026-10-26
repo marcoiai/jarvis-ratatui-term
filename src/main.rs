@@ -2231,8 +2231,9 @@ mod action_tool_contract_tests {
         let standard = model_tool_definitions(true, false);
         let direct = model_tool_definitions(true, true);
         let none = model_tool_definitions(false, true);
-        assert_eq!(standard.len(), 3);
-        assert_eq!(direct.len(), 6);
+        assert_eq!(standard.len(), 4);
+        assert_eq!(direct.len(), 7);
+        assert!(standard.iter().any(|v| v["function"]["name"] == "search_index"));
         assert!(none.is_empty());
         for name in ["edit_file","create_file","run_command"] {
             assert!(direct.iter().any(|v|v["function"]["name"] == name));
