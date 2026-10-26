@@ -14,6 +14,7 @@ pub fn is_deep_followup(question: &str) -> bool {
     let q = question.trim().to_lowercase();
     q.chars().count() <= 110 && [
         "mais profunda", "mais profundo", "aprofund", "investigue melhor",
+        "investiga melhor", "investigar melhor", "investiga mais",
         "analise melhor", "análise melhor", "continue a análise",
         "continue a investig", "continue investigando", "deep dive",
         "dig deeper", "go deeper", "look deeper",
@@ -39,7 +40,8 @@ pub fn investigation_intent(question: &str, previous_user: Option<&str>) -> bool
 /// The model still chooses the actual read-only workspace operations.
 pub fn review_followup(question: &str, previous_user: Option<&str>) -> bool {
     let Some(previous) = previous_user else { return false; };
-    if !(needs_baseline(previous) || is_deep_followup(previous)) {
+    if !(needs_baseline(previous) || source_inspection_requested(previous)
+        || is_deep_followup(previous)) {
         return false;
     }
     let q = question.trim().to_lowercase();
@@ -50,7 +52,8 @@ pub fn review_followup(question: &str, previous_user: Option<&str>) -> bool {
         "review more", "review further", "deeper review", "analyze more",
         "analyse more", "dig deeper", "go deeper", "look deeper",
         "aprofund", "analise mais", "análise mais", "revisar mais",
-        "revise mais", "investigue melhor", "continue a análise",
+        "revise mais", "investigue melhor", "investiga melhor",
+        "investigar melhor", "investiga mais", "continue a análise",
         "continue a investig", "more details on the review",
     ];
     continuation.iter().any(|phrase| q.contains(phrase))
@@ -360,6 +363,17 @@ mod intent_tests {
         assert!(!source_inspection_requested("Quero entender as diferenças entre Rust e Go"));
         assert!(!source_inspection_requested("O que é tool calling?"));
     }
+    #[test]
+    fn short_source_investigation_followup_inherits_previous_intent() {
+        let earlier = "symphony: Investigue como o DUDE executa chamadas de ferramentas no Ollama. Localize as funções relevantes pelo índice, leia os arquivos e explique o fluxo com referências de linha.";
+        assert!(is_deep_followup("ok, investiga melhor"));
+        assert!(review_followup("ok, investiga melhor", Some(earlier)));
+        assert!(review_followup("investigue melhor", Some(earlier)));
+        assert!(!review_followup("ok, investiga melhor", Some("oi buddy")));
+        assert!(!review_followup("valeu!", Some(earlier)));
+        assert!(!review_followup("ok, investiga melhor", None));
+    }
+
 
     #[test]
     fn deep_followups_inherit_prior_investigation() {
