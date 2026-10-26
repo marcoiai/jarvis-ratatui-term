@@ -245,3 +245,87 @@ fn symphony_checkpoint_refuses_symlink_destination() {
     assert!(symphony_checkpoint::save(&workspace.0, "question", "Architect", "ollama", "model", "answer", "partial").is_err());
     assert_eq!(std::fs::read_to_string(protected).unwrap(), "keep");
 }
+
+
+#[tokio::test]
+async fn coach_injects_capabilities_and_stops_unsupported_ollama_promise() {
+    let workspace = Workspace::new();
+    let metrics = metrics::Metrics::default();
+    let evidence = evidence::EvidenceCache::default();
+    let (host, task) = server(vec![
+        (200, reply("Assim que receber o código, aplicarei o patch e confirmarei o cargo test.")),
+    ]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    // No tools are exposed to this call. The guard still applies to its answer.
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message { role: "user".into(), content: "Aplique um patch em src/main.rs e confirme cargo test".into() }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        false, evidence.clone(), metrics, None,
+    ).await.unwrap();
+    assert!(answer.contains("bloqueio de capacidade"));
+    assert!(!answer.contains("aplicarei o patch"));
+    let requests = task.await.unwrap();
+    let messages = requests[0]["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m|
+        m["role"] == "system" && m["content"].as_str().unwrap_or("").contains("DUDE Coach v0.2")));
+    assert!(messages.iter().any(|m|
+        m["content"].as_str().unwrap_or("").contains("[G013]")));
+    assert!(requests[0]["tools"].as_array().unwrap().is_empty());
+    assert_eq!(evidence.source_read_count(), 0);
+}
+
+#[tokio::test]
+async fn coach_skips_internal_json_knowledge_extraction() {
+    let workspace = Workspace::new();
+    let (host, task) = server(vec![(200, reply("[]"))]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![
+            Message { role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into() },
+            Message { role: "user".into(), content: "Extract from project".into() },
+        ],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        false, evidence::EvidenceCache::default(), metrics::Metrics::default(), None
+    ).await.unwrap();
+    assert_eq!(answer, "[]");
+    let requests = task.await.unwrap();
+    assert!(!requests[0]["messages"].to_string().contains("DUDE Coach v0.2"));
+}
+
+
+#[tokio::test]
+async fn coach_keeps_real_tool_observations_in_the_provider_loop() {
+    let workspace = Workspace::new();
+    std::fs::write(workspace.0.join("notes.rs"), "fn main() {}\n").unwrap();
+    let first = json!({
+        "message": {"content": "", "tool_calls": [
+            {"function": {"name": "read_file",
+                          "arguments": {"path": "notes.rs", "start_line": 1, "end_line": 1}}}
+        ]},
+        "prompt_eval_count": 7, "eval_count": 3
+    }).to_string();
+    let (host, task) = server(vec![
+        (200, first),
+        (200, reply("Observado notes.rs:1: fn main(). Não executei testes.")),
+    ]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let evidence = evidence::EvidenceCache::default();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message { role: "user".into(), content: "Leia o arquivo notes.rs e explique a função".into() }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        true, evidence.clone(), metrics::Metrics::default(), None,
+    ).await.unwrap();
+    assert!(answer.contains("notes.rs:1"));
+    assert!(evidence.observed_reference("notes.rs:1"));
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(!requests[0]["tools"].as_array().unwrap().is_empty());
+    assert!(requests[0]["messages"].to_string().contains("DUDE Coach v0.2"));
+    assert!(requests[1]["messages"].to_string().contains("fn main()"));
+}

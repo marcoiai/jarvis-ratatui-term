@@ -1,4 +1,5 @@
 mod claim_audit;
+mod coach;
 mod progress;
 mod response_filter;
 mod investigation;
@@ -861,6 +862,17 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
     let require_project_evidence = allow_tools && investigation::needs_baseline(question);
     let allow_tools = allow_tools && investigation::investigation_intent(question, previous_user);
+    // Knowledge JSON extraction is an internal machine-readable pass, not user advice.
+    // Never alter its schema with examples or capability banners.
+    let internal_extraction = messages.iter().any(|m|
+        m.role == "system" && m.content.contains("You extract evidence-backed project knowledge"));
+    let use_coach = coach::enabled() && !internal_extraction;
+    if use_coach {
+        let mode = if allow_tools { coach::ToolMode::ReadOnly } else { coach::ToolMode::None };
+        let instruction = coach::supplemental_prompt(question, mode);
+        // System messages are collected by Gemini and forwarded by Ollama/Groq.
+        messages.insert(0, Message { role: "system".into(), content: instruction });
+    }
     if allow_tools {
         let root = workspace.clone();
         let question = messages.iter().rev().find(|m|m.role == "user")
@@ -888,6 +900,10 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         "gemini" => cloud::gemini(client, gemini_model, messages, workspace, allow_tools, evidence, metrics).await,
         other => Err(format!("Unsupported provider: {other}")),
     }?;
+    // Fail closed on concrete, unsupported claims of writes/test execution.
+    // Ollama's final synthesis is currently non-streaming, so the raw response
+    // is checked before being returned to the TUI or stored as knowledge.
+    let answer = if use_coach { coach::guard_answer(answer) } else { answer };
     if require_project_evidence {
         investigation::require_evidence_for_overview(evidence_for_gate.source_read_count())?;
         if answer.trim().is_empty() {
