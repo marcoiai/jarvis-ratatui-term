@@ -283,7 +283,11 @@ async fn short_symphony_followup_requires_native_reads_and_retains_previous_sour
     let workspace = Workspace::new();
     std::fs::create_dir_all(workspace.0.join("src")).unwrap();
     std::fs::write(workspace.0.join("Cargo.toml"),
-        "[package]\\nname = \\"example\\"\\nversion = \\"0.1.0\\"\\nedition = \\"2024\\"\\n").unwrap();
+        r#"[package]
+name = "example"
+version = "0.1.0"
+edition = "2024"
+"#).unwrap();
     std::fs::write(workspace.0.join("src/main.rs"), "fn main() {}\n").unwrap();
     indexer::refresh(&workspace.0).unwrap();
     let pseudo = r#"Plano:
