@@ -353,7 +353,7 @@ edition = "2024"
         (200, call("src/main.rs")),
         (200, call("src/file_tools.rs")),
         (200, reply("Verified src/main.rs:1 and src/file_tools.rs:1")),
-        (200, format!("{}\\n", json!({"message":{"content":"{\\\"claims\\\":[]}"},"done":true}))),
+        (200, format!("{}\n", json!({"message":{"content":r#"{"claims":[]}"#},"done":true}))),
         (200, reply("Architect: inspected evidence in src/main.rs:1 and src/file_tools.rs:1")),
         (200, reply("A review grounded in src/main.rs:1 and src/file_tools.rs:1\nDUDE_KNOWLEDGE_JSON: []")),
     ]).await;
