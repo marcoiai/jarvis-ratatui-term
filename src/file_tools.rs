@@ -16,7 +16,8 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type":"function","function":{"name":"list_files","description":"List files in a workspace directory (read-only).","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path, default ."}}}}}),
         json!({"type":"function","function":{"name":"read_file","description":"Read a text file, optionally limited to line range. Similar to sed -n, but read-only.","parameters":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer"},"end_line":{"type":"integer"}},"required":["path"]}}}),
-        json!({"type":"function","function":{"name":"search_text","description":"Search text in workspace files, like grep -n. No regex; case-sensitive literal search.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File or directory relative path, default ."},"pattern":{"type":"string"}},"required":["pattern"]}}})
+        json!({"type":"function","function":{"name":"search_text","description":"Search text in workspace files, like grep -n. No regex; case-sensitive literal search.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File or directory relative path, default ."},"pattern":{"type":"string"}},"required":["pattern"]}}}),
+        json!({"type":"function","function":{"name":"search_index","description":"Search the saved structural project index for likely source files, symbols and declaration line hints. Metadata only: MUST use read_file to verify source evidence.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Concept, filename or symbol to locate"}},"required":["query"]}}})
     ]
 }
 
@@ -67,6 +68,13 @@ fn read_limited(path: &Path) -> Result<String,String> {
 }
 
 pub fn execute(root: &Path, name: &str, args: &Value) -> Result<String,String> {
+    if name == "search_index" {
+        let query = args.get("query").and_then(Value::as_str).ok_or("Missing query")?;
+        if query.trim().is_empty() || query.chars().count() > 512 {
+            return Err("Index query must be 1-512 characters".into());
+        }
+        return crate::indexer::search(root, query, 8);
+    }
     let relative = args.get("path").and_then(Value::as_str).unwrap_or(".");
     let path = resolve(root, relative)?;
     match name {
@@ -142,6 +150,24 @@ mod source_excerpt_contract_tests {
         let whole=execute(&root,"read_file",&json!({"path":"test.rs","start_line":1,"end_line":10})).unwrap();
         assert!(whole.contains("complete_file=true"));
         assert!(whole.contains("3: line3"));
+        let _=std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn index_lookup_is_navigation_not_a_source_read() {
+        let names = definitions().iter()
+            .filter_map(|entry| entry["function"]["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"search_index".to_owned()));
+        let root=std::env::temp_dir().join(format!("dude-index-tool-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("lib.rs"),"pub fn special_tool() {}\n").unwrap();
+        crate::indexer::refresh(&root).unwrap();
+        let result = execute(&root,"search_index",&json!({"query":"special_tool"})).unwrap();
+        assert!(result.contains("function special_tool:1"));
+        assert!(result.contains("not source evidence"));
+        assert!(!result.contains("SOURCE EXCERPT"));
         let _=std::fs::remove_dir_all(&root);
     }
 
