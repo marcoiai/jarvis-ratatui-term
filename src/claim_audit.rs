@@ -162,9 +162,9 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
         };
         // A bad citation proves only that the citation was not verified. It does
         // not prove the underlying claim false or unsupported.
-        if !invalid_refs.is_empty() {
-            status = "NÃO AVALIÁVEL";
-        } else if valid_refs.is_empty() && status != "NÃO SUSTENTADA" {
+        if !invalid_refs.is_empty()
+            || (valid_refs.is_empty() && status != "NÃO SUSTENTADA")
+        {
             status = "NÃO AVALIÁVEL";
         }
         let mismatch = claim_names_uncited_file(claim, &valid_refs);

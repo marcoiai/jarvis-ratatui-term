@@ -249,7 +249,7 @@ fn unsupported_execution_claim(answer: &str) -> bool {
         // Only explicit first-person commitments/completed actions, not questions,
         // proposals, commands for the user, or third-party observations.
         let lower = ascii_pt(line);
-        let clauses = lower.split(|ch: char| matches!(ch, '.' | ';' | ',' | '!' | '?'));
+        let clauses = lower.split(['.', ';', ',', '!', '?']);
         clauses.into_iter().any(|clause| {
             let negative = has_any(clause, &[
                 "nao aplicarei", "nao vou aplicar", "nao executei",

@@ -106,8 +106,10 @@ impl EvidenceCache {
             if let Some(content) = item["result"].as_str() {
                 for row in content.lines() {
                     let Some((number, _)) = row.split_once(": ") else { continue; };
-                    if let Ok(number) = number.parse::<usize>() {
-                        if (start..=end).contains(&number) { seen.insert(number); }
+                    if let Ok(number) = number.parse::<usize>()
+                        && (start..=end).contains(&number)
+                    {
+                        seen.insert(number);
                     }
                 }
             }

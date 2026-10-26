@@ -260,12 +260,14 @@ async fn coach_injects_capabilities_and_stops_unsupported_ollama_promise() {
     // No tools are exposed to this call. The guard still applies to its answer.
     let answer = query_provider(
         &client, "ollama",
-        vec![Message { role: "user".into(), content: "Aplique um patch em src/main.rs e confirme cargo test".into() }],
+        vec![Message { role: "user".into(), content: "Aplique um patch em src/main.rs para corrigir o panic UTF-8 e execute cargo test".into() }],
         workspace.0.clone(), &host, "test-model", "unused", "unused",
         false, evidence.clone(), metrics, None,
     ).await.unwrap();
-    assert!(answer.contains("bloqueio de capacidade"));
+    assert!(answer.contains("bloqueio de capacidade"), "unexpected answer: {answer}");
     assert!(!answer.contains("aplicarei o patch"));
+    assert!(!answer.contains("preciso saber qual comportamento deseja alterar"),
+        "A specified change must not be treated as underspecified");
     let requests = task.await.unwrap();
     let messages = requests[0]["messages"].as_array().unwrap();
     assert!(messages.iter().any(|m|
