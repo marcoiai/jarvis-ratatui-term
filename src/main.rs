@@ -2069,15 +2069,19 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if *provider=="gemini"{selected_model}else{gemini_model},
             index == 0,evidence.clone(),metrics.clone(),
             if index == 2 {Some(updates.clone())} else {None}).await;
+        // Record stage failure accurately even when a provider returned text
+        // but failed the post-execution evidence contract.
+        let result = result.and_then(|response| {
+            if index == 0
+                && investigation::source_inspection_requested(question)
+                && evidence.source_read_count() == 0 {
+                Err("Nenhuma leitura real de arquivo foi observada. search_index e ferramentas escritas como texto não constituem evidência.".into())
+            } else {
+                Ok(response)
+            }
+        });
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
-        // No downstream synthesis from a fabricated or unsupported Investigator
-        // "success". This is a second line of defense for source-specific work.
-        if index == 0
-            && investigation::source_inspection_requested(question)
-            && evidence.source_read_count() == 0 {
-            return Err("Investigator (symphony) failed: nenhuma leitura real de arquivo foi observada. search_index e ferramentas escritas como texto não constituem evidência.".into());
-        }
         // A durable stage record is historical evidence, never an automatic replay.
         // Stop before dispatching the next provider if the checkpoint cannot be saved.
         symphony_checkpoint::save(&workspace, question, name, provider, selected_model,
