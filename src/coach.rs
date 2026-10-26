@@ -164,9 +164,37 @@ pub fn preflight_read_target(question: &str) -> Option<String> {
     })
 }
 
+/// A vague request to "apply a patch and run tests" does not say WHAT to
+/// change. Ask for the missing change instead of inventing a module audit.
+pub fn is_underspecified_patch_request(question: &str) -> bool {
+    let q = ascii_pt(original_request(question));
+    category(question) == Some("safety_actions")
+        && q.contains("patch")
+        && has_any(&q, &["cargo test", "rode os testes", "execute os testes"])
+        && !has_any(&q, &[
+            " para ", "corrig", "adicion", "substit", "remove", "remov",
+            "renome", "implemen", "refator", " alter", " modifi", " atualiz",
+            " consert", " resolv", " inclui", " incluir", " mudar ",
+        ])
+}
+
 /// Reject redundant permission-seeking on explicit impossible mutation requests.
 /// This is not a semantic evaluation of the underlying source code.
 pub fn guard_answer_for_request(answer: String, question: &str, observed_reads: usize) -> String {
+    // We should not create a speculative architectural report for a request
+    // that does not identify the desired code change.
+    if is_underspecified_patch_request(question) {
+        let observation = if observed_reads > 0 {
+            "Consultei um trecho do arquivo indicado, mas isso não valida sua implementação."
+        } else {
+            "Não há uma leitura de código confirmada nesta solicitação."
+        };
+        return format!(
+            "{observation} Para propor um patch, preciso saber qual comportamento deseja alterar. \
+             Com as ferramentas de IA disponíveis, posso ler fontes e preparar um diff revisável. \
+             Não posso aplicar patches nem executar cargo test. Nenhum teste foi executado pelo agente."
+        );
+    }
     let blocked = guard_answer(answer);
     let lower = ascii_pt(&blocked);
     let asks_permission = has_any(&lower, &[
@@ -229,6 +257,22 @@ fn unsupported_execution_claim(answer: &str) -> bool {
                 "nao apliquei", "nao foram executados", "nunca executei",
             ]);
             if negative {
+                return false;
+            }
+            // A claim ATTRIBUTED to documentation is not a claim that DUDE
+            // performed the action. E.g. "O README diz que testes passaram
+            // (ainda não verificado)" must survive this guard unchanged.
+            let attributed = has_any(clause, &[
+                "readme", "documentac", "segundo ", "diz que", "alega ",
+                "relatorio", "o log ", "os logs ", "nao verificado",
+                "nao confirmado", "sem confirmacao", "nao e verdade que",
+            ]);
+            let explicit_agent_action = has_any(clause, &[
+                "aplicarei", "vou aplicar", "irei aplicar", "apliquei",
+                "executarei", "vou executar", "irei executar", "executei",
+                "confirmarei", "vou confirmar", "fiz o deploy", "realizei o deploy",
+            ]);
+            if attributed && !explicit_agent_action {
                 return false;
             }
             let action = has_any(clause, &[
@@ -320,6 +364,38 @@ mod tests {
             guard_answer_for_request("Posso ler o arquivo?".into(), "bom dia", 0),
             "Posso ler o arquivo?"
         );
+    }
+
+    #[test]
+    fn quoted_or_documented_test_results_are_not_execution_claims() {
+        for answer in [
+            "O README diz que testes passaram (ainda não verificado).",
+            "Segundo a documentação, o patch foi aplicado; não confirmei.",
+            "Os logs alegam que testes passaram, mas não houve verificação.",
+            "Não é verdade que os testes passaram.",
+        ] {
+            assert_eq!(guard_answer(answer.into()), answer);
+        }
+        for answer in [
+            "Executei cargo test; testes passaram.",
+            "Os testes passaram.",
+            "Patch aplicado em src/main.rs.",
+        ] {
+            assert!(guard_answer(answer.into()).contains("bloqueio de capacidade"), "{answer}");
+        }
+    }
+
+    #[test]
+    fn vague_mutation_stays_short_and_requests_actual_change() {
+        let q = "Aplique um patch em src/main.rs e execute cargo test.";
+        assert!(is_underspecified_patch_request(q));
+        let reported = "Análise de Componentes Principais: router, memory, cache...";
+        let answer = guard_answer_for_request(reported.into(), q, 1);
+        assert!(answer.contains("qual comportamento deseja alterar"), "{answer}");
+        assert!(answer.contains("Não posso aplicar patches"), "{answer}");
+        assert!(!answer.contains("Análise de Componentes"), "{answer}");
+        assert!(!is_underspecified_patch_request(
+            "Aplique um patch em src/main.rs para corrigir o panic Unicode e execute cargo test."));
     }
 
     #[test]

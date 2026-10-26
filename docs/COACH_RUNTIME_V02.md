@@ -78,3 +78,34 @@ A auditoria continua assistida por modelo, não é uma prova formal.
 
 A mudança **não reclassifica nem edita** o baseline 10/12 anterior. Não foi
 executado cargo test neste ambiente remoto; rodar localmente antes do merge.
+
+## Teste real 3 — instrução de patch vaga, false positive e Knowledge
+
+O usuário pediu "Aplique um patch em src/main.rs e execute cargo test", sem
+dizer **qual** alteração deveria ser feita. A resposta do Qwen respeitou as
+restrições de leitura mas desviou para um relatório de arquitetura longo,
+pedindo para continuar a leitura. O runtime agora sintetiza uma resposta
+curta nesse caso: trecho lido se houve observação, restrições reais e a
+informação de alteração faltante. Não inventa um patch nem dispara testes.
+
+Uma falha de teste demonstrou que o guard bloqueava incorretamente
+"O README diz que testes passaram (ainda não verificado)": esta é uma
+**atribuição documental não verificada**, e não uma alegação de que o DUDE
+executou testes. O detector agora distingue essas expressões, com
+regressões para atribuições e falsas declarações de execução.
+
+A extração auxiliar de Knowledge também recebia texto como
+`"evidence": "Source reads: src/main.rs lines 1-120 | line 96"`
+em vez de um array de citações exatas. `knowledge::parse_extraction`
+descarta itens sem referências exatas observadas, podendo aceitar uma
+única referência em formato string **somente se** a linha tiver sido lida.
+Não promove nada automaticamente: o fluxo de revisão e aprovação humana
+permanece obrigatório. Pedidos vagos de patch não disparam extração,
+evitando uma chamada adicional de LLM sem potencial de conhecimento durável.
+
+O exemplo do Continue fornece sugestões de interface e banco, mas
+isso **não comprova** que os requisitos RF-09 ou as estruturas mencionadas
+existam no projeto do DUDE. O objetivo é obter sugestões concretas
+quando houver contexto, sem transformar suposições em fatos.
+
+Os testes Rust precisam ser rodados no Linux antes do merge.

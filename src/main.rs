@@ -708,7 +708,8 @@ impl App {
                     // extraction JSON to the UI or let a model promote memory itself.
                     metrics.stage("solo_primary_response", &solo_provider, primary_start, result.is_ok());
                     let result = match result {
-                        Ok(answer) if evidence.len() > 0 => {
+                        Ok(answer) if evidence.source_read_count() > 0
+                            && !(coach::enabled() && coach::is_underspecified_patch_request(&question)) => {
                             let evidence_text = evidence.export();
                             let prompt = format!(
                                 "Extract up to 6 durable, project-specific architectural decisions, conventions, or non-obvious confirmed behaviors from the answer below. Never propose source declarations, signatures, structs, enums, or transient implementation details. Respond ONLY with a JSON array of objects with classification (documented|verified|inferred), claim and evidence. Every evidence value MUST be an exact file:line reference that appears in the provided tool observations. No generic facts, no guesses, no markdown. If nothing qualifies, return [].\\n\\nQuestion: {}\\n\\nAnswer: {}\\n\\nTool observations:\\n{}",
@@ -740,7 +741,7 @@ impl App {
                                 Ok(raw) => {
                                     let raw = raw.trim().trim_start_matches("```json").trim_start_matches("```")
                                         .trim_end_matches("```").trim();
-                                    match serde_json::from_str::<Vec<knowledge::CandidateDraft>>(raw) {
+                                    match knowledge::parse_extraction(raw, &evidence) {
                                         Ok(drafts) => match knowledge::propose(&workspace, &question, &drafts, &evidence) {
                                             Ok(ids) if !ids.is_empty() =>
                                                 Ok(format!("{answer}\\n\\n🧠 Knowledge: {} candidato(s) aguardando tua aprovação.", ids.len())),
