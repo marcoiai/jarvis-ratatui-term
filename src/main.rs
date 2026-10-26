@@ -895,6 +895,24 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
             ),
         });
     }
+    // Search actual call sites before asking the LLM to decide whether a
+    // symbol is unused. Results are bounded and kept as read-only evidence.
+    if use_coach && allow_tools {
+        let root = workspace.clone();
+        let cache = evidence.clone();
+        let request = question.clone();
+        let probe = tokio::task::spawn_blocking(move ||
+            investigation::reference_probe(&root, &request, &cache)
+        ).await.map_err(|error| error.to_string())?;
+        if let Some(probe) = probe {
+            messages.push(Message {
+                role: "user".into(),
+                content: format!(
+                    "Read-only DUDE reference probe. This is partial evidence,                      not proof of absence of callers. Use inspected lines, not                      invented tests or files.\n{probe}"
+                ),
+            });
+        }
+    }
     if allow_tools {
         let root = workspace.clone();
         let bootstrap = investigation::needs_baseline(&question);

@@ -361,3 +361,42 @@ async fn coach_preflight_reads_named_source_and_repairs_real_permission_loop() {
     assert!(convo.contains("DUDE Coach v0.2"));
     assert!(requests[0]["tools"].as_array().is_some());
 }
+
+
+#[tokio::test]
+async fn coach_investigates_named_symbol_and_related_knowledge_before_model_reply() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("src/evidence.rs"),
+        "pub fn declaration_drafts() {}\n").unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"),
+        "fn main() { declaration_drafts(); }\n").unwrap();
+    std::fs::write(workspace.0.join("src/knowledge.rs"),
+        "pub fn propose() {}\n").unwrap();
+    let (host, task) = server(vec![(200, reply(
+        "O método aparece no arquivo de origem e em src/main.rs:1; proponho remover código."
+    ))]).await;
+    let evidence = evidence::EvidenceCache::default();
+    let client = reqwest::Client::builder().no_proxy()
+        .timeout(Duration::from_secs(5)).build().unwrap();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message {
+            role: "user".into(),
+            content: "Investigue o método declaration_drafts em src/evidence.rs; \
+                procure onde é chamado no projeto e o fluxo Knowledge. \
+                Proponha um diff concreto e não peça autorização.".into()
+        }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        true, evidence.clone(), metrics::Metrics::default(), None,
+    ).await.unwrap();
+    assert!(answer.contains("não contém um diff unificado"), "{answer}");
+    assert!(evidence.observed_reference("src/main.rs:1"));
+    assert!(evidence.observed_reference("src/evidence.rs:1"));
+    assert!(evidence.observed_reference("src/knowledge.rs:1"));
+    let requests = task.await.unwrap();
+    let messages = requests[0]["messages"].to_string();
+    assert!(messages.contains("symbol reference probe"), "{messages}");
+    assert!(messages.contains("src/main.rs:1:"), "{messages}");
+    assert!(messages.contains("src/knowledge.rs"), "{messages}");
+}

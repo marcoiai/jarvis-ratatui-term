@@ -109,3 +109,31 @@ existam no projeto do DUDE. O objetivo é obter sugestões concretas
 quando houver contexto, sem transformar suposições em fatos.
 
 Os testes Rust precisam ser rodados no Linux antes do merge.
+
+## Teste real — diagnóstico do `declaration_drafts`
+
+O Qwen localizou a definição de `declaration_drafts`, mas examinou apenas
+`evidence.rs` e `claim_audit.rs` ao concluir que não existiam outros usos.
+Não inspecionou `knowledge.rs` nem `main.rs`, entregou um comentário no
+lugar de diff, sugeriu `cargo test --lib evidence` para um binário e encerrou
+pedindo autorização para aplicar alterações.
+
+Este ajuste introduz um `reference_probe` de leitura **limitada** para
+investigações de uso de símbolos, executando busca literal no workspace,
+abrindo trechos de ocorrências e de arquivos explicitamente citados,
+e incluindo o módulo Knowledge quando mencionado. A busca continua limitada
+a 150 arquivos/100 resultados; ausência de correspondência **não prova**
+ausência global de chamadas. O tratamento existente de caminhos sensíveis
+continua em `file_tools::execute`.
+
+O Coach também orienta a produção de diffs unificados reais quando pedidos.
+Se o modelo entregar apenas pseudocódigo, a resposta permanece visível com
+um aviso objetivo de que não é um diff aplicável. Quando o usuário proíbe
+perguntas de autorização, o runtime remove uma pergunta final redundante.
+
+O probe informa sobre o uso de `cargo test` em crates binários sem
+`src/lib.rs`, evitando o comando incorreto `cargo test --lib`.
+Foram adicionados testes unitários de escopo, descoberta real de chamadas
+e um teste de integração com Ollama simulado.
+
+Os testes deste commit ainda precisam ser executados localmente.

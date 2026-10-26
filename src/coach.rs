@@ -133,6 +133,13 @@ pub fn supplemental_prompt(question: &str, mode: ToolMode) -> String {
     if mode == ToolMode::ReadOnly {
         prompt.push_str("\nSe o usuário nomeou um arquivo dentro do workspace, use as leituras autorizadas disponíveis. Não peça permissão para ler com ferramentas já autorizadas. Se não souber o que modificar, diga o limite operacional e pergunte somente qual mudança é desejada.");
     }
+    let q = original_request(question).to_lowercase();
+    if q.contains("diff concreto") || q.contains("diff aplicável") || q.contains("patch aplicável") {
+        prompt.push_str("\nENTREGÁVEL OBRIGATÓRIO: um diff unificado real, com linhas --- a/arquivo, +++ b/arquivo e @@, fundamentado nos trechos realmente lidos. Não substitua o diff por pseudocódigo, comentários sobre linhas a remover ou código com reticências. Caso não haja evidência suficiente, declare que não é possível produzir um diff fiel. Nunca invente testes ou símbolos.");
+    }
+    if q.contains("não peça autorização") || q.contains("nao peca autorizacao") {
+        prompt.push_str("\nNão termine com perguntas do tipo 'Quer que eu aplique?' ou 'Quer prosseguir?'. Responda com o que foi solicitado, separando a proposta da execução indisponível.");
+    }
     prompt
 }
 
@@ -178,6 +185,38 @@ pub fn is_underspecified_patch_request(question: &str) -> bool {
         ])
 }
 
+/// Output-level check: the model may skip a requested patch and end with a
+/// permission question even when the user only asked for a proposal.
+fn check_requested_deliverable(answer: String, question: &str) -> String {
+    let q = ascii_pt(original_request(question));
+    let mut lines: Vec<&str> = answer.lines().collect();
+    if q.contains("nao peca autorizacao") {
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+        if lines.last().is_some_and(|line| {
+            let lower = ascii_pt(line.trim());
+            ["quer que eu aplique", "quer prosseguir", "deseja que eu aplique",
+             "quer que eu execute", "deseja que eu execute"].iter()
+                .any(|prefix| lower.starts_with(prefix))
+        }) {
+            lines.pop();
+        }
+    }
+    let mut response = lines.join("\n");
+    let wants_diff = ["diff concreto", "diff aplicavel", "patch aplicavel"]
+        .iter().any(|word| q.contains(word));
+    let is_unified = response.contains("--- a/")
+        && response.contains("+++ b/")
+        && response.contains("@@");
+    if wants_diff && !is_unified {
+        response.push_str(
+            "\n\n⚠ DUDE Coach: a resposta não contém um diff unificado aplicável.              Descrições de linhas a remover não são um patch. Não trate esta              proposta como alteração implementada."
+        );
+    }
+    response
+}
+
 /// Reject redundant permission-seeking on explicit impossible mutation requests.
 /// This is not a semantic evaluation of the underlying source code.
 pub fn guard_answer_for_request(answer: String, question: &str, observed_reads: usize) -> String {
@@ -195,7 +234,7 @@ pub fn guard_answer_for_request(answer: String, question: &str, observed_reads: 
              Não posso aplicar patches nem executar cargo test. Nenhum teste foi executado pelo agente."
         );
     }
-    let blocked = guard_answer(answer);
+    let blocked = check_requested_deliverable(guard_answer(answer), question);
     let lower = ascii_pt(&blocked);
     let asks_permission = has_any(&lower, &[
         "devo proceder com a leitura", "posso proceder com a leitura",
@@ -396,6 +435,19 @@ mod tests {
         assert!(!answer.contains("Análise de Componentes"), "{answer}");
         assert!(!is_underspecified_patch_request(
             "Aplique um patch em src/main.rs para corrigir o panic Unicode e execute cargo test."));
+    }
+
+    #[test]
+    fn identifies_missing_real_diff_and_removes_unwanted_permission_question() {
+        let question = "Proponha um diff concreto e não peça autorização para aplicar.";
+        let bad = "Remova linhas 20-30.\nQuer que eu aplique o diff?";
+        let guarded = guard_answer_for_request(bad.into(), question, 0);
+        assert!(!guarded.contains("Quer que eu aplique"), "{guarded}");
+        assert!(guarded.contains("não contém um diff unificado"), "{guarded}");
+
+        let good = "Proposta:\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old\n+new";
+        let accepted = guard_answer_for_request(good.into(), question, 0);
+        assert_eq!(accepted, good);
     }
 
     #[test]
