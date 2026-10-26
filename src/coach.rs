@@ -130,7 +130,62 @@ pub fn supplemental_prompt(question: &str, mode: ToolMode) -> String {
             }
         }
     }
+    if mode == ToolMode::ReadOnly {
+        prompt.push_str("\nSe o usuário nomeou um arquivo dentro do workspace, use as leituras autorizadas disponíveis. Não peça permissão para ler com ferramentas já autorizadas. Se não souber o que modificar, diga o limite operacional e pergunte somente qual mudança é desejada.");
+    }
     prompt
+}
+
+/// Proactive bounded READ for explicit mutation requests with a named relative
+/// source path. The file tool still enforces canonical workspace/sensitive paths.
+pub fn preflight_read_target(question: &str) -> Option<String> {
+    if category(question) != Some("safety_actions") {
+        return None;
+    }
+    original_request(question).split_whitespace().find_map(|word| {
+        // Keep leading dot, slash and tilde to reject hidden, absolute and
+        // home paths rather than accidentally normalizing them into safe ones.
+        let candidate = word.trim_matches(|c: char|
+            c.is_ascii_punctuation() && !matches!(c, '.' | '/' | '~'));
+        let token = candidate.trim_end_matches(|c: char| c.is_ascii_punctuation() && c != '/');
+        if token.is_empty() || token.len() > 200 {
+            return None;
+        }
+        let extension = token.rsplit_once('.')?.1;
+        if !matches!(extension, "rs" | "py" | "php" | "js" | "ts" | "java" | "cpp" | "hpp" | "h" | "c" | "qml") {
+            return None;
+        }
+        if token.starts_with('/') || token.starts_with('~') || token.contains('\\')
+            || token.split('/').any(|part| part.is_empty() || part == ".." || part == "." || part.starts_with('.'))
+        {
+            return None;
+        }
+        Some(token.to_owned())
+    })
+}
+
+/// Reject redundant permission-seeking on explicit impossible mutation requests.
+/// This is not a semantic evaluation of the underlying source code.
+pub fn guard_answer_for_request(answer: String, question: &str, observed_reads: usize) -> String {
+    let blocked = guard_answer(answer);
+    let lower = ascii_pt(&blocked);
+    let asks_permission = has_any(&lower, &[
+        "devo proceder com a leitura", "posso proceder com a leitura",
+        "voce tem acesso a eles", "esses arquivos estao no workspace",
+        "estes arquivos estao no workspace", "quer que eu leia",
+        "posso ler o arquivo", "posso ler src/",
+    ]);
+    if category(question) != Some("safety_actions") || !asks_permission {
+        return blocked;
+    }
+    let observation = if observed_reads > 0 {
+        "Foi realizada uma leitura limitada nesta solicitação. Isso não comprova o funcionamento completo. "
+    } else {
+        "Ainda não há leituras de código confirmadas nesta solicitação. "
+    };
+    format!(
+        "{observation}Posso inspecionar arquivos e propor um diff para revisão humana. Não posso aplicar patches nem executar cargo test com as ferramentas de IA atuais; não afirmarei que testes passaram. Para propor um patch concreto, descreva o comportamento que deseja modificar."
+    )
 }
 
 /// Narrow, fail-closed check for first-person promises/completion claims that
@@ -242,6 +297,29 @@ mod tests {
         let reply = guard_answer("Executei cargo test; testes passaram.".into());
         assert!(reply.contains("bloqueio de capacidade"));
         assert!(!reply.contains("testes passaram."));
+    }
+
+    #[test]
+    fn corrects_permission_loop_from_real_model_answer() {
+        let user = "Aplique um patch em src/main.rs e execute cargo test.";
+        let answer = "Estes arquivos estão no workspace? Você tem acesso a eles e devo proceder com a leitura de src/main.rs para entender o contexto antes de propor ou aplicar mudanças?";
+        let correction = guard_answer_for_request(answer.to_owned(), user, 1);
+        assert!(correction.contains("Não posso aplicar patches"));
+        assert!(!correction.contains("devo proceder"));
+        assert_eq!(preflight_read_target(user).as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn preflight_only_accepts_explicit_safe_source_paths() {
+        assert_eq!(preflight_read_target("Aplique patch em ../secret.rs"), None);
+        assert_eq!(preflight_read_target("Aplique patch em /etc/passwd.rs"), None);
+        assert_eq!(preflight_read_target("Aplique patch em .dude/secret.rs"), None);
+        assert_eq!(preflight_read_target("bom dia src/main.rs"), None);
+        assert_eq!(preflight_read_target("Aplique patch em src/lib.rs"), Some("src/lib.rs".into()));
+        assert_eq!(
+            guard_answer_for_request("Posso ler o arquivo?".into(), "bom dia", 0),
+            "Posso ler o arquivo?"
+        );
     }
 
     #[test]

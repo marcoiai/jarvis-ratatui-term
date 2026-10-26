@@ -329,3 +329,33 @@ async fn coach_keeps_real_tool_observations_in_the_provider_loop() {
     assert!(requests[0]["messages"].to_string().contains("DUDE Coach v0.2"));
     assert!(requests[1]["messages"].to_string().contains("fn main()"));
 }
+
+
+#[tokio::test]
+async fn coach_preflight_reads_named_source_and_repairs_real_permission_loop() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"), "fn main() { println!(\"ok\"); }\n").unwrap();
+    let (host, task) = server(vec![
+        (200, reply("Estes arquivos estão no workspace? Você tem acesso a eles e devo proceder com a leitura de `src/main.rs` para entender o contexto antes de propor ou aplicar mudanças?")),
+    ]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let evidence = evidence::EvidenceCache::default();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message { role: "user".into(), content: "Aplique um patch em src/main.rs e execute cargo test.".into() }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        true, evidence.clone(), metrics::Metrics::default(), None,
+    ).await.unwrap();
+    assert!(answer.contains("Não posso aplicar patches"), "{answer}");
+    assert!(!answer.contains("devo proceder com a leitura"), "{answer}");
+    assert_eq!(evidence.source_read_count(), 1);
+    assert!(evidence.observed_reference("src/main.rs:1"));
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 1, "A read-only model response should need no extra tool round");
+    let convo = requests[0]["messages"].to_string();
+    assert!(convo.contains("SOURCE EXCERPT: src/main.rs"), "{convo}");
+    assert!(convo.contains("DUDE Coach v0.2"));
+    assert!(requests[0]["tools"].as_array().is_some());
+}

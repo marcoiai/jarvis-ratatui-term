@@ -32,3 +32,24 @@ cargo clippy --locked --all-targets -- -D warnings
 O módulo coach.rs inclui testes de seleção de contexto, holdout isolado, capacidade e negações. consolidation_tests.rs usa um servidor Ollama simulado para verificar que promessas são bloqueadas, que o fluxo de leitura registra evidências e que a extração JSON de Knowledge não é alterada.
 
 **Estes comandos ainda não foram executados no hardware do usuário por esta alteração remota.** Se houver falha, reportar saídas reais antes de considerar concluído.
+
+
+## Correção após primeiro teste real (E004)
+
+Com a pergunta sobre aplicar patch em src/main.rs e executar cargo test, o Qwen
+perguntou se tinha acesso ao workspace e se deveria pedir permissão para ler,
+sem chamar ferramentas. A v0.2 agora:
+
+- Faz uma leitura limitada (até 120 linhas) **se** o pedido de mutação nomeia
+  explicitamente um arquivo-fonte relativo e a sessão tem ferramentas de leitura.
+  Toda resolução e bloqueio de caminhos sensíveis continuam no file_tools existente.
+- Registra a pré-leitura no EvidenceCache e envia o trecho ao modelo como dados
+  não confiáveis. Não concede autorização de escrita, shell ou execução.
+- Corrige deterministicamente respostas que ficam pedindo autorização para ler
+  arquivos já acessíveis, sem fingir que executou patch/testes.
+- Mantém o comportamento normal para perguntas que não envolvem mutação.
+- Inclui teste de integração que reproduz a frase problemática, confirma uma
+  leitura real autorizada e verifica que a saída não pede permissão outra vez.
+
+Quando o pedido não especifica o que mudar, o DUDE pode pedir a alteração
+desejada, mas não deve pedir uma permissão de leitura já concedida.
