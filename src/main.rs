@@ -1813,7 +1813,13 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         // Only indexed Rust projects use the compact bootstrap; other stacks keep
         // the existing automatic baseline and can still call search_index.
         let indexed_query = if review_followup {
-            previous_user.unwrap_or(&question)
+            // Repeated "investiga melhor" turns should still locate code for
+            // the original technical question, not for the word "melhor".
+            messages.iter().rev().filter(|m|m.role == "user").skip(1).take(8)
+                .find(|m| investigation::source_inspection_requested(&m.content)
+                    || investigation::needs_baseline(&m.content))
+                .map(|m|m.content.as_str())
+                .or(previous_user).unwrap_or(&question)
         } else {
             &question
         };
@@ -2063,6 +2069,13 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     let previous_user = messages.iter().rev().filter(|m|m.role=="user")
         .nth(1).map(|m|m.content.as_str());
     let continue_review = investigation::review_followup(question, previous_user);
+    let previous_source_question = if continue_review {
+        messages.iter().rev().filter(|m| m.role == "user").skip(1).take(8)
+            .find(|m| investigation::source_inspection_requested(&m.content)
+                || investigation::needs_baseline(&m.content))
+            .map(|m|m.content.as_str())
+            .or(previous_user)
+    } else { None };
     for (index,(name,provider,instruction)) in steps.iter().enumerate() {
         let mut stage:Vec<Message> = messages.iter().filter(|m|m.role=="system").cloned().collect();
         stage.push(Message{role:"system".into(),content:format!("You are the {name} in DUDE Symphony. {instruction}")});
@@ -2070,7 +2083,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
         // for explicit short follow-ups, not unrelated chat history. The prior
         // request supplies intent only: it is NOT evidence of code inspection.
         if continue_review {
-            if let Some(previous) = previous_user {
+            if let Some(previous) = previous_source_question {
                 stage.push(Message { role: "user".into(),
                     content: format!("Previous user source-inspection request (context, not source evidence):\n{}",
                         previous.chars().take(1200).collect::<String>()) });
