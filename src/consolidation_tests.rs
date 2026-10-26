@@ -234,6 +234,45 @@ async fn symphony_uses_role_models_preserves_evidence_and_checkpoints_before_fai
     assert!(checkpoint["note"].as_str().unwrap().contains("not validated for automatic resume"));
 }
 
+#[tokio::test]
+async fn focused_source_inspection_without_native_reads_fails_before_architect() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("Cargo.toml"),
+        "[package]\\nname = \\"dude-fixture\\"\\nversion = \\"0.1.0\\"\\nedition = \\"2024\\"\\n").unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"),
+        "fn main() { println!(\\"hello\\"); }\\n").unwrap();
+    indexer::refresh(&workspace.0).unwrap();
+    let (host, task) = server(vec![
+        (200, reply("I cannot find any source lines for this request.")),
+        (200, reply("No source files could be examined.")),
+    ]).await;
+    let mut roles = roles::Roles::default();
+    for name in ["investigator", "architect", "reviewer"] {
+        roles.set(name, "ollama").unwrap();
+        roles.set_model(name, "test-model").unwrap();
+    }
+    let metrics = metrics::Metrics::default();
+    let evidence = evidence::EvidenceCache::default();
+    let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let (updates, _receiver) = mpsc::unbounded_channel();
+    let question = "Investigue como o DUDE executa chamadas de ferramentas no Ollama. Localize as funções relevantes pelo índice, leia os arquivos e explique o fluxo com referências de linha.";
+    let result = run_symphony(&client, &roles,
+        vec![Message {role:"user".into(), content:question.into()}],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        evidence.clone(), metrics.clone(), updates).await;
+    let error = result.unwrap_err();
+    assert!(error.contains("Investigator (ollama) failed"), "{error}");
+    assert!(error.contains("Revisão incompleta"), "{error}");
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 2, "must not dispatch Architect or Reviewer");
+    assert!(requests[0]["tools"].as_array().unwrap().iter().any(
+        |tool| tool["function"]["name"] == "search_index"));
+    assert!(requests[0]["messages"].to_string().contains("STRUCTURAL INDEX"));
+    assert!(requests[1]["messages"].to_string().contains("Call native read_file tools now"));
+    assert_eq!(evidence.source_read_count(), 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn symphony_checkpoint_refuses_symlink_destination() {
