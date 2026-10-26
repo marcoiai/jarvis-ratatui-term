@@ -55,11 +55,11 @@ fn groq_compact_messages(messages: &[Value]) -> Vec<Value> {
         let mut msg = original.clone();
         let role = msg["role"].as_str().unwrap_or("");
         let limit = if role == "tool" { MAX_TOOL_CHARS } else { MAX_OTHER_CHARS };
-        if let Some(content) = msg["content"].as_str() {
-            if content.chars().count() > limit {
-                let shortened = select_evidence(content, &terms, limit);
-                msg["content"] = json!(shortened);
-            }
+        if let Some(content) = msg["content"].as_str()
+            && content.chars().count() > limit
+        {
+            let shortened = select_evidence(content, &terms, limit);
+            msg["content"] = json!(shortened);
         }
         msg
     }).collect()

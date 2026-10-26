@@ -662,24 +662,23 @@ impl App {
                 }
                 return;
             }
-            if let Some(store)=&self.memory {
-                if let Some(question)=self.last_question.as_deref() {
-                    if let Err(error)=store.save_pending(&memory::PendingRequest {
-                        question: question.to_owned(),
-                        roles: Some(roles.clone()),
-                        ollama_model: Some(ollama_model.clone()),
-                        groq_model: Some(groq_model.clone()),
-                        gemini_model: Some(gemini_model.clone()),
-                        cloud_was_allowed: self.cloud_allowed,
-                    }) {
-                        self.output.push_str(&format!("Checkpoint error (request not dispatched): {error}\n"));
-                        self.history.pop();
-                        self.last_question=None;
-                        self.busy=false;
-                        self.started_at=None;
-                        return;
-                    }
-                }
+            if let Some(store)=&self.memory
+                && let Some(question)=self.last_question.as_deref()
+                && let Err(error)=store.save_pending(&memory::PendingRequest {
+                    question: question.to_owned(),
+                    roles: Some(roles.clone()),
+                    ollama_model: Some(ollama_model.clone()),
+                    groq_model: Some(groq_model.clone()),
+                    gemini_model: Some(gemini_model.clone()),
+                    cloud_was_allowed: self.cloud_allowed,
+                })
+            {
+                self.output.push_str(&format!("Checkpoint error (request not dispatched): {error}\n"));
+                self.history.pop();
+                self.last_question=None;
+                self.busy=false;
+                self.started_at=None;
+                return;
             }
             tokio::spawn(async move {
                 let is_symphony=matches!(&route, router::Route::Symphony);
@@ -823,10 +822,10 @@ impl App {
                         self.output.push_str(&format!("History write warning: {err}\\n"));
                     }
                 }
-                if let Some(store)=&self.memory {
-                    if let Err(error)=store.clear_pending() {
-                        self.output.push_str(&format!("Recovery cleanup warning: {error}\n"));
-                    }
+                if let Some(store)=&self.memory
+                    && let Err(error)=store.clear_pending()
+                {
+                    self.output.push_str(&format!("Recovery cleanup warning: {error}\n"));
                 }
                 self.history.push(Message { role: "assistant".into(), content: text.clone() });
                 if self.streamed { self.output.push_str(&format!("\n\n{telemetry}\n")); }
