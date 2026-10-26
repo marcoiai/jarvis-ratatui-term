@@ -1065,7 +1065,10 @@ impl App {
             return;
         }
 
-        let selection = router::route(&input, &self.roles.mode, &self.communication.language);
+        let previous_user = self.history.iter().rev().find(|m|m.role == "user")
+            .map(|m|m.content.as_str());
+        let selection = router::route_with_context(
+            &input, &self.roles.mode, &self.communication.language, previous_user);
         if let router::Route::Local(reply) = &selection {
             self.output.push_str(reply);
             self.output.push('\n');
@@ -1809,8 +1812,14 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         // A current index supplies navigation hints without making source claims.
         // Only indexed Rust projects use the compact bootstrap; other stacks keep
         // the existing automatic baseline and can still call search_index.
-        let indexed_navigation = if (bootstrap || source_inspection) && root.join("Cargo.toml").is_file() {
-            indexer::search(&root, &question, 8).ok()
+        let indexed_query = if review_followup {
+            previous_user.unwrap_or(&question)
+        } else {
+            &question
+        };
+        let indexed_navigation = if (bootstrap || source_inspection || review_followup)
+            && root.join("Cargo.toml").is_file() {
+            indexer::search(&root, indexed_query, 8).ok()
         } else { None };
         // A focused investigation previously got NO indexed hints because only
         // broad "project overview" requests entered the bootstrap branch.
@@ -2051,9 +2060,22 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     let mut shared = String::new();
     let question = messages.iter().rev().find(|m|m.role=="user")
         .map(|m|m.content.as_str()).unwrap_or("");
+    let previous_user = messages.iter().rev().filter(|m|m.role=="user")
+        .nth(1).map(|m|m.content.as_str());
+    let continue_review = investigation::review_followup(question, previous_user);
     for (index,(name,provider,instruction)) in steps.iter().enumerate() {
         let mut stage:Vec<Message> = messages.iter().filter(|m|m.role=="system").cloned().collect();
         stage.push(Message{role:"system".into(),content:format!("You are the {name} in DUDE Symphony. {instruction}")});
+        // Preserve exactly the immediately preceding source-inspection request
+        // for explicit short follow-ups, not unrelated chat history. The prior
+        // request supplies intent only: it is NOT evidence of code inspection.
+        if continue_review {
+            if let Some(previous) = previous_user {
+                stage.push(Message { role: "user".into(),
+                    content: format!("Previous user source-inspection request (context, not source evidence):\n{}",
+                        previous.chars().take(1200).collect::<String>()) });
+            }
+        }
         // Avoid broadcasting unrelated old chat turns to every Symphony stage.
         let collected = if index == 0 { String::new() } else { evidence.export() };
         stage.push(Message{role:"user".into(),content:format!(
