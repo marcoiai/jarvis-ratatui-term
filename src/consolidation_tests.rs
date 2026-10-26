@@ -239,9 +239,14 @@ async fn focused_source_inspection_without_native_reads_fails_before_architect()
     let workspace = Workspace::new();
     std::fs::create_dir_all(workspace.0.join("src")).unwrap();
     std::fs::write(workspace.0.join("Cargo.toml"),
-        "[package]\\nname = \\"dude-fixture\\"\\nversion = \\"0.1.0\\"\\nedition = \\"2024\\"\\n").unwrap();
+        r#"[package]
+name = "dude-fixture"
+version = "0.1.0"
+edition = "2024"
+"#).unwrap();
     std::fs::write(workspace.0.join("src/main.rs"),
-        "fn main() { println!(\\"hello\\"); }\\n").unwrap();
+        r#"fn main() { println!("hello"); }
+"#).unwrap();
     indexer::refresh(&workspace.0).unwrap();
     let (host, task) = server(vec![
         (200, reply("I cannot find any source lines for this request.")),
