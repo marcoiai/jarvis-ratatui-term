@@ -333,6 +333,55 @@ edition = "2024"
     assert_eq!(evidence.source_read_count(),0);
 }
 
+#[tokio::test]
+async fn short_symphony_followup_with_two_native_reads_reaches_review() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("Cargo.toml"),
+        r#"[package]
+name = "example"
+version = "0.1.0"
+edition = "2024"
+"#).unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(workspace.0.join("src/file_tools.rs"), "pub fn definitions() {}\n").unwrap();
+    indexer::refresh(&workspace.0).unwrap();
+    let call = |path: &str| json!({"message":{"content":"","tool_calls":[{"function":{
+        "name":"read_file","arguments":{"path":path,"start_line":1,"end_line":20}
+    }}]}}).to_string();
+    let (host, server_task) = server(vec![
+        (200, call("src/main.rs")),
+        (200, call("src/file_tools.rs")),
+        (200, reply("Verified src/main.rs:1 and src/file_tools.rs:1")),
+        (200, reply("Architect: inspected evidence in src/main.rs:1 and src/file_tools.rs:1")),
+        (200, reply("A review grounded in src/main.rs:1 and src/file_tools.rs:1\nDUDE_KNOWLEDGE_JSON: []")),
+    ]).await;
+    let previous = "symphony: Investigue como o DUDE executa chamadas de ferramentas no Ollama. Localize as funções relevantes pelo índice, leia os arquivos e explique o fluxo com referências de linha.";
+    let mut roles = roles::Roles::default();
+    for role in ["investigator","architect","reviewer"] {
+        roles.set(role,"ollama").unwrap();
+        roles.set_model(role,"test-model").unwrap();
+    }
+    let evidence=evidence::EvidenceCache::default();
+    let client=reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let (tx,_rx)=mpsc::unbounded_channel();
+    let result=run_symphony(&client,&roles,vec![
+        Message {role:"user".into(),content:previous.into()},
+        Message {role:"assistant".into(),content:"Earlier review incomplete".into()},
+        Message {role:"user".into(),content:"ok, investiga melhor".into()},
+    ],workspace.0.clone(),&host,"test-model","unused","unused",
+        evidence.clone(),metrics::Metrics::default(),tx).await;
+    let answer=result.unwrap();
+    assert!(answer.contains("review grounded"));
+    let requests=server_task.await.unwrap();
+    assert_eq!(requests.len(),5);
+    assert!(requests[0]["messages"].to_string().contains("CURRENT WORKSPACE STRUCTURAL INDEX"));
+    assert!(requests[2]["messages"].to_string().contains("SOURCE EXCERPT"));
+    assert!(requests[3]["tools"].as_array().unwrap().is_empty());
+    assert!(requests[4]["tools"].as_array().unwrap().is_empty());
+    assert_eq!(evidence.source_files_since(0),2);
+}
+
 #[cfg(unix)]
 #[test]
 fn symphony_checkpoint_refuses_symlink_destination() {
