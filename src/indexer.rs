@@ -121,7 +121,7 @@ pub fn search(workspace: &Path, query: &str, limit: usize) -> Result<String, Str
     let root = workspace.canonicalize().map_err(|e| e.to_string())?;
     reject_symlink(&root.join(".dude"))?;
     let index = load(&root.join(".dude").join(INDEX_FILE))?;
-    if index.version != INDEX_VERSION || index.workspace != root.to_string_lossy()
+    if index.version != INDEX_VERSION || index.workspace != root.to_string_lossy().to_string()
         || index.files.is_empty() {
         return Err("No current structural index for this workspace. Use /index start".into());
     }
