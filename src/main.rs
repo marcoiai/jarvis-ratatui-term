@@ -1804,6 +1804,12 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         let question = messages.iter().rev().find(|m|m.role == "user")
             .map(|m|m.content.clone()).unwrap_or_default();
         let bootstrap = investigation::needs_baseline(&question);
+        // A current index supplies navigation hints without making source claims.
+        // Only indexed Rust projects use the compact bootstrap; other stacks keep
+        // the existing automatic baseline and can still call search_index.
+        let indexed_navigation = if bootstrap && root.join("Cargo.toml").is_file() {
+            indexer::search(&root, &question, 8).ok()
+        } else { None };
         let cache = evidence.clone();
         // Never append tool policy after the actual user turn: keep the
         // user's current request as the last message presented to the model.
@@ -1825,10 +1831,29 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         // Focused changes let the model discover and read the relevant files itself.
         if bootstrap {
             let overview = tokio::task::spawn_blocking(move || {
-                let mut overview = investigation::overview(&root);
-                overview.push('\n');
-                overview.push_str(&investigation::baseline(&root, &cache));
-                overview
+                if let Some(navigation) = indexed_navigation {
+                    // The old 26K-char baseline exhausted 4K model contexts.
+                    // Keep a small automatic sample, then let the Investigator
+                    // choose new files through native tools (evidence gate unchanged).
+                    let mut summary = format!(
+                        "INDEX-ASSISTED PROJECT NAVIGATION (not verified source evidence):\n{navigation}\n\n");
+                    for (path, end_line) in [("Cargo.toml", 50), ("src/main.rs", 60)] {
+                        if root.join(path).is_file() {
+                            let excerpt = cache.execute_bootstrap(&root, "read_file",
+                                &json!({"path":path, "start_line":1, "end_line":end_line}));
+                            summary.push_str(&format!(
+                                "--- {path} (automatic partial source excerpt) ---\n{}\n",
+                                excerpt.chars().take(1800).collect::<String>()));
+                        }
+                    }
+                    summary.push_str("Select further paths using search_index or the navigation hints, then invoke NATIVE read_file tool calls to verify implementation and collect new file:line evidence. Index hits and automatic bootstrap reads do not count as model-selected new reads.");
+                    summary
+                } else {
+                    let mut overview = investigation::overview(&root);
+                    overview.push('\n');
+                    overview.push_str(&investigation::baseline(&root, &cache));
+                    overview
+                }
             }).await.map_err(|e| e.to_string())?;
             // Baseline reads are clearly marked; source excerpts do not replace
             // the latest user message or become instructions.
@@ -2291,6 +2316,7 @@ async fn ask_ollama(
             "messages": conversation,
             "stream": stream_final,
             "think": show_thinking,
+            "keep_alive": -1,
             "options": { "num_ctx": investigation::context_size() },
             "tools": tool_definitions,
         });
