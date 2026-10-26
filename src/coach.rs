@@ -195,7 +195,9 @@ fn check_requested_deliverable(answer: String, question: &str) -> String {
             lines.pop();
         }
         if lines.last().is_some_and(|line| {
-            let lower = ascii_pt(line.trim());
+            let cleaned = line.trim().trim_start_matches(|ch: char|
+                matches!(ch, '*' | '>' | '-' | ' '));
+            let lower = ascii_pt(cleaned);
             ["quer que eu aplique", "quer prosseguir", "deseja que eu aplique",
              "quer que eu execute", "deseja que eu execute"].iter()
                 .any(|prefix| lower.starts_with(prefix))
@@ -440,7 +442,7 @@ mod tests {
     #[test]
     fn identifies_missing_real_diff_and_removes_unwanted_permission_question() {
         let question = "Proponha um diff concreto e não peça autorização para aplicar.";
-        let bad = "Remova linhas 20-30.\nQuer que eu aplique o diff?";
+        let bad = "Remova linhas 20-30.\n**Quer que eu aplique o diff?**";
         let guarded = guard_answer_for_request(bad.into(), question, 0);
         assert!(!guarded.contains("Quer que eu aplique"), "{guarded}");
         assert!(guarded.contains("não contém um diff unificado"), "{guarded}");
