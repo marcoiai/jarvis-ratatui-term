@@ -81,18 +81,40 @@ impl EvidenceCache {
     /// A reference is valid only when that exact numbered source line was returned
     /// by a successful read_file tool call in the current investigation.
     pub fn observed_reference(&self, reference: &str) -> bool {
-        let Some((path, line)) = reference.trim().rsplit_once(':') else { return false; };
-        let Ok(line) = line.trim().parse::<usize>() else { return false; };
-        if line == 0 || path.trim().is_empty() { return false; }
+        let Some((path, spec)) = reference.trim().rsplit_once(':') else { return false; };
+        if path.trim().is_empty() { return false; }
+        let (start, end) = match spec.split_once('-') {
+            Some((start, end)) => {
+                let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>()) else {
+                    return false;
+                };
+                (start, end)
+            }
+            None => {
+                let Ok(line) = spec.parse::<usize>() else { return false; };
+                (line, line)
+            }
+        };
+        // Require EVERY source line in the cited range to have appeared in
+        // successful read_file output. A requested range alone is not evidence.
+        if start == 0 || end < start || end - start > 79 { return false; }
         let Ok(observations) = self.observations.lock() else { return false; };
-        observations.iter().any(|item| {
-            item["tool"] == "read_file"
-                && item["arguments"]["path"].as_str() == Some(path.trim())
-                && item["result"].as_str().is_some_and(|content| {
-                    let prefix = format!("{line}: ");
-                    content.lines().any(|row| row.starts_with(&prefix))
-                })
-        })
+        let mut seen = BTreeSet::new();
+        for item in observations.iter().filter(|item| {
+            item["tool"] == "read_file" && item["arguments"]["path"].as_str() == Some(path.trim())
+        }) {
+            if let Some(content) = item["result"].as_str() {
+                for row in content.lines() {
+                    let Some((number, _)) = row.split_once(": ") else { continue; };
+                    if let Ok(number) = number.parse::<usize>()
+                        && (start..=end).contains(&number)
+                    {
+                        seen.insert(number);
+                    }
+                }
+            }
+        }
+        seen.len() == end - start + 1
     }
     /// Collect declaration candidates exclusively from numbered read_file source lines.
     /// This is a syntax observation, not proof of runtime behavior.
@@ -172,6 +194,50 @@ impl EvidenceCache {
         text.push_str(&format!("\n{}\n{}\n",self.coverage(),self.read_manifest()));
         text
     }
+    /// Bounded evidence excerpts distributed across all successfully read files.
+    /// Unlike taking the FIRST bytes of export(), later files remain visible.
+    /// This is a MODEL INPUT sample, never a substitute for validating citations
+    /// against the full cache of observed numbered source lines.
+    pub fn semantic_audit_sample(&self, budget: usize) -> String {
+        let Ok(observations) = self.observations.lock() else {
+            return "Observações indisponíveis.".into();
+        };
+        let reads: Vec<&Value> = observations.iter()
+            .filter(|item| item["tool"] == "read_file")
+            .collect();
+        if reads.is_empty() {
+            return "Nenhum trecho de arquivo foi lido com sucesso.".into();
+        }
+        let per_read = budget.saturating_sub(700) / reads.len();
+        let mut output = format!(
+            "Amostra distribuída de {} leituras (trechos podem estar truncados):\n",
+            reads.len()
+        );
+        for item in reads {
+            let path = item["arguments"]["path"].as_str().unwrap_or("(arquivo desconhecido)");
+            let heading = format!("\nFONTE: {path}\n");
+            if output.len() + heading.len() > budget { break; }
+            output.push_str(&heading);
+            let available = per_read.min(budget.saturating_sub(output.len()));
+            let mut used = 0usize;
+            let mut omitted = false;
+            if let Some(excerpt) = item["result"].as_str() {
+                for line in excerpt.lines() {
+                    let needed = line.chars().count() + 1;
+                    if used + needed > available {
+                        omitted = true;
+                        break;
+                    }
+                    output.push_str(line);
+                    output.push('\n');
+                    used += needed;
+                }
+            }
+            if omitted { output.push_str("[Outras linhas omitidas desta fonte]\n"); }
+        }
+        output
+    }
+
     /// Whether the report contains at least one file:line pointing to a line
     /// actually returned by read_file. This is citation presence, NOT claim validation.
     pub fn has_supported_citation(&self, report: &str) -> bool {
@@ -186,7 +252,16 @@ impl EvidenceCache {
             for (offset, _) in report.match_indices(&needle) {
                 let remainder = &report[offset + needle.len()..];
                 let digits: String = remainder.chars().take_while(|ch| ch.is_ascii_digit()).collect();
-                if !digits.is_empty() && self.observed_reference(&format!("{path}:{digits}")) {
+                if digits.is_empty() { continue; }
+                let rest = &remainder[digits.len()..];
+                let range_end: String = rest.strip_prefix('-').unwrap_or("")
+                    .chars().take_while(|ch| ch.is_ascii_digit()).collect();
+                let spec = if range_end.is_empty() {
+                    digits
+                } else {
+                    format!("{digits}-{range_end}")
+                };
+                if self.observed_reference(&format!("{path}:{spec}")) {
                     return true;
                 }
             }
@@ -206,6 +281,43 @@ impl EvidenceCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observed_ranges_require_every_numbered_line() {
+        let root = std::env::temp_dir().join(format!("dude-evidence-range-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("range.rs"), "a\nb\nc\nd\ne\n").unwrap();
+        let evidence = EvidenceCache::default();
+        evidence.execute(&root, "read_file", &json!({"path":"range.rs","start_line":2,"end_line":3}));
+        assert!(evidence.observed_reference("range.rs:2-3"));
+        assert!(evidence.has_supported_citation("Trecho range.rs:2-3 foi lido."));
+        assert!(!evidence.has_supported_citation("Trecho range.rs:2-5 foi lido."));
+        assert!(!evidence.observed_reference("range.rs:1-3"));
+        assert!(!evidence.observed_reference("range.rs:2-4"));
+        assert!(!evidence.observed_reference("range.rs:0-1"));
+        assert!(!evidence.observed_reference("range.rs:3-2"));
+        assert!(!evidence.observed_reference("range.rs:2-500"));
+        evidence.execute(&root, "read_file", &json!({"path":"range.rs","start_line":4,"end_line":5}));
+        assert!(evidence.observed_reference("range.rs:2-5"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn audit_sample_includes_later_sources_in_bounded_context() {
+        let root = std::env::temp_dir().join(format!("dude-audit-sample-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let evidence = EvidenceCache::default();
+        for i in 0..12 {
+            let path = format!("file{i}.rs");
+            std::fs::write(root.join(&path), format!("pub fn example_{i}() {{}}\n").repeat(100)).unwrap();
+            evidence.execute(&root, "read_file", &json!({"path":path}));
+        }
+        let sample = evidence.semantic_audit_sample(12000);
+        assert!(sample.contains("FONTE: file0.rs"));
+        assert!(sample.contains("FONTE: file11.rs"));
+        assert!(sample.len() < 14000);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn only_observed_source_lines_can_be_cited() {
         let root = std::env::temp_dir().join(format!("dude-reference-{}", std::process::id()));

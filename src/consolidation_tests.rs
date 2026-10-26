@@ -245,3 +245,158 @@ fn symphony_checkpoint_refuses_symlink_destination() {
     assert!(symphony_checkpoint::save(&workspace.0, "question", "Architect", "ollama", "model", "answer", "partial").is_err());
     assert_eq!(std::fs::read_to_string(protected).unwrap(), "keep");
 }
+
+
+#[tokio::test]
+async fn coach_injects_capabilities_and_stops_unsupported_ollama_promise() {
+    let workspace = Workspace::new();
+    let metrics = metrics::Metrics::default();
+    let evidence = evidence::EvidenceCache::default();
+    let (host, task) = server(vec![
+        (200, reply("Assim que receber o código, aplicarei o patch e confirmarei o cargo test.")),
+    ]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    // No tools are exposed to this call. The guard still applies to its answer.
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message { role: "user".into(), content: "Aplique um patch em src/main.rs para corrigir o panic UTF-8 e execute cargo test".into() }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        false, evidence.clone(), metrics, None,
+    ).await.unwrap();
+    assert!(answer.contains("bloqueio de capacidade"), "unexpected answer: {answer}");
+    assert!(!answer.contains("aplicarei o patch"));
+    assert!(!answer.contains("preciso saber qual comportamento deseja alterar"),
+        "A specified change must not be treated as underspecified");
+    let requests = task.await.unwrap();
+    let messages = requests[0]["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m|
+        m["role"] == "system" && m["content"].as_str().unwrap_or("").contains("DUDE Coach v0.2")));
+    assert!(messages.iter().any(|m|
+        m["content"].as_str().unwrap_or("").contains("[G013]")));
+    assert!(requests[0]["tools"].as_array().unwrap().is_empty());
+    assert_eq!(evidence.source_read_count(), 0);
+}
+
+#[tokio::test]
+async fn coach_skips_internal_json_knowledge_extraction() {
+    let workspace = Workspace::new();
+    let (host, task) = server(vec![(200, reply("[]"))]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![
+            Message { role: "system".into(), content: "You extract evidence-backed project knowledge. JSON only; [] if uncertain.".into() },
+            Message { role: "user".into(), content: "Extract from project".into() },
+        ],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        false, evidence::EvidenceCache::default(), metrics::Metrics::default(), None
+    ).await.unwrap();
+    assert_eq!(answer, "[]");
+    let requests = task.await.unwrap();
+    assert!(!requests[0]["messages"].to_string().contains("DUDE Coach v0.2"));
+}
+
+
+#[tokio::test]
+async fn coach_keeps_real_tool_observations_in_the_provider_loop() {
+    let workspace = Workspace::new();
+    std::fs::write(workspace.0.join("notes.rs"), "fn main() {}\n").unwrap();
+    let first = json!({
+        "message": {"content": "", "tool_calls": [
+            {"function": {"name": "read_file",
+                          "arguments": {"path": "notes.rs", "start_line": 1, "end_line": 1}}}
+        ]},
+        "prompt_eval_count": 7, "eval_count": 3
+    }).to_string();
+    let (host, task) = server(vec![
+        (200, first),
+        (200, reply("Observado notes.rs:1: fn main(). Não executei testes.")),
+    ]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let evidence = evidence::EvidenceCache::default();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message { role: "user".into(), content: "Leia o arquivo notes.rs e explique a função".into() }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        true, evidence.clone(), metrics::Metrics::default(), None,
+    ).await.unwrap();
+    assert!(answer.contains("notes.rs:1"));
+    assert!(evidence.observed_reference("notes.rs:1"));
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(!requests[0]["tools"].as_array().unwrap().is_empty());
+    assert!(requests[0]["messages"].to_string().contains("DUDE Coach v0.2"));
+    assert!(requests[1]["messages"].to_string().contains("fn main()"));
+}
+
+
+#[tokio::test]
+async fn coach_preflight_reads_named_source_and_repairs_real_permission_loop() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"), "fn main() { println!(\"ok\"); }\n").unwrap();
+    let (host, task) = server(vec![
+        (200, reply("Estes arquivos estão no workspace? Você tem acesso a eles e devo proceder com a leitura de `src/main.rs` para entender o contexto antes de propor ou aplicar mudanças?")),
+    ]).await;
+    let client = reqwest::Client::builder()
+        .no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    let evidence = evidence::EvidenceCache::default();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message { role: "user".into(), content: "Aplique um patch em src/main.rs e execute cargo test.".into() }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        true, evidence.clone(), metrics::Metrics::default(), None,
+    ).await.unwrap();
+    assert!(answer.contains("Não posso aplicar patches"), "{answer}");
+    assert!(!answer.contains("devo proceder com a leitura"), "{answer}");
+    assert_eq!(evidence.source_read_count(), 1);
+    assert!(evidence.observed_reference("src/main.rs:1"));
+    let requests = task.await.unwrap();
+    assert_eq!(requests.len(), 1, "A read-only model response should need no extra tool round");
+    let convo = requests[0]["messages"].to_string();
+    assert!(convo.contains("SOURCE EXCERPT: src/main.rs"), "{convo}");
+    assert!(convo.contains("DUDE Coach v0.2"));
+    assert!(requests[0]["tools"].as_array().is_some());
+}
+
+
+#[tokio::test]
+async fn coach_investigates_named_symbol_and_related_knowledge_before_model_reply() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("src/evidence.rs"),
+        "pub fn declaration_drafts() {}\n").unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"),
+        "fn main() { declaration_drafts(); }\n").unwrap();
+    std::fs::write(workspace.0.join("src/knowledge.rs"),
+        "pub fn propose() {}\n").unwrap();
+    let (host, task) = server(vec![(200, reply(
+        "O método aparece no arquivo de origem e em src/main.rs:1; proponho remover código."
+    ))]).await;
+    let evidence = evidence::EvidenceCache::default();
+    let client = reqwest::Client::builder().no_proxy()
+        .timeout(Duration::from_secs(5)).build().unwrap();
+    let answer = query_provider(
+        &client, "ollama",
+        vec![Message {
+            role: "user".into(),
+            content: "Investigue o método declaration_drafts em src/evidence.rs; \
+                procure onde é chamado no projeto e o fluxo Knowledge. \
+                Proponha um diff concreto e não peça autorização.".into()
+        }],
+        workspace.0.clone(), &host, "test-model", "unused", "unused",
+        true, evidence.clone(), metrics::Metrics::default(), None,
+    ).await.unwrap();
+    assert!(answer.contains("não contém um diff unificado"), "{answer}");
+    assert!(evidence.observed_reference("src/main.rs:1"));
+    assert!(evidence.observed_reference("src/evidence.rs:1"));
+    assert!(evidence.observed_reference("src/knowledge.rs:1"));
+    let requests = task.await.unwrap();
+    let messages = requests[0]["messages"].to_string();
+    assert!(messages.contains("symbol reference probe"), "{messages}");
+    assert!(messages.contains("src/main.rs:1:"), "{messages}");
+    assert!(messages.contains("src/knowledge.rs"), "{messages}");
+}

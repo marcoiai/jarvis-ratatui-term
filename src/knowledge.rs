@@ -78,6 +78,48 @@ pub struct CandidateDraft{
     #[serde(default)]
     pub evidence:Vec<String>,
 }
+/// Parse best-effort model drafts without treating malformed citation fields as
+/// evidence. The model may return "evidence": "Source reads: ..." instead
+/// of an array; that must not break the user's primary answer or create facts.
+pub fn parse_extraction(
+    raw: &str,
+    observations: &crate::evidence::EvidenceCache,
+) -> Result<Vec<CandidateDraft>, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(raw).map_err(|error| format!("JSON inválido: {error}"))?;
+    let Some(items) = json.as_array() else {
+        return Err("A resposta de Knowledge deve ser um array JSON".into());
+    };
+    Ok(items.iter().take(12).filter_map(|item| {
+        let classification = item.get("classification")?.as_str()?;
+        if !matches!(classification, "documented" | "verified" | "inferred") {
+            return None;
+        }
+        let claim = item.get("claim")?.as_str()?.trim();
+        if claim.is_empty() || claim.len() > 1600 { return None; }
+        let value = item.get("evidence")?;
+        // Accept a singular precise citation if observed, but never turn prose
+        // such as "Source reads: ..." into a trusted file:line reference.
+        let references: Vec<String> = match value {
+            serde_json::Value::Array(values) => values.iter()
+                .filter_map(serde_json::Value::as_str)
+                .take(5)
+                .filter(|reference| observations.observed_reference(reference))
+                .map(str::to_owned)
+                .collect(),
+            serde_json::Value::String(reference)
+                if observations.observed_reference(reference) => vec![reference.clone()],
+            _ => Vec::new(),
+        };
+        if references.is_empty() { return None; }
+        Some(CandidateDraft {
+            classification: classification.to_owned(),
+            claim: claim.to_owned(),
+            evidence: references,
+        })
+    }).collect())
+}
+
 /// Return the oldest reviewable candidate so the UI can request consent.
 pub fn next_pending(workspace:&Path)->Result<Option<Candidate>,String>{
     Ok(load(workspace)?.into_iter().find(|c|c.status=="pending"))
@@ -141,6 +183,39 @@ mod tests{
         assert!(!useful_claim("Source declaration in src/router.rs: pub enum Route {"));
         assert!(!useful_claim("pub fn route(input: &str) -> Route {"));
         assert!(useful_claim("The application requires explicit approval before persisting knowledge."));
+    }
+
+    #[test]
+    fn malformed_model_evidence_is_not_promoted() {
+        let root = std::env::temp_dir().join(format!("dude-knowledge-model-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("sample.rs"), "fn sample() {}\n").unwrap();
+        let evidence = crate::evidence::EvidenceCache::default();
+        evidence.execute(&root, "read_file", &serde_json::json!({"path":"sample.rs"}));
+        let raw = serde_json::json!([
+            {
+                "classification": "verified",
+                "claim": "This is a real observed source line with enough explanation.",
+                "evidence": "Source reads: sample.rs lines 1-120 | line 96"
+            },
+            {
+                "classification": "documented",
+                "claim": "This describes an observation from an actual source file line.",
+                "evidence": ["sample.rs:1"]
+            },
+            {
+                "classification": "documented",
+                "claim": "This evidence is a single precise string.",
+                "evidence": "sample.rs:1"
+            }
+        ]).to_string();
+        let drafts = parse_extraction(&raw, &evidence).unwrap();
+        assert_eq!(drafts.len(), 2);
+        assert!(drafts.iter().all(|draft| draft.evidence == vec!["sample.rs:1"]));
+        let malformed_only = r#"[{"classification":"verified","claim":"Source observations",
+                             "evidence":"Source reads: sample.rs lines 1-120 | line 96"}]"#;
+        assert!(parse_extraction(malformed_only, &evidence).unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -262,6 +262,109 @@ mod baseline_tests {
     }
 }
 
+
+/// A bounded evidence-first pass for questions about where a symbol is used.
+/// Source search is a discovery hint, not proof of exhaustiveness.
+pub fn reference_probe(
+    root: &Path,
+    question: &str,
+    evidence: &crate::evidence::EvidenceCache,
+) -> Option<String> {
+    let q = question.to_lowercase();
+    if ![
+        "dead_code", "onde é chamado", "onde e chamado", "onde é usado",
+        "onde e usado", "usages", "call sites", "referências ao",
+        "referencias ao", "procure onde", "utilizações de", "usos de",
+    ].iter().any(|word| q.contains(word)) {
+        return None;
+    }
+    let words: Vec<&str> = question.split_whitespace().collect();
+    let symbol = words.windows(2).find_map(|pair| {
+        let marker = pair[0].to_lowercase();
+        if !["método", "metodo", "method", "função", "funcao", "function", "símbolo", "simbolo"]
+            .contains(&marker.as_str()) {
+            return None;
+        }
+        let proposed = pair[1].trim_matches(|ch: char|
+            !(ch.is_ascii_alphanumeric() || ch == '_'));
+        let valid = (3..=80).contains(&proposed.len())
+            && proposed.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && proposed.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        valid.then(|| proposed.to_owned())
+    }).or_else(|| {
+        question.split('`').skip(1).step_by(2).find_map(|part| {
+            let valid = (3..=80).contains(&part.len())
+                && part.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && part.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            valid.then(|| part.to_owned())
+        })
+    })?;
+    let matches = evidence.execute(root, "search_text",
+        &serde_json::json!({"path":".","pattern":symbol}));
+    let mut report = format!(
+        "DUDE symbol reference probe (read-only, bounded): {symbol}\n\
+         Search uses a partial workspace traversal (at most 150 files/100 hits). \
+         Absence here does NOT prove absence of callers.\n\
+         Search matches below are hints until source lines are opened:\n{}\n",
+        matches.chars().take(3300).collect::<String>()
+    );
+    let mut target_lines = Vec::<(String, usize)>::new();
+    // Prioritize explicit files and named architectural modules. A broad
+    // filename search may contain docs before it reaches source files.
+    for token in words {
+        let path = token.trim_matches(|ch: char| matches!(ch, '`' | ',' | '.' | ';' | '(' | ')' | ':' | '"'));
+        if path.starts_with("src/") && path.ends_with(".rs")
+            && !path.contains("..") && !path.contains('\\')
+            && !target_lines.iter().any(|(known, _)| known == path)
+            && target_lines.len() < 4 {
+                target_lines.push((path.to_owned(), 1));
+        }
+    }
+    if q.contains("knowledge") && root.join("src/knowledge.rs").is_file()
+        && !target_lines.iter().any(|(known, _)| known == "src/knowledge.rs")
+        && target_lines.len() < 4 {
+        target_lines.push(("src/knowledge.rs".into(), 1));
+    }
+    for line in matches.lines() {
+        let Some((path, remaining)) = line.split_once(':') else { continue; };
+        let Some((number, _)) = remaining.split_once(':') else { continue; };
+        let Ok(number) = number.trim().parse::<usize>() else { continue; };
+        if number == 0 || path.starts_with('.') || path.starts_with('/')
+            || path.contains("..") || path.contains('\\') { continue; }
+        if let Some(existing) = target_lines.iter_mut().find(|(known, _)| known == path) {
+            existing.1 = number;
+        } else if target_lines.len() < 5 {
+            target_lines.push((path.to_owned(), number));
+        }
+        if target_lines.len() >= 5 { break; }
+    }
+    for (path, number) in target_lines {
+        let start = number.saturating_sub(14).max(1);
+        let end = if path == "src/knowledge.rs" {
+            110
+        } else {
+            number.saturating_add(32).min(100_000)
+        };
+        let excerpt = evidence.execute(root, "read_file", &serde_json::json!({
+            "path": path, "start_line": start, "end_line": end
+        }));
+        report.push_str(&format!(
+            "\nSource observation for {path} near {number} (bounded):\n{}\n",
+            excerpt.chars().take(3000).collect::<String>()
+        ));
+    }
+    if root.join("Cargo.toml").is_file() && !root.join("src/lib.rs").is_file() {
+        report.push_str("\nRust target hint: there is no src/lib.rs. Do not suggest cargo test --lib; prefer cargo test for the binary crate.\n");
+    }
+    report.push_str(
+        "\nThe tool search and read excerpts are partial. Explain scope and \
+         do not claim exhaustive caller absence. For code changes, produce a \
+         proper unified diff using actually observed lines, not placeholder \
+         comments; do not claim a patch or test was executed.\n"
+    );
+    Some(report)
+}
+
 /// Keep project investigation policy and file tools out of ordinary conversation.
 pub fn is_technical(question: &str) -> bool {
     let q = question.to_lowercase();
@@ -293,5 +396,36 @@ mod intent_tests {
         assert!(is_technical("leia os arquivos e explique o projeto"));
         assert!(is_technical("Investigate the user request: inspect main.rs code"));
         assert!(is_technical("faça uma análise mais profunda"));
+    }
+}
+
+#[cfg(test)]
+mod reference_probe_tests {
+    use super::*;
+    #[test]
+    fn reference_probe_searches_and_reads_actual_call_sites_and_context() {
+        let root = env::temp_dir().join(format!("dude-reference-probe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/evidence.rs"), "pub fn declaration_drafts() {}\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn entry() { declaration_drafts(); }\n").unwrap();
+        fs::write(root.join("src/knowledge.rs"), "pub fn propose() {}\n").unwrap();
+        let observations = crate::evidence::EvidenceCache::default();
+        let result = reference_probe(&root,
+            "Investigue o método declaration_drafts em src/evidence.rs, procure onde é chamado e analise Knowledge.",
+            &observations).unwrap();
+        assert!(result.contains("src/main.rs:1:"), "{result}");
+        assert!(observations.observed_reference("src/main.rs:1"));
+        assert!(observations.observed_reference("src/evidence.rs:1"));
+        assert!(observations.observed_reference("src/knowledge.rs:1"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reference_probe_skips_social_chat_and_unscoped_questions() {
+        let root = env::temp_dir().join(format!("dude-probe-skip-{}", std::process::id()));
+        let cache = crate::evidence::EvidenceCache::default();
+        assert!(reference_probe(&root, "hey duuude", &cache).is_none());
+        assert!(reference_probe(&root, "O que é dead_code?", &cache).is_none());
     }
 }
