@@ -45,6 +45,20 @@ pub fn route(input:&str, mode:&str, language:&str)->Route {
         Route::Solo
     }
 }
+/// Preserve a short source-investigation follow-up in Symphony, but only when
+/// the preceding user request actually asked for evidence-based source work.
+/// Explicit solo:/symphony: prefixes still win.
+pub fn route_with_context(input: &str, mode: &str, language: &str, previous_user: Option<&str>) -> Route {
+    let current = route(input, mode, language);
+    if mode == "symphony" && matches!(current, Route::Solo)
+        && !input.trim().to_lowercase().starts_with("solo:")
+        && crate::investigation::review_followup(input, previous_user) {
+        Route::Symphony
+    } else {
+        current
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +76,15 @@ mod tests {
         assert_eq!(route("review current project", "direct", "en"), Route::Direct);
         assert!(Route::Direct.needs_ollama(&roles));
         assert!(matches!(route("/help", "direct", "pt-BR"), Route::Local(_)));
+    }
+    #[test]
+    fn source_inspection_followup_keeps_symphony_when_requested() {
+        let previous = "symphony: Investigue a implementação de search_index, leia os arquivos e cite referências de linha.";
+        assert_eq!(route("ok, investiga melhor","symphony","pt-BR"),Route::Solo);
+        assert_eq!(route_with_context("ok, investiga melhor","symphony","pt-BR",Some(previous)),Route::Symphony);
+        assert_eq!(route_with_context("solo: ok, investiga melhor","symphony","pt-BR",Some(previous)),Route::Solo);
+        assert_eq!(route_with_context("ok, investiga melhor","solo","pt-BR",Some(previous)),Route::Solo);
+        assert_eq!(route_with_context("ok, investiga melhor","symphony","pt-BR",Some("oi buddy")),Route::Solo);
     }
     #[test] fn simple_in_symphony_uses_solo() {
         assert_eq!(route("O que é Tokio?","symphony","pt-BR"),Route::Solo);
