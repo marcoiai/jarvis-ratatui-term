@@ -2116,7 +2116,7 @@ fn looks_like_textual_tool_request(content: &str) -> bool {
         let Some(name) = value.get("name").and_then(Value::as_str) else {
             return false;
         };
-        (matches!(name, "list_files" | "read_file" | "search_text") ||
+        (matches!(name, "list_files" | "read_file" | "search_text" | "search_index") ||
             changes::is_action(name)) &&
             (value.get("parameters").is_some() || value.get("arguments").is_some())
     })
