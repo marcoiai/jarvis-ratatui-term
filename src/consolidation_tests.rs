@@ -278,6 +278,57 @@ edition = "2024"
     assert_eq!(evidence.source_read_count(), 0);
 }
 
+#[tokio::test]
+async fn short_symphony_followup_requires_native_reads_and_retains_previous_source_request() {
+    let workspace = Workspace::new();
+    std::fs::create_dir_all(workspace.0.join("src")).unwrap();
+    std::fs::write(workspace.0.join("Cargo.toml"),
+        "[package]\\nname = \\"example\\"\\nversion = \\"0.1.0\\"\\nedition = \\"2024\\"\\n").unwrap();
+    std::fs::write(workspace.0.join("src/main.rs"), "fn main() {}\n").unwrap();
+    indexer::refresh(&workspace.0).unwrap();
+    let pseudo = r#"Plano:
+```json
+{"name":"search_index","arguments":{"query":"tool calls in Ollama"}}
+```"#;
+    let (host, server_task) = server(vec![
+        (200, reply(pseudo)),
+        (200, reply("I should read some files.")),
+        (200, reply("Nothing was read.")),
+    ]).await;
+    let previous = "symphony: Investigue como o DUDE executa chamadas de ferramentas no Ollama. Localize as funções relevantes pelo índice, leia os arquivos e explique o fluxo com referências de linha.";
+    let question = "ok, investiga melhor";
+    let mut roles = roles::Roles::default();
+    roles.set_mode("symphony").unwrap();
+    for role in ["investigator","architect","reviewer"] {
+        roles.set(role, "ollama").unwrap();
+        roles.set_model(role, "test-model").unwrap();
+    }
+    assert_eq!(router::route_with_context(question, &roles.mode, "pt-BR", Some(previous)), router::Route::Symphony);
+    let client = reqwest::Client::builder().no_proxy()
+        .timeout(Duration::from_secs(5)).build().unwrap();
+    let (tx,_rx) = mpsc::unbounded_channel();
+    let evidence = evidence::EvidenceCache::default();
+    let result = run_symphony(&client,&roles,vec![
+        Message {role:"user".into(),content:previous.into()},
+        Message {role:"assistant".into(),content:"No source inspected".into()},
+        Message {role:"user".into(),content:question.into()},
+    ],workspace.0.clone(),&host,"test-model","unused","unused",evidence.clone(),
+        metrics::Metrics::default(),tx).await;
+    let error = result.unwrap_err();
+    assert!(error.contains("Investigator (ollama) failed"), "{error}");
+    let requests = server_task.await.unwrap();
+    assert_eq!(requests.len(),3,"no Architect or Reviewer calls");
+    let first = requests[0]["messages"].to_string();
+    assert!(first.contains("Previous user source-inspection request"), "{first}");
+    assert!(first.contains("CURRENT WORKSPACE STRUCTURAL INDEX"));
+    assert!(first.contains("src/main.rs"));
+    assert!(requests[0]["tools"].as_array().unwrap().iter()
+        .any(|tool|tool["function"]["name"]=="search_index"));
+    assert!(requests[1]["messages"].to_string().contains(
+        "Your previous response described or printed a tool call"));
+    assert_eq!(evidence.source_read_count(),0);
+}
+
 #[cfg(unix)]
 #[test]
 fn symphony_checkpoint_refuses_symlink_destination() {
