@@ -134,7 +134,7 @@ pub fn search(workspace: &Path, query: &str, limit: usize) -> Result<String, Str
     let mut ranked: Vec<(i32, &str, &IndexedFile)> = Vec::new();
     for (path, file) in &index.files {
         let relative = Path::new(path);
-        if file.path != *path || relative.components().any(|c| !matches!(c, Component::Normal(_)))
+        if file.path.as_str() != path.as_str() || relative.components().any(|c| !matches!(c, Component::Normal(_)))
             || excluded(relative) { continue; }
         let path_lower = path.to_lowercase();
         let names = file.declarations.iter().map(|s| s.name.as_str())
@@ -145,9 +145,9 @@ pub fn search(workspace: &Path, query: &str, limit: usize) -> Result<String, Str
             "src/investigation.rs" | "src/evidence.rs" | "src/file_tools.rs") { score += 2; }
         if file.language == "documentation" { score -= 2; }
         for term in &terms {
-            if path_lower.contains(term) { score += 12; }
-            if names.contains(term) { score += 7; }
-            if file.language.contains(term) { score += 2; }
+            if path_lower.contains(term.as_str()) { score += 12; }
+            if names.contains(term.as_str()) { score += 7; }
+            if file.language.contains(term.as_str()) { score += 2; }
         }
         ranked.push((score, path, file));
     }
