@@ -1789,9 +1789,11 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     // Follow-up reviews carry the previous technical intent, but the model still
     // chooses which read-only tools and implementation files are relevant.
     let initial_review = allow_tools && investigation::needs_baseline(question);
+    let source_inspection = allow_tools && investigation::source_inspection_requested(question);
     let review_followup = allow_tools && investigation::review_followup(question, previous_user);
-    let require_project_evidence = initial_review || review_followup;
-    let minimum_new_reads = if review_followup { 2 } else if initial_review { 1 } else { 0 };
+    let require_project_evidence = initial_review || source_inspection || review_followup;
+    let minimum_new_reads = if review_followup { 2 }
+        else if initial_review || source_inspection { 1 } else { 0 };
     let require_change_evidence = allow_tools && (
         investigation::is_code_change_request(question)
         || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
@@ -1807,9 +1809,22 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
         // A current index supplies navigation hints without making source claims.
         // Only indexed Rust projects use the compact bootstrap; other stacks keep
         // the existing automatic baseline and can still call search_index.
-        let indexed_navigation = if bootstrap && root.join("Cargo.toml").is_file() {
+        let indexed_navigation = if (bootstrap || source_inspection) && root.join("Cargo.toml").is_file() {
             indexer::search(&root, &question, 8).ok()
         } else { None };
+        // A focused investigation previously got NO indexed hints because only
+        // broad "project overview" requests entered the bootstrap branch.
+        // Provide navigation metadata without pretending that files were read.
+        if !bootstrap {
+            if let Some(navigation) = indexed_navigation.as_deref() {
+                insert_context_before_latest_user(&mut messages, Message {
+                    role: "system".into(),
+                    content: format!(
+                        "CURRENT WORKSPACE STRUCTURAL INDEX (navigation hints only):\\n{navigation}\\n\\nFor source inspections choose relevant paths and execute native read_file; index metadata is not citeable evidence."
+                    ),
+                });
+            }
+        }
         let cache = evidence.clone();
         // Never append tool policy after the actual user turn: keep the
         // user's current request as the last message presented to the model.
@@ -2056,6 +2071,13 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if index == 2 {Some(updates.clone())} else {None}).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
+        // No downstream synthesis from a fabricated or unsupported Investigator
+        // "success". This is a second line of defense for source-specific work.
+        if index == 0
+            && investigation::source_inspection_requested(question)
+            && evidence.source_read_count() == 0 {
+            return Err("Investigator (symphony) failed: nenhuma leitura real de arquivo foi observada. search_index e ferramentas escritas como texto não constituem evidência.".into());
+        }
         // A durable stage record is historical evidence, never an automatic replay.
         // Stop before dispatching the next provider if the checkpoint cannot be saved.
         symphony_checkpoint::save(&workspace, question, name, provider, selected_model,
@@ -2479,7 +2501,8 @@ async fn ask_ollama(
         metrics.stage(&request_label, "ollama", request_start, true);
         if let (Some(i),Some(o))=(reply.prompt_eval_count,reply.eval_count){ metrics.tokens("ollama",model,i,o); }
         if reply.message.tool_calls.is_empty() {
-            if direct_mode && tools_enabled && looks_like_textual_tool_request(&reply.message.content) {
+            if tools_enabled && (direct_mode || minimum_new_reads > 0)
+                && looks_like_textual_tool_request(&reply.message.content) {
                 if pseudo_tool_retry_issued {
                     return Err(format!(
                         "{model} escreveu uma chamada de ferramenta como texto duas vezes, sem tool_calls nativas. Nada foi executado. Tente um pedido mais específico ou use um modelo com tool calling mais consistente, como Qwen."
@@ -2521,6 +2544,7 @@ async fn ask_ollama(
             let retry_start = Instant::now();
             let retry_payload = json!({
                 "model":model,"messages":retry_messages,"stream":false,"think":false,
+                "keep_alive":-1,
                 "options":{"num_ctx": investigation::context_size()},"tools":[]
             });
             let retry_label = format!(
