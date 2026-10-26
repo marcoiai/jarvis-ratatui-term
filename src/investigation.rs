@@ -62,6 +62,27 @@ pub fn project_review_requested(question: &str, previous_user: Option<&str>) -> 
     needs_baseline(question) || review_followup(question, previous_user)
 }
 
+/// Explicit source-inspection requests must not pass as successful research
+/// without real file reads, even when they are about a specific component
+/// instead of a general "analyze project" review.
+/// Only gates evidence validation; the model still chooses read-only tools.
+pub fn source_inspection_requested(question: &str) -> bool {
+    let q = question.to_lowercase();
+    let action = [
+        "investig", "analis", "anális", "examin", "inspec", "leia", "ler ",
+        "localiz", "trace", "trac", "inspect", "read ", "review", "audit",
+        "verifi", "cite ", "referênc", "referenc",
+    ].iter().any(|term| q.contains(term));
+    let target = [
+        "arquivo", "file", "fonte", "source", "código", "codigo", "code",
+        "função", "funcoes", "funções", "funcao", "function", "implement",
+        "linha", "line", "índice", "indice", "index", "módulo", "modulo",
+        "module", "projeto", "project", "repositório", "repository",
+        "workspace",
+    ].iter().any(|term| q.contains(term));
+    action && target
+}
+
 /// Requests to change an existing project must inspect the implementation first.
 /// Match common user language without requiring words like "código" or "arquivo".
 pub fn is_code_change_request(question: &str) -> bool {
@@ -326,6 +347,20 @@ pub fn is_technical(question: &str) -> bool {
 #[cfg(test)]
 mod intent_tests {
     use super::*;
+    #[test]
+    fn explicit_source_inspection_is_gated_without_project_keyword() {
+        assert!(source_inspection_requested(
+            "Investigue como o DUDE executa chamadas de ferramentas no Ollama. Localize as funções relevantes pelo índice, leia os arquivos e explique o fluxo com referências de linha."
+        ));
+        assert!(source_inspection_requested(
+            "Original user request:\\nInvestigue como o DUDE executa chamadas pelo índice; leia os arquivos.\\nStructured evidence from read-only tools:"
+        ));
+        assert!(source_inspection_requested("examine a implementação de search_index e cite linhas"));
+        assert!(!source_inspection_requested("hey buddy"));
+        assert!(!source_inspection_requested("Quero entender as diferenças entre Rust e Go"));
+        assert!(!source_inspection_requested("O que é tool calling?"));
+    }
+
     #[test]
     fn deep_followups_inherit_prior_investigation() {
         assert!(is_deep_followup("faça uma análise mais profunda"));
