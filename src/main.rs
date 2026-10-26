@@ -1820,7 +1820,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
                 insert_context_before_latest_user(&mut messages, Message {
                     role: "system".into(),
                     content: format!(
-                        "CURRENT WORKSPACE STRUCTURAL INDEX (navigation hints only):\\n{navigation}\\n\\nFor source inspections choose relevant paths and execute native read_file; index metadata is not citeable evidence."
+                        "CURRENT WORKSPACE STRUCTURAL INDEX (navigation hints only):\n{navigation}\n\nFor source inspections choose relevant paths and execute native read_file; index metadata is not citeable evidence."
                     ),
                 });
             }
