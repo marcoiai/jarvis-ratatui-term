@@ -139,7 +139,7 @@ pub fn search(workspace: &Path, query: &str, limit: usize) -> Result<String, Str
         let path_lower = path.to_lowercase();
         let names = file.declarations.iter().map(|s| s.name.as_str())
             .collect::<Vec<_>>().join(" ").to_lowercase();
-        let mut score = if path == "src/main.rs" { 9 }
+        let mut score = if path.as_str() == "src/main.rs" { 9 }
             else if path.starts_with("src/") { 3 } else { 0 };
         if matches!(path.as_str(), "src/router.rs" | "src/roles.rs" | "src/providers.rs" |
             "src/investigation.rs" | "src/evidence.rs" | "src/file_tools.rs") { score += 2; }
@@ -155,7 +155,7 @@ pub fn search(workspace: &Path, query: &str, limit: usize) -> Result<String, Str
     let mut result = String::from("STRUCTURAL INDEX NAVIGATION (metadata only; not source evidence):\n");
     for (_, path, file) in ranked.into_iter().take(limit.clamp(1, 12)) {
         let matches: Vec<&IndexedSymbol> = file.declarations.iter()
-            .filter(|d| terms.iter().any(|t| d.name.to_lowercase().contains(t)))
+            .filter(|d| terms.iter().any(|t| d.name.to_lowercase().contains(t.as_str())))
             .take(3).collect();
         let selected: Vec<&IndexedSymbol> = if matches.is_empty() {
             file.declarations.iter().take(2).collect()
