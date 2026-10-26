@@ -53,3 +53,28 @@ sem chamar ferramentas. A v0.2 agora:
 
 Quando o pedido não especifica o que mudar, o DUDE pode pedir a alteração
 desejada, mas não deve pedir uma permissão de leitura já concedida.
+
+## Correção após o segundo teste real — auditoria de 13 arquivos (26/10/2026)
+
+O DUDE coletou 13 leituras sem erro, mas a avaliação semântica classificou
+quase tudo como não avaliável. Isso expôs duas limitações:
+
+- Referências como `src/main.rs:6-10` eram rejeitadas sem conferir o intervalo.
+  O validador agora aceita intervalos até 80 linhas **somente quando todas as
+  linhas numeradas foram efetivamente observadas por read_file**; isso não
+  comprova semanticamente a afirmação.
+- O auditor cortava a exportação de evidências nos primeiros 12 mil caracteres.
+  Ele agora recebe uma amostra distribuída entre as fontes lidas, mantendo
+  os detalhes completos no EvidenceCache para validar as referências.
+
+O auditor também recebe uma instrução explícita para NÃO tratar imports
+de módulos como prova de enumerações implementadas noutros arquivos. Uma
+checagem adicional avisa se uma afirmação nomeia `src/router.rs`, mas suas
+referências confirmadas só apontam para `src/main.rs`.
+
+Há testes Rust para intervalos incompletos, visibilidade de fontes lidas no fim
+da investigação e divergência entre o arquivo afirmado e o arquivo citado.
+A auditoria continua assistida por modelo, não é uma prova formal.
+
+A mudança **não reclassifica nem edita** o baseline 10/12 anterior. Não foi
+executado cargo test neste ambiente remoto; rodar localmente antes do merge.
