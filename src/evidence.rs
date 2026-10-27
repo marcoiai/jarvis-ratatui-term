@@ -513,6 +513,38 @@ mod tests {
     }
 
     #[test]
+    fn citation_retry_context_prioritizes_requested_file_and_excludes_search_hits() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-retry-evidence-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"),
+            "pub fn main_flow() {}\n").unwrap();
+        std::fs::write(root.join("src/other.rs"),
+            "pub fn other() {}\n").unwrap();
+        let cache = EvidenceCache::default();
+        cache.execute_bootstrap(&root, "read_file",
+            &json!({"path":"src/other.rs","start_line":1,"end_line":1}));
+        cache.execute_bootstrap(&root, "list_files", &json!({"path":"src"}));
+        cache.execute_bootstrap(&root, "read_file",
+            &json!({"path":"src/main.rs","start_line":1,"end_line":1}));
+        let summary = cache.citation_retry_context(
+            "proponha melhoria em src/main.rs"
+        );
+        assert!(summary.contains("src/main.rs"));
+        assert!(summary.contains("1: pub fn main_flow()"));
+        assert!(summary.find("--- src/main.rs").unwrap()
+            < summary.find("--- src/other.rs").unwrap());
+        assert!(!summary.contains("Evidence #"));
+        assert!(!summary.contains("list_files"));
+        assert!(summary.chars().count() <= 11_000);
+        assert!(cache.has_supported_citation("src/main.rs:1"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn exposes_cache_limits_without_claiming_file_tool_limits() {
         let description = limits_description();
         assert!(description.contains("80"));
