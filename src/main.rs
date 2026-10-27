@@ -2725,6 +2725,20 @@ async fn ask_ollama(
             }
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\n{}", evidence.coverage(), evidence.read_manifest()))}));
         }
+        // The model may receive read_file results after the initial instructions.
+        // Repeat the citation contract immediately before synthesis, using only
+        // real observed coordinates. This does not relax the evidence gate.
+        if allow_tools && evidence.source_read_count() > 0 && round > 0 {
+            let references = evidence.citation_examples("").join(", ");
+            if !references.is_empty() {
+                conversation.push(json!({
+                    "role": "system",
+                    "content": format!(
+                        "DUDE citation contract: cite every implementation observation using the complete path:line notation, e.g. {references}. Bare 'line 86', 'linhas 85-94', or a filename followed separately by a range do NOT count. Only cite lines from actual read_file results; do not invent measurements or attribute semantics not supported by observed code. If evidence is insufficient, state that instead of manufacturing a conclusion."
+                    )
+                }));
+            }
+        }
         // Stream both answer and Ollama's structured thinking field to the TUI.
         // Non-interactive extraction keeps its previous fast, non-thinking mode.
         // Meta's smaller Llama variants sometimes produce tool-call-shaped
