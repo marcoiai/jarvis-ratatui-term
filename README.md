@@ -84,6 +84,19 @@ returns invalid JSON, DUDE uses its original routing and safeguards. Simple
 greetings and TUI commands do not trigger extra model calls. The Interpreter
 is an extra request, so latency and local-model memory usage may increase.
 
+**Llama 3 source investigation:** on a focused code-analysis request, the runtime
+performs bounded `search_text` discovery followed by actual `read_file`
+operations (logged as `automatic_bootstrap`). If excerpts are available,
+Llama 3.1/3.2 synthesizes directly from that code without a native tool call,
+since these models can emit tool-call JSON as plain text. No model-generated
+pseudo-tool call is executed. An answer without a confirmed `path:line`
+citation is still rejected. Other models can keep using native tools.
+
+If the Interpreter cannot classify a request, the TUI now shows a specific
+reason: timeout, failed connection, unavailable model/endpoint, invalid JSON
+or an unknown intent. The original router remains the fallback. Verify
+`/interpreter` and check that the named model is installed at that host.
+
 Validate in a Rust-enabled development environment:
 
 ```sh
