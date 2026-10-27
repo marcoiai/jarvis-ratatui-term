@@ -325,6 +325,41 @@ impl EvidenceCache {
         result
     }
 
+    /// Small closed set of exact, runtime-observed coordinates for a local
+    /// model to copy. Examples are not endorsements of an interpretation.
+    pub fn citation_examples(&self, question: &str) -> Vec<String> {
+        let Ok(records) = self.observations.lock() else { return Vec::new() };
+        let question = question.to_ascii_lowercase();
+        let mut candidates: Vec<(usize, usize, String)> = Vec::new();
+        for item in records.iter().filter(|item| item["tool"] == "read_file") {
+            let (Some(path), Some(content)) = (
+                item["arguments"]["path"].as_str(),
+                item["result"].as_str()
+            ) else { continue; };
+            if !content.starts_with("SOURCE EXCERPT:") { continue; }
+            let priority = if question.contains(&path.to_ascii_lowercase()) { 0 }
+                else if path.ends_with("main.rs") { 1 } else { 2 };
+            for row in content.lines() {
+                let Some((number, line)) = row.split_once(": ") else { continue; };
+                let Ok(number) = number.parse::<usize>() else { continue };
+                if number == 0 { continue; }
+                let declaration = line.trim();
+                let score = if declaration.starts_with("pub fn ")
+                    || declaration.starts_with("fn ")
+                    || declaration.starts_with("pub struct ")
+                    || declaration.starts_with("impl ") { 0 }
+                    else if declaration.starts_with("mod ") { 1 }
+                    else { 2 };
+                candidates.push((priority, score, format!("{path}:{number}")));
+            }
+        }
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        let mut seen = BTreeSet::new();
+        candidates.into_iter().map(|(_, _, reference)| reference)
+            .filter(|reference| seen.insert(reference.clone()))
+            .take(12).collect()
+    }
+
     /// Whether the report contains at least one file:line pointing to a line
     /// actually returned by read_file. This is citation presence, NOT claim validation.
     pub fn has_supported_citation(&self, report: &str) -> bool {
@@ -335,13 +370,23 @@ impl EvidenceCache {
             .collect();
         drop(events);
         for path in paths {
-            let needle = format!("{path}:");
-            for (offset, _) in report.match_indices(&needle) {
-                let remainder = &report[offset + needle.len()..];
-                let span: String = remainder.chars()
-                    .take_while(|ch| ch.is_ascii_digit() || *ch == '-').collect();
-                if !span.is_empty() && self.observed_reference(&format!("{path}:{span}")) {
-                    return true;
+            // Only accept a recognized citation spelling if every cited line
+            // was really returned by read_file. Common Llama spellings include
+            // src/main.rs:42, src/main.rs:L42 and src/main.rs#L42.
+            for (prefix, has_line_marker) in [
+                (format!("{path}:"), false),
+                (format!("{path}#L"), true),
+            ] {
+                for (offset, _) in report.match_indices(&prefix) {
+                    let tail = &report[offset + prefix.len()..];
+                    let tail = if has_line_marker { tail }
+                        else { tail.strip_prefix('L').unwrap_or(tail) };
+                    let span: String = tail.chars()
+                        .take_while(|ch| ch.is_ascii_digit() || *ch == '-').collect();
+                    if !span.is_empty()
+                        && self.observed_reference(&format!("{path}:{span}")) {
+                        return true;
+                    }
                 }
             }
         }
