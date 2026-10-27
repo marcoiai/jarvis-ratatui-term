@@ -1809,6 +1809,70 @@ async fn repair_direct_review_citations(
     repaired
 }
 
+#[cfg(test)]
+mod citation_repair_regression_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn missing_citation_is_retried_against_observed_lines_only() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-citation-review-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("observed.rs"), "pub fn answer() {}\n").unwrap();
+        let cache = evidence::EvidenceCache::default();
+        let read = cache.execute_bootstrap(
+            &root, "read_file", &json!({"path":"observed.rs","start_line":1,"end_line":1})
+        );
+        assert!(read.contains("1: pub fn answer()"));
+        for (content, valid) in [
+            ("A função observada em observed.rs:1 é answer.", true),
+            ("A implementação completa já foi revisada.", false)
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let response_text = content.to_string();
+            let mock = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await.unwrap();
+                let payload = json!({"message":{"content":response_text}}).to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(), payload
+                );
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            });
+            let repaired = repair_direct_review_citations(
+                &reqwest::Client::new(), &endpoint, "mock:llama",
+                "analise o projeto atual", "Resumo sem referências.",
+                &cache, &metrics::Metrics::default()
+            ).await;
+            mock.await.unwrap();
+            assert_eq!(repaired.is_ok(), valid);
+            if valid {
+                assert!(cache.has_supported_citation(&repaired.unwrap()));
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn broad_scope_detection_covers_actual_regression_request() {
+        assert!(investigation::needs_baseline(
+            "faz uma analise do codigo do projeto atual"
+        ));
+        assert!(investigation::needs_baseline(
+            "análise da arquitetura do projeto"
+        ));
+        assert!(!investigation::needs_baseline(
+            "como funciona o mecanismo de reason?"
+        ));
+    }
+}
+
 /// Llama 3.x can serialize native tool calls as text. Only bypass tool calling
 /// once DUDE has actual read_file evidence for an analysis-only request.
 fn use_grounded_llama_synthesis(
