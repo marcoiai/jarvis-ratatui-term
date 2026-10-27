@@ -18,6 +18,12 @@ struct DiffData { total_hunks: usize, truncated: bool, hunks: Vec<Hunk> }
 struct Hunk { id: String, ordinal: usize, content: String }
 #[derive(Deserialize)]
 struct OllamaResponse { response: String }
+#[derive(Deserialize)]
+struct ChatResponse { choices: Vec<ChatChoice> }
+#[derive(Deserialize)]
+struct ChatChoice { message: ChatMessage }
+#[derive(Deserialize)]
+struct ChatMessage { content: Option<String> }
 #[derive(Deserialize, Serialize)]
 struct Finding { claim: String, evidence_ids: Vec<String>, confidence: String }
 #[derive(Deserialize, Serialize)]
@@ -50,6 +56,27 @@ async fn ollama(endpoint:&str,model:&str,prompt:&str)->Result<String,String>{
         .error_for_status().map_err(|e|e.to_string())?;
     let data:OllamaResponse=response.json().await.map_err(|e|e.to_string())?;
     Ok(data.response)
+}
+async fn mlx_chat(endpoint:&str,model:&str,prompt:&str)->Result<String,String>{
+    let client=reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build().map_err(|e|e.to_string())?;
+    let url=format!("{}/v1/chat/completions",endpoint.trim_end_matches('/'));
+    let response=client.post(url)
+        .json(&json!({
+            "model":model,
+            "messages":[{"role":"system","content":"Return only a JSON object."},
+                        {"role":"user","content":prompt}],
+            "temperature":0,
+            "max_tokens":800,
+            "stream":false
+        }))
+        .send().await.map_err(|e|format!("MLX connection: {e}"))?
+        .error_for_status().map_err(|e|format!("MLX HTTP: {e}"))?;
+    let data:ChatResponse=response.json().await.map_err(|e|format!("MLX response: {e}"))?;
+    data.choices.into_iter().next()
+        .and_then(|choice|choice.message.content)
+        .ok_or_else(||"MLX returned no message content".into())
 }
 fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
     let mut accepted=Vec::new();
@@ -105,11 +132,30 @@ async fn main() -> ExitCode {
          first.destination_blob.as_deref().unwrap_or("unknown"),
          data.total_hunks,hunk.id,hunk.content
     );
-    let endpoint=env::var("OLLAMA_HOST").unwrap_or_else(|_|"http://127.0.0.1:11434".into());
-    let endpoint=if endpoint.starts_with("http"){endpoint}else{format!("http://{endpoint}")};
-    let model=env::var("DUDE_INVESTIGATOR_MODEL").unwrap_or_else(|_|"qwen3:4b-instruct-2507-q4_K_M".into());
-    let reply=match ollama(endpoint.trim_end_matches('/'),&model,&prompt).await {
-        Ok(v)=>v,Err(e)=>{eprintln!("Ollama: {e}");return ExitCode::FAILURE}
+    let backend=env::var("DUDE_INFERENCE_BACKEND").unwrap_or_else(|_|"mlx".into()).to_lowercase();
+    let reply=match backend.as_str(){
+        "mlx"=>{
+            let endpoint=match env::var("DUDE_MLX_URL"){
+                Ok(v) if v.starts_with("http://127.0.0.1:") || v.starts_with("http://localhost:") =>v,
+                _=>{eprintln!("Set DUDE_MLX_URL to your local MLX OpenAI-compatible server (e.g. http://127.0.0.1:8080)");return ExitCode::from(2);}
+            };
+            let model=match env::var("DUDE_MLX_MODEL"){
+                Ok(v) if !v.trim().is_empty()=>v,
+                _=>{eprintln!("Set DUDE_MLX_MODEL to the exact model ID exposed by your MLX server");return ExitCode::from(2);}
+            };
+            mlx_chat(&endpoint,&model,&prompt).await
+        }
+        "ollama"=>{
+            let endpoint=env::var("OLLAMA_HOST").unwrap_or_else(|_|"http://127.0.0.1:11434".into());
+            let endpoint=if endpoint.starts_with("http"){endpoint}else{format!("http://{endpoint}")};
+            let model=env::var("DUDE_INVESTIGATOR_MODEL").unwrap_or_else(|_|"qwen3:4b-instruct-2507-q4_K_M".into());
+            ollama(endpoint.trim_end_matches('/'),&model,&prompt).await
+        }
+        _=>{eprintln!("DUDE_INFERENCE_BACKEND must be mlx or ollama");return ExitCode::from(2);}
+    };
+    let reply=match reply {
+        Ok(v)=>v,
+        Err(e)=>{eprintln!("{backend}: {e}");return ExitCode::FAILURE;}
     };
     let parsed:ModelReport=match serde_json::from_str(&reply) {
         Ok(v)=>v,Err(e)=>{eprintln!("Model JSON invalid: {e}");return ExitCode::FAILURE}
