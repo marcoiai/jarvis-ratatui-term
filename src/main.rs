@@ -1739,6 +1739,60 @@ fn citation_retry_timeout_seconds(raw: Option<&str>) -> u64 {
         .unwrap_or(120)
 }
 
+/// A model may produce either a conventional cited answer or structured JSON.
+/// JSON references are individually verified against real read_file observations
+/// before the runtime renders them; this checks provenance, not claim semantics.
+fn parse_citation_repair_output(
+    content: &str, observed: &evidence::EvidenceCache,
+) -> Result<String, String> {
+    let content = response_filter::strip_completed(content)?;
+    if let Ok(value) = serde_json::from_str::<Value>(content.trim())
+        && let Some(answer) = value.get("answer").and_then(Value::as_str) {
+            if answer.trim().is_empty() {
+                return Err("Retry de citações retornou uma resposta vazia.".into());
+            }
+            let refs = value.get("references").and_then(Value::as_array)
+                .ok_or("Retry de citações não retornou a lista 'references'.")?;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut verified = Vec::new();
+            for item in refs {
+                let reference = item.as_str()
+                    .ok_or("Citação do Interpreter precisa ser texto.")?;
+                // Normalize common line-prefix spellings without inventing paths
+                // or line numbers. Every reference is checked against source.
+                let normalized = if let Some((path, line)) = reference.rsplit_once("#L") {
+                    format!("{path}:{line}")
+                } else if let Some((path, line)) = reference.rsplit_once(":L") {
+                    format!("{path}:{line}")
+                } else {
+                    reference.to_owned()
+                };
+                if !observed.observed_reference(&normalized) {
+                    return Err(format!(
+                        "Retry citou linha não observada ({reference}); a resposta não foi validada."
+                    ));
+                }
+                if seen.insert(normalized.clone()) {
+                    verified.push(normalized);
+                }
+            }
+            if verified.is_empty() {
+                return Err("Retry não produziu nenhuma referência real do código.".into());
+            }
+            // Never silently treat a model-selected source as semantic proof.
+            return Ok(format!(
+                "{}\n\nReferências escolhidas pelo modelo (linhas lidas pelo runtime; \
+                 interpretação não auditada semanticamente): {}",
+                answer.trim(), verified.join(", ")
+            ));
+        }
+    if observed.has_supported_citation(&content) {
+        Ok(content)
+    } else {
+        Err("Retry não retornou referências arquivo:linha observadas em read_file.".into())
+    }
+}
+
 /// One bounded repair pass: reconstruct the answer from actual observed source
 /// excerpts and ask for file:line citations. The previous answer is an untrusted
 /// draft, not evidence. Never fabricate citations or silently bypass the gate.
@@ -1754,20 +1808,23 @@ async fn repair_direct_review_citations(
     // Source-only compact context: prioritize files named in the original
     // question and avoid shipping directory listings and unrelated search hits.
     let source = observed.citation_retry_context(question);
+    let permitted = observed.citation_examples(question).join(", ");
     let old_draft: String = draft.chars().take(900).collect();
     let retry_seconds = citation_retry_timeout_seconds(
         env::var("DUDE_CITATION_RETRY_TIMEOUT_SECS").ok().as_deref()
     );
     let instruction = concat!(
-        "Você é o revisor de evidências do DUDE. Redija uma resposta final em português ",
-        "baseada EXCLUSIVAMENTE nas linhas SOURCE EXCERPT observadas abaixo. ",
-        "A resposta anterior é um rascunho não verificado, não uma fonte. ",
-        "Cite referências explícitas no formato caminho/arquivo.ext:linha ",
-        "(por exemplo src/main.rs:12), mas APENAS quando o número de linha ",
-        "aparecer nos SOURCE EXCERPT disponíveis. Não invente referências, ",
-        "não atribua código a módulos não lidos e não afirme revisão completa. ",
-        "Se as evidências forem insuficientes, explique os limites. ",
-        "Não escreva JSON nem chamadas de ferramentas."
+        "Você é o revisor de evidências do DUDE. Baseie-se apenas nos ",
+        "SOURCE EXCERPT realmente lidos. Produza um JSON válido com duas chaves: ",
+        "{\"answer\":\"resposta curta, incluindo uma melhoria específica\",",
+        "\"references\":[\"src/main.rs:12\"]}. ",
+        "references deve conter uma ou mais coordenadas EXATAS de linhas ",
+        "que sustentam a resposta e que aparecem nos trechos. ",
+        "NÃO copie src/main.rs:12 se essa linha não estiver disponível. ",
+        "Use os exemplos fornecidos somente se forem realmente pertinentes. ",
+        "Não invente módulos, arquivos, conteúdo ou linhas. ",
+        "Diferencie fatos de sugestões e declare limites da revisão. ",
+        "A resposta anterior não é evidência. Nenhuma ferramenta está disponível."
     );
     let started = Instant::now();
     let repaired: Result<String, String> = async {
@@ -1778,12 +1835,15 @@ async fn repair_direct_review_citations(
                 "stream":false,
                 "think":false,
                 "tools":[],
+                "format":"json",
                 "options":{"num_ctx":investigation::context_size(),"num_predict":1100},
                 "messages":[
                     {"role":"system","content":instruction},
                     {"role":"user","content":format!(
-                        "PEDIDO ORIGINAL:\n{question}\n\nEVIDÊNCIAS REAIS:\n{source}\n\nRASCUNHO SEM CITAÇÕES VÁLIDAS (não confiar):\n{old_draft}\n\n\
-                         Reescreva com referências válidas e limites explícitos."
+                        "PEDIDO ORIGINAL:\n{question}\n\nEVIDÊNCIAS REAIS:\n{source}\n\n\
+                         COORDENADAS EXISTENTES (copie apenas as pertinentes):\n{permitted}\n\n\
+                         RASCUNHO NÃO VERIFICADO (não confiar):\n{old_draft}\n\n\
+                         Forneça JSON com answer e references verificáveis."
                     )}
                 ]
             }))
@@ -1810,14 +1870,11 @@ async fn repair_direct_review_citations(
         if !reply.message.tool_calls.is_empty() {
             return Err("O modelo tentou chamar ferramentas durante a síntese sem ferramentas.".into());
         }
-        let answer = response_filter::strip_completed(&reply.message.content)?;
-        if !observed.has_supported_citation(&answer) {
-            return Err(format!(
-                "Revisão incompleta: nem após uma tentativa de correção o modelo citou \
-                 uma linha realmente observada. Leituras disponíveis:\n{}",
+        let answer = parse_citation_repair_output(&reply.message.content, observed)
+            .map_err(|reason|format!(
+                "Revisão incompleta: {reason}\nLeituras disponíveis:\n{}",
                 observed.read_manifest()
-            ));
-        }
+            ))?;
         let unread = observed.uninspected_source_mentions(&answer);
         if !unread.is_empty() {
             return Err(format!(
@@ -2004,16 +2061,20 @@ async fn query_direct_ollama(
         }
     }
     if analysis_requested && observed.source_read_count() > 0 {
+        let available_references = observed.citation_examples(&original_question).join(", ");
         insert_context_before_latest_user(&mut direct_messages, Message {
             role: "system".into(),
             content: concat!(
                 "Antes de concluir, inclua referências reais de código no formato ",
                 "src/arquivo.ext:linha para os pontos que descrevem implementação. ",
                 "Somente números de linha presentes nos SOURCE EXCERPT fornecidos. ",
+                "Uma forma válida é src/main.rs:42 ou src/main.rs:L42. ",
                 "O DUDE rejeitará a resposta sem pelo menos uma citação verificável. ",
                 "Se propuser melhorias, indique uma sugestão, não uma alteração aplicada; ",
                 "não faça afirmações sobre código não lido."
-            ).into(),
+            ).to_string() + &format!(
+                " Exemplos reais de coordenadas observadas (use somente se pertinentes): {available_references}."
+            ),
         });
     }
     let source_bootstrapped = observed.source_read_count() > 0;
