@@ -2113,19 +2113,20 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     // Symphony wraps each real request with an evidence handoff. Classifying
     // the wrapper as user intent can falsely trigger a code review just
     // because it says "review" and "tools" even if the user only said "review".
-    let question = original_intent_query.unwrap_or_else(|| messages.iter().rev()
-        .find(|m|m.role == "user").map(|m|m.content.as_str()).unwrap_or(""));
+    let question: String = original_intent_query.map(str::to_owned)
+        .unwrap_or_else(|| messages.iter().rev().find(|m|m.role == "user")
+            .map(|m|m.content.clone()).unwrap_or_default());
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
     // Follow-up reviews carry the previous technical intent, but the model still
     // chooses which read-only tools and implementation files are relevant.
-    let initial_review = allow_tools && investigation::needs_baseline(question);
-    let review_followup = allow_tools && investigation::review_followup(question, previous_user);
+    let initial_review = allow_tools && investigation::needs_baseline(&question);
+    let review_followup = allow_tools && investigation::review_followup(&question, previous_user);
     let focused_review = allow_tools && (force_source_review
-        || investigation::focused_source_review(question));
+        || investigation::focused_source_review(&question));
     let require_project_evidence = initial_review || review_followup || focused_review;
     let minimum_new_reads = if review_followup { 2 } else if initial_review || focused_review { 1 } else { 0 };
     let require_change_evidence = allow_tools && (
-        investigation::is_code_change_request(question)
+        investigation::is_code_change_request(&question)
         || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
             && investigation::investigation_intent(question, Some(previous)))
     );
@@ -2133,7 +2134,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     // never remove tools from an otherwise authorized request.
     if allow_tools {
         let root = workspace.clone();
-        let bootstrap = investigation::needs_baseline(question);
+        let bootstrap = investigation::needs_baseline(&question);
         let cache = evidence.clone();
         // Never append tool policy after the actual user turn: keep the
         // user's current request as the last message presented to the model.
