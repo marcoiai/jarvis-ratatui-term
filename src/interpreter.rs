@@ -181,4 +181,33 @@ mod tests {
         assert!(guidance.contains("user approval"));
         assert!(!guidance.contains("rm -rf"));
     }
+
+    #[tokio::test]
+    async fn ollama_http_adapter_classifies_without_rewriting_the_user_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let mock = tokio::spawn(async move {
+            let (mut socket, _) = server.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            let reply = json!({"message":{"content":
+                r#"{"intent":"inspect_code","depth":"focused","requires_source":true,"route":"SOLO"}"#}});
+            let body = reply.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let url = format!("http://{address}");
+        let decision = interpret(&reqwest::Client::new(), &url, "interpreter:test",
+            "checar o mecanismo de reason", Some("analisar o DUDE"),
+            "direct", Route::Direct).await;
+        mock.await.unwrap();
+        assert!(decision.interpreted);
+        assert!(decision.requires_source);
+        assert!(matches!(decision.route, Route::Direct));
+        assert_eq!(decision.intent, "inspect_code");
+    }
 }
