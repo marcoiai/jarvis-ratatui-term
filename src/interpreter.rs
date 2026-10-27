@@ -213,6 +213,39 @@ mod tests {
         assert!(!guidance.contains("rm -rf"));
     }
 
+
+    #[test]
+    fn accepts_fenced_json_but_never_promotes_arbitrary_text() {
+        let body = "```json\\n{\\"intent\\":\\"INSPECT_CODE\\",\\"route\\":\\"SOLO\\",\\"requires_source\\":true}\\n```";
+        let result = parse(body, "direct", Route::Direct);
+        assert_eq!(result.intent, "inspect_code");
+        assert!(result.requires_source);
+        assert!(result.failure.is_none());
+        assert!(result.guidance().unwrap().contains("runtime task classification"));
+    }
+
+    #[tokio::test]
+    async fn ollama_http_404_reports_a_specific_safe_failure() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let mock = tokio::spawn(async move {
+            let (mut socket, _) = server.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket.write_all(
+                b"HTTP/1.1 404 Not Found\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n"
+            ).await.unwrap();
+        });
+        let result = interpret(&reqwest::Client::new(),
+            &format!("http://{address}"), "missing:interpreter",
+            "como funciona o reason", None, "direct", Route::Direct).await;
+        mock.await.unwrap();
+        assert!(!result.interpreted);
+        assert!(result.failure.is_some());
+        assert!(matches!(result.route, Route::Direct));
+    }
+
     #[tokio::test]
     async fn ollama_http_adapter_classifies_without_rewriting_the_user_request() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
