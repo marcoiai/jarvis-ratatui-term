@@ -2,7 +2,7 @@
 //! Does not execute model output or change project files.
 //! Usage: cargo run --bin workspace_investigator -- SOURCE DEST --file REL --hunk N
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::{collections::BTreeSet, env, path::Path, process::{Command, ExitCode}};
 
 #[derive(Deserialize)]
