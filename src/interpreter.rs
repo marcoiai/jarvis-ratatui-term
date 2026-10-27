@@ -9,14 +9,20 @@ pub struct Interpretation {
     pub depth: &'static str,
     pub requires_source: bool,
     pub interpreted: bool,
+    /// A short diagnostic, never a model response, prompt, or secret.
+    pub failure: Option<&'static str>,
 }
 
 impl Interpretation {
     pub fn fallback(route: Route) -> Self {
-        Self { route, intent: "unknown", depth: "focused", requires_source: false, interpreted: false }
+        Self { route, intent: "unknown", depth: "focused", requires_source: false, interpreted: false, failure: None }
     }
 
     /// Only runtime-authored, closed-set guidance enters the executor context.
+    fn failed(route: Route, reason: &'static str) -> Self {
+        Self { failure: Some(reason), ..Self::fallback(route) }
+    }
+
     pub fn guidance(&self) -> Option<String> {
         if !self.interpreted || self.intent == "chat" { return None; }
         let task = match self.intent {
@@ -45,19 +51,28 @@ impl Interpretation {
 }
 
 fn parse(body: &str, mode: &str, fallback: Route) -> Interpretation {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return Interpretation::fallback(fallback);
+    let clean = body.trim();
+    // Some older Ollama templates wrap even JSON-mode answers in a fence.
+    let clean = clean.strip_prefix("```json").or_else(||clean.strip_prefix("```"))
+        .unwrap_or(clean).trim();
+    let clean = clean.strip_suffix("```").unwrap_or(clean).trim();
+    let Ok(value) = serde_json::from_str::<Value>(clean) else {
+        return Interpretation::failed(fallback, "Resposta do Interpreter não é JSON válido");
     };
-    let Some(obj) = value.as_object() else { return Interpretation::fallback(fallback); };
-    let intent = match obj.get("intent").and_then(Value::as_str) {
-        Some("chat") => "chat",
-        Some("explain") => "explain",
-        Some("inspect_code") => "inspect_code",
-        Some("debug_code") => "debug_code",
-        Some("change_code") => "change_code",
-        Some("project_review") => "project_review",
-        Some("file_listing") => "file_listing",
-        _ => return Interpretation::fallback(fallback),
+    let Some(obj) = value.as_object() else {
+        return Interpretation::failed(fallback, "Interpreter não retornou um objeto JSON");
+    };
+    let label = obj.get("intent").and_then(Value::as_str).unwrap_or("")
+        .trim().to_ascii_lowercase();
+    let intent = match label.as_str() {
+        "chat" | "greeting" => "chat",
+        "explain" | "question" => "explain",
+        "inspect_code" | "investigate" | "inspect" | "code_analysis" => "inspect_code",
+        "debug_code" | "debug" => "debug_code",
+        "change_code" | "modify_code" => "change_code",
+        "project_review" | "review" => "project_review",
+        "file_listing" | "list_files" => "file_listing",
+        _ => return Interpretation::failed(fallback, "Intenção não reconhecida no JSON do Interpreter"),
     };
     let depth = match obj.get("depth").and_then(Value::as_str) {
         Some("brief") => "brief",
@@ -75,7 +90,7 @@ fn parse(body: &str, mode: &str, fallback: Route) -> Interpretation {
             _ => fallback,
         }
     } else { fallback };
-    Interpretation { route, intent, depth, requires_source, interpreted: true }
+    Interpretation { route, intent, depth, requires_source, interpreted: true, failure: None }
 }
 
 /// Bounded Ollama request; invalid responses and timeouts are safe fallbacks.
@@ -92,10 +107,11 @@ pub async fn interpret(
         "You are DUDE's intent interpreter, not an executor. Do not answer, ",
         "rewrite the request, use tools, or authorize changes. ",
         "Use previous-user context only to resolve follow-ups. ",
-        "Return exactly one JSON object with fields: ",
-        "{\"intent\":\"chat|explain|inspect_code|debug_code|change_code|project_review|file_listing\",",
-        "\"depth\":\"brief|focused|deep\",\"requires_source\":true|false,",
-        "\"route\":\"SOLO|SYMPHONY\"}. ",
+        "Respond in strict JSON. Example: ",
+        "{\"intent\":\"inspect_code\",\"depth\":\"focused\",",
+        "\"requires_source\":true,\"route\":\"SOLO\"}. ",
+        "Allowed intent: chat, explain, inspect_code, debug_code, change_code, project_review, file_listing. ",
+        "Allowed depth: brief, focused, deep. Allowed route: SOLO, SYMPHONY. ",
         "For 'checar o mecanismo de reason' use inspect_code and requires_source=true. ",
         "Require source for workspace implementation questions, not greetings. ",
         "SYMPHONY is for complex multi-step reviews; SOLO for focused tasks. ",
@@ -117,10 +133,25 @@ pub async fn interpret(
                 {"role":"user", "content":format!("Previous user turn (context only): {previous}\nCurrent request: {query}")}
             ]
         }));
-    let Ok(response) = response.send().await else { return Interpretation::fallback(fallback); };
-    if !response.status().is_success() { return Interpretation::fallback(fallback); }
-    let Ok(payload) = response.json::<Value>().await else { return Interpretation::fallback(fallback); };
-    parse(payload["message"]["content"].as_str().unwrap_or(""), mode, fallback)
+    let response = match response.send().await {
+        Ok(response) => response,
+        Err(error) if error.is_timeout() => return Interpretation::failed(fallback, "Timeout ao consultar o modelo Interpreter"),
+        Err(error) if error.is_connect() => return Interpretation::failed(fallback, "Sem conexão com DUDE_INTERPRETER_HOST"),
+        Err(_) => return Interpretation::failed(fallback, "Falha HTTP ao consultar o Interpreter"),
+    };
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Interpretation::failed(fallback, "Modelo Interpreter não encontrado no servidor Ollama");
+    }
+    if !response.status().is_success() {
+        return Interpretation::failed(fallback, "Ollama recusou a requisição do Interpreter");
+    }
+    let Ok(payload) = response.json::<Value>().await else {
+        return Interpretation::failed(fallback, "Resposta HTTP do Interpreter não é JSON Ollama");
+    };
+    let Some(content) = payload["message"]["content"].as_str() else {
+        return Interpretation::failed(fallback, "Ollama não retornou message.content para o Interpreter");
+    };
+    parse(content, mode, fallback)
 }
 
 #[cfg(test)]
