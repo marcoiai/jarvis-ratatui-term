@@ -2,7 +2,7 @@
 //! Never deletes, overwrites, follows symlinks, or runs model-generated commands.
 //! Usage: cargo run --bin workspace_diff -- SOURCE DESTINATION [--file relative/path] [--apply]
 use serde::Serialize;
-use std::{env, fs, io::Write, path::{Component, Path, PathBuf}, process::ExitCode};
+use std::{env, fs, io::Write, path::{Component, Path, PathBuf}, process::{Command, ExitCode}};
 
 #[derive(Serialize)]
 struct DiffReport {
@@ -12,7 +12,41 @@ struct DiffReport {
     result: String,
     applied: bool,
     warning: Option<String>,
+    diff: Option<DiffEvidence>,
 }
+#[derive(Serialize)]
+struct DiffEvidence {
+    format: String,
+    content: String,
+    truncated: bool,
+    added_lines: usize,
+    removed_lines: usize,
+}
+
+fn unified_diff(src: &Path, dst: &Path) -> Result<Option<DiffEvidence>, String> {
+    // Explicitly bypass external diff drivers and avoid shell invocation.
+    let output = Command::new("git")
+        .args(["-c", "diff.external=", "diff", "--no-index", "--no-ext-diff", "--no-textconv",
+               "--no-color", "--unified=3", "--"])
+        .arg(src).arg(dst)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output().map_err(|e| format!("cannot start git diff: {e}"))?;
+    match output.status.code() {
+        Some(0) => return Ok(None),
+        Some(1) => {}, // git diff --no-index reports differences using exit code 1
+        _ => return Err(format!("git diff failed: {}", String::from_utf8_lossy(&output.stderr))),
+    }
+    let all = String::from_utf8_lossy(&output.stdout);
+    let limit = 32 * 1024;
+    let end = all.char_indices().map(|(i, _)| i).take_while(|&i| i <= limit).last().unwrap_or(0);
+    let end = if all.len() <= limit { all.len() } else { end };
+    let excerpt = &all[..end];
+    let added_lines = all.lines().filter(|line| line.starts_with('+') && !line.starts_with("+++")).count();
+    let removed_lines = all.lines().filter(|line| line.starts_with('-') && !line.starts_with("---")).count();
+    Ok(Some(DiffEvidence { format: "unified".into(), content: excerpt.into(),
+        truncated: end < all.len(), added_lines, removed_lines }))
+}
+
 fn safe_rel(raw: &str) -> Result<&Path, String> {
     let rel = Path::new(raw);
     if rel.as_os_str().is_empty() || rel.is_absolute() { return Err("expected a relative file path".into()); }
@@ -48,7 +82,7 @@ fn inspect(source: &Path, target: &Path, relative: &str, apply: bool) -> Result<
     let dst = checked_file(&dst_root, rel)?;
     let mut result = DiffReport {
         source: src_root.display().to_string(), destination: dst_root.display().to_string(),
-        file: relative.into(), result: String::new(), applied: false, warning: None,
+        file: relative.into(), result: String::new(), applied: false, warning: None, diff: None,
     };
     if !src.exists() {
         result.result = if dst.exists() { "destination_only" } else { "missing_both" }.into();
@@ -62,6 +96,9 @@ fn inspect(source: &Path, target: &Path, relative: &str, apply: bool) -> Result<
         let metadata = fs::symlink_metadata(&dst).map_err(|e| e.to_string())?;
         if !metadata.is_file() { return Err("destination is not a regular file".into()); }
         result.result = if fs::read(&dst).map_err(|e| e.to_string())? == bytes { "identical" } else { "different" }.into();
+        if result.result == "different" {
+            result.diff = unified_diff(&src, &dst)?;
+        }
         if apply { return Err("refusing to overwrite an existing destination, even if identical".into()); }
         return Ok(result);
     }
@@ -126,7 +163,13 @@ mod tests {
         let (root, src, dst) = fixture();
         fs::write(src.join("a"), "old").unwrap();
         fs::write(dst.join("a"), "new").unwrap();
-        assert_eq!(inspect(&src, &dst, "a", false).unwrap().result, "different");
+        let report = inspect(&src, &dst, "a", false).unwrap();
+        assert_eq!(report.result, "different");
+        let diff = report.diff.unwrap();
+        assert_eq!(diff.added_lines, 1);
+        assert_eq!(diff.removed_lines, 1);
+        assert!(diff.content.contains("-old"));
+        assert!(diff.content.contains("+new"));
         assert!(inspect(&src, &dst, "a", true).is_err());
         assert_eq!(fs::read_to_string(dst.join("a")).unwrap(), "new");
         fs::remove_dir_all(root).unwrap();
