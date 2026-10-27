@@ -1730,6 +1730,85 @@ fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &st
     });
 }
 
+/// One bounded repair pass: reconstruct the answer from actual observed source
+/// excerpts and ask for file:line citations. The previous answer is an untrusted
+/// draft, not evidence. Never fabricate citations or silently bypass the gate.
+async fn repair_direct_review_citations(
+    client: &reqwest::Client,
+    host: &str,
+    model: &str,
+    question: &str,
+    draft: &str,
+    observed: &evidence::EvidenceCache,
+    metrics: &metrics::Metrics,
+) -> Result<String, String> {
+    let source: String = observed.export().chars().take(22_000).collect();
+    let old_draft: String = draft.chars().take(2_400).collect();
+    let instruction = concat!(
+        "Você é o revisor de evidências do DUDE. Redija uma resposta final em português ",
+        "baseada EXCLUSIVAMENTE nas linhas SOURCE EXCERPT observadas abaixo. ",
+        "A resposta anterior é um rascunho não verificado, não uma fonte. ",
+        "Cite referências explícitas no formato caminho/arquivo.ext:linha ",
+        "(por exemplo src/main.rs:12), mas APENAS quando o número de linha ",
+        "aparecer nos SOURCE EXCERPT disponíveis. Não invente referências, ",
+        "não atribua código a módulos não lidos e não afirme revisão completa. ",
+        "Se as evidências forem insuficientes, explique os limites. ",
+        "Não escreva JSON nem chamadas de ferramentas."
+    );
+    let started = Instant::now();
+    let repaired: Result<String, String> = async {
+        let response = client.post(format!("{}/api/chat", host.trim_end_matches('/')))
+            .timeout(Duration::from_secs(30))
+            .json(&json!({
+                "model":model,
+                "stream":false,
+                "think":false,
+                "tools":[],
+                "options":{"num_ctx":investigation::context_size()},
+                "messages":[
+                    {"role":"system","content":instruction},
+                    {"role":"user","content":format!(
+                        "PEDIDO ORIGINAL:\n{question}\n\nEVIDÊNCIAS REAIS:\n{source}\n\nRASCUNHO SEM CITAÇÕES VÁLIDAS (não confiar):\n{old_draft}\n\n\
+                         Reescreva com referências válidas e limites explícitos."
+                    )}
+                ]
+            }))
+            .send().await.map_err(|e|format!("Retry de citações falhou: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "Retry de citações retornou HTTP {status}. Revisão não concluída."
+            ));
+        }
+        let reply: OllamaReply = response.json().await
+            .map_err(|e|format!("JSON inválido no retry de citações: {e}"))?;
+        if let (Some(input), Some(output)) = (reply.prompt_eval_count, reply.eval_count) {
+            metrics.tokens("ollama", model, input, output);
+        }
+        if !reply.message.tool_calls.is_empty() {
+            return Err("O modelo tentou chamar ferramentas durante a síntese sem ferramentas.".into());
+        }
+        let answer = response_filter::strip_completed(&reply.message.content)?;
+        if !observed.has_supported_citation(&answer) {
+            return Err(format!(
+                "Revisão incompleta: nem após uma tentativa de correção o modelo citou \
+                 uma linha realmente observada. Leituras disponíveis:\n{}",
+                observed.read_manifest()
+            ));
+        }
+        let unread = observed.uninspected_source_mentions(&answer);
+        if !unread.is_empty() {
+            return Err(format!(
+                "Retry de citações mencionou arquivos não lidos: {}. Revisão não concluída.",
+                unread.join(", ")
+            ));
+        }
+        Ok(answer)
+    }.await;
+    metrics.stage("direct_source_citation_retry", "ollama", started, repaired.is_ok());
+    repaired
+}
+
 /// Llama 3.x can serialize native tool calls as text. Only bypass tool calling
 /// once DUDE has actual read_file evidence for an analysis-only request.
 fn use_grounded_llama_synthesis(
