@@ -2526,7 +2526,7 @@ mod meta_llama_tool_handling_tests {
 
     #[test]
     fn change_tools_are_not_exposed_for_read_only_questions() {
-        let ask = |content| vec![Message { role:"user".into(), content: content.into() }];
+        let ask = |content: &str| vec![Message { role:"user".into(), content: content.into() }];
         assert!(!direct_change_intent(&ask("Analise a arquitetura deste projeto")));
         assert!(!direct_change_intent(&ask("try again")));
         assert!(direct_change_intent(&ask("Corrija esta função")));
