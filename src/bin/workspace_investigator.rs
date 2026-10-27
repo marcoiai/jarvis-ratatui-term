@@ -24,9 +24,9 @@ struct ChatResponse { choices: Vec<ChatChoice> }
 struct ChatChoice { message: ChatMessage }
 #[derive(Deserialize)]
 struct ChatMessage { content: Option<String> }
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Finding { claim: String, evidence_ids: Vec<String>, confidence: String }
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ModelReport { findings: Vec<Finding>, uncertainty: Vec<String>, recommendation: String }
 #[derive(Serialize)]
 struct Outcome {
