@@ -1903,6 +1903,39 @@ mod citation_repair_regression_tests {
         assert_eq!(citation_retry_timeout_seconds(Some("500")), 300);
     }
 
+    #[test]
+    fn structured_citation_retry_requires_observed_noninvented_refs() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-json-citation-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"),
+            "pub fn main() {}\n").unwrap();
+        let observed = evidence::EvidenceCache::default();
+        observed.execute_bootstrap(&root, "read_file",
+            &json!({"path":"src/main.rs","start_line":1,"end_line":1}));
+        let good = r#"{"answer":"Sugiro separar o entrypoint em módulos menores.","references":["src/main.rs:L1"]}"#;
+        let validated = parse_citation_repair_output(good, &observed).unwrap();
+        assert!(validated.contains("src/main.rs:1"));
+        assert!(validated.contains("interpretação não auditada semanticamente"));
+        assert!(observed.has_supported_citation(&validated));
+        for bad in [
+            r#"{"answer":"Tudo verificado","references":[]}"#,
+            r#"{"answer":"Tudo verificado","references":["src/main.rs:999"]}"#,
+            r#"{"answer":"Tudo verificado","references":["src/not_read.rs:1"]}"#,
+            r#"{"answer":"Tudo verificado","references":["src/main.rs:1","src/not_read.rs:1"]}"#,
+            "A análise não menciona nenhuma linha observada.",
+        ] {
+            assert!(parse_citation_repair_output(bad, &observed).is_err(), "{bad}");
+        }
+        assert!(parse_citation_repair_output(
+            "Sugestão localizada em src/main.rs#L1.", &observed
+        ).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn missing_citation_is_retried_against_observed_lines_only() {
         let root = std::env::temp_dir().join(format!(
