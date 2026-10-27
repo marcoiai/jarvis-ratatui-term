@@ -139,9 +139,13 @@ pub async fn interpret(
             "messages": messages
         }))
     };
+    let timeout_seconds = std::env::var("DUDE_INTERPRETER_TIMEOUT_SECS")
+        .ok().and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (5..=120).contains(seconds))
+        .unwrap_or(if mlx { 45 } else { 12 });
     let response = client
         .post(format!("{}{path}", host.trim_end_matches('/')))
-        .timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(timeout_seconds))
         .json(&payload);
     let response = match response.send().await {
         Ok(response) => response,
