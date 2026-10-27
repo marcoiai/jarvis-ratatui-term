@@ -36,6 +36,54 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 
 DUDE prefers `llama3.1:8b` (Meta Llama 3.1 8B) and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
 
+## MLX local backend (opt-in development preview)
+
+The existing DUDE executor expects Ollama's `/api/chat`, tool-call frames and
+`/api/tags`. MLX-LM exposes OpenAI-compatible `/v1/chat/completions`.
+To preserve DUDE's existing local file tools, source-evidence checks and
+mutation-approval boundaries, a small compatibility bridge translates only
+the HTTP protocol; it does **not** execute the model's tools.
+
+With MLX-LM already running on the Mac at `10.10.10.95:8081` (Qwen3 4B)
+and `10.10.10.95:8082` (Qwen2.5-Coder 7B), run this bridge on the **Linux
+machine where DUDE runs**:
+
+```sh
+python3 tools/mlx_ollama_bridge.py --mlx-url http://10.10.10.95:8082 --port 11882
+```
+
+In a separate Linux terminal, inside your chosen project workspace:
+
+```sh
+DUDE_WORKSPACE=/path/to/target/project \
+DUDE_INTERPRETER_BACKEND=mlx \
+DUDE_INTERPRETER_HOST=http://10.10.10.95:8081 \
+DUDE_INTERPRETER_MODEL=default_model \
+OLLAMA_HOST=http://127.0.0.1:11882 \
+OLLAMA_MODEL=mlx-local \
+cargo run --bin dude
+```
+
+Use `/interpreter` to inspect the Interpreter configuration and `/ollama`
+to inspect the executor endpoint (its name remains Ollama for compatibility).
+The bridge reports a virtual local model `mlx-local` via `/api/tags`.
+It does not download models. All model weights stay with the MLX server.
+
+**Development limitations:** the bridge currently buffers upstream responses
+before emitting one Ollama NDJSON frame, so it does not offer incremental token
+streaming. MLX-LM tool-call fidelity depends on the server/model implementation
+and must be tested in an actual DUDE source review before declaring the native
+`read_file` workflow operational. Model tool-call *text* is never executed.
+DUDE's existing evidence requirements remain active and can reject an
+incomplete source review. Restrict the endpoints to trusted localhost/LAN;
+neither server nor bridge should be exposed publicly without authentication.
+
+Bridge protocol tests (no MLX server needed):
+
+```sh
+python3 -m unittest discover -s tools -p 'test_mlx_ollama_bridge.py' -v
+```
+
 ## Optional two-model Interpreter
 
 DUDE can use **one small Ollama model to interpret the request** and a different
