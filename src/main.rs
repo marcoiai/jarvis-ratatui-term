@@ -2128,7 +2128,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     let require_change_evidence = allow_tools && (
         investigation::is_code_change_request(&question)
         || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
-            && investigation::investigation_intent(question, Some(previous)))
+            && investigation::investigation_intent(&question, Some(previous)))
     );
     // The model decides whether to call read-only tools. Keyword heuristics must
     // never remove tools from an otherwise authorized request.
