@@ -1728,6 +1728,30 @@ fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &st
     });
 }
 
+/// Llama 3.x can serialize native tool calls as text. Only bypass tool calling
+/// once DUDE has actual read_file evidence for an analysis-only request.
+fn use_grounded_llama_synthesis(
+    model: &str, analysis_requested: bool, source_read: bool, proposes_changes: bool
+) -> bool {
+    analysis_requested && source_read && !proposes_changes
+        && model.to_ascii_lowercase().starts_with("llama3.")
+}
+
+#[cfg(test)]
+mod grounded_llama_tests {
+    use super::*;
+
+    #[test]
+    fn bypasses_unreliable_native_calls_only_with_real_source_reads() {
+        assert!(use_grounded_llama_synthesis("llama3.1:8b", true, true, false));
+        assert!(use_grounded_llama_synthesis("llama3.2:3b", true, true, false));
+        assert!(!use_grounded_llama_synthesis("llama3.1:8b", true, false, false));
+        assert!(!use_grounded_llama_synthesis("llama3.1:8b", false, true, false));
+        assert!(!use_grounded_llama_synthesis("llama3.1:8b", true, true, true));
+        assert!(!use_grounded_llama_synthesis("qwen3:4b", true, true, false));
+    }
+}
+
 async fn query_direct_ollama(
     client: &reqwest::Client,
     host: &str,
@@ -1795,9 +1819,9 @@ async fn query_direct_ollama(
     // Never pretend that a non-native JSON tool request was executed. When
     // Llama 3.1/3.2 already has source observations, answer without tools.
     // Other models can continue using native tool calls as desired.
-    let llama_tool_fallback = analysis_requested && source_bootstrapped
-        && !allow_change_proposals
-        && model.to_ascii_lowercase().starts_with("llama3.");
+    let llama_tool_fallback = use_grounded_llama_synthesis(
+        model, analysis_requested, source_bootstrapped, allow_change_proposals
+    );
     if llama_tool_fallback {
         let _ = updates.send(ResultMessage::ChatNotice(
             "🧭 DUDE: Llama usará trechos realmente lidos pelo runtime, sem simular chamadas nativas.".into()
