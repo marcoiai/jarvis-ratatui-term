@@ -1219,9 +1219,10 @@ impl App {
                             result.intent, result.depth, result.requires_source
                         )));
                     } else {
-                        let _ = tx.send(ResultMessage::ChatNotice(
-                            "⚠ Interpreter indisponível ou resposta inválida; utilizando o roteamento original.".into()
-                        ));
+                        let reason = result.failure.unwrap_or("Interpreter indisponível");
+                        let _ = tx.send(ResultMessage::ChatNotice(format!(
+                            "⚠ Interpreter ({model}): {reason}. Usando roteamento original."
+                        )));
                     }
                     result
                 } else {
@@ -1771,14 +1772,44 @@ async fn query_direct_ollama(
             insert_direct_workspace_inventory(&mut direct_messages, &listing);
         }
     }
-    // Source-inspection requests must perform at least one NEW native read_file.
-    // ask_ollama already retries once if the model stops after search_text/list_files;
-    // zero here previously disabled that safeguard in direct mode.
+    // Search hits alone never count. Perform bounded runtime-controlled file
+    // discovery and real read_file calls to help models with weak tool calling.
+    // The user request decides the scope, not model-printed pseudo tool JSON.
+    if analysis_requested && !allow_change_proposals {
+        let root = workspace.clone();
+        let cache = evidence.clone();
+        let question = direct_latest_user_text(&direct_messages);
+        let grounded = tokio::task::spawn_blocking(move || {
+            investigation::focused_source_bootstrap(&root, &question, &cache)
+        }).await.map_err(|error|format!("Bootstrap focado falhou: {error}"))?;
+        if !grounded.is_empty() {
+            let _ = updates.send(ResultMessage::ChatNotice(
+                "📖 DUDE: código lido automaticamente pelo runtime via read_file; trechos disponíveis para análise.".into()
+            ));
+            insert_context_before_latest_user(&mut direct_messages, Message {
+                role: "system".into(), content: grounded
+            });
+        }
+    }
+    let source_bootstrapped = observed.source_read_count() > 0;
+    // Never pretend that a non-native JSON tool request was executed. When
+    // Llama 3.1/3.2 already has source observations, answer without tools.
+    // Other models can continue using native tool calls as desired.
+    let llama_tool_fallback = analysis_requested && source_bootstrapped
+        && !allow_change_proposals
+        && model.to_ascii_lowercase().starts_with("llama3.");
+    if llama_tool_fallback {
+        let _ = updates.send(ResultMessage::ChatNotice(
+            "🧭 DUDE: Llama usará trechos realmente lidos pelo runtime, sem simular chamadas nativas.".into()
+        ));
+    }
+    // Bootstrap source reads count as actual code observations, not as
+    // model-requested calls. Only demand a new native read if no source was read.
     let baseline_event_count = observed.event_count();
-    let minimum_new_reads = usize::from(analysis_requested);
+    let minimum_new_reads = usize::from(analysis_requested && !source_bootstrapped);
     let answer = ask_ollama(
         client, host, model, direct_messages, workspace,
-        !is_greeting, allow_change_proposals, true,
+        !is_greeting && !llama_tool_fallback, allow_change_proposals, true,
         minimum_new_reads, baseline_event_count, evidence, metrics, Some(updates),
     ).await?;
     // A greeting or a simple directory listing needs no read_file evidence.
