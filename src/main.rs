@@ -1555,6 +1555,7 @@ fn direct_source_analysis_intent(messages: &[Message]) -> bool {
         "audit", "explique o código", "explain the code",
         "entenda o projeto", "understand the project",
     ].iter().any(|term| latest.contains(*term))
+        || investigation::focused_source_review(&latest)
 }
 
 /// Select mutation PROPOSALS only when the user explicitly asks for code
@@ -1676,9 +1677,15 @@ async fn query_direct_ollama(
             insert_direct_workspace_inventory(&mut direct_messages, &listing);
         }
     }
+    // Source-inspection requests must perform at least one NEW native read_file.
+    // ask_ollama already retries once if the model stops after search_text/list_files;
+    // zero here previously disabled that safeguard in direct mode.
+    let baseline_event_count = observed.event_count();
+    let minimum_new_reads = usize::from(analysis_requested);
     let answer = ask_ollama(
         client, host, model, direct_messages, workspace,
-        !is_greeting, allow_change_proposals, true, 0, 0, evidence, metrics, Some(updates),
+        !is_greeting, allow_change_proposals, true,
+        minimum_new_reads, baseline_event_count, evidence, metrics, Some(updates),
     ).await?;
     // A greeting or a simple directory listing needs no read_file evidence.
     // For an explicit code review, a fluent or pseudo-tool response without
@@ -1693,6 +1700,12 @@ async fn query_direct_ollama(
         ));
     }
     if analysis_requested {
+        if !observed.has_supported_citation(&answer) {
+            return Err(format!(
+                "Investigação incompleta: a resposta não contém nenhuma referência arquivo:linha                  confirmada por read_file. Uma busca textual ou uma leitura sem citação                  não valida conclusões sobre o mecanismo. Leituras efetivas:\n{}",
+                observed.read_manifest()
+            ));
+        }
         let unread = observed.uninspected_source_mentions(&answer);
         if !unread.is_empty() {
             return Err(format!(
@@ -1744,7 +1757,10 @@ mod direct_mode_context_tests {
         assert!(!direct_is_greeting(&user("analise a arquitetura")));
         assert!(direct_source_analysis_intent(&user("Analise a arquitetura do projeto")));
         assert!(direct_source_analysis_intent(&user("Review current project")));
+        assert!(direct_source_analysis_intent(&user("checar o mecanismo de reason")));
+        assert!(direct_source_analysis_intent(&user("verificar a implementação do thinking")));
         assert!(!direct_source_analysis_intent(&user("Liste os arquivos do workspace")));
+        assert!(!direct_source_analysis_intent(&user("oi buddy")));
     }
 
     #[test]
@@ -1790,8 +1806,9 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     // chooses which read-only tools and implementation files are relevant.
     let initial_review = allow_tools && investigation::needs_baseline(question);
     let review_followup = allow_tools && investigation::review_followup(question, previous_user);
-    let require_project_evidence = initial_review || review_followup;
-    let minimum_new_reads = if review_followup { 2 } else if initial_review { 1 } else { 0 };
+    let focused_review = allow_tools && investigation::focused_source_review(question);
+    let require_project_evidence = initial_review || review_followup || focused_review;
+    let minimum_new_reads = if review_followup { 2 } else if initial_review || focused_review { 1 } else { 0 };
     let require_change_evidence = allow_tools && (
         investigation::is_code_change_request(question)
         || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
@@ -1883,6 +1900,12 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
             return Err("The model produced no review text; investigation evidence was gathered but no conclusion was generated.".into());
         }
         let has_supported_citation = evidence_for_gate.has_supported_citation(&answer);
+        if focused_review && !has_supported_citation {
+            return Err(format!(
+                "Investigação incompleta: nenhuma referência arquivo:linha da resposta                  foi confirmada pelas leituras reais. Leituras efetivas:\n{}",
+                evidence_for_gate.read_manifest()
+            ));
+        }
         let coverage = evidence_for_gate.coverage();
         let mut report = crate::claim_audit::project_report_preamble(
             &answer,

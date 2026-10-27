@@ -310,6 +310,28 @@ mod baseline_tests {
     }
 }
 
+/// Identify focused requests to inspect existing implementation rather than answer
+/// from a symbol name or a search hit. Do not require a broad project overview.
+pub fn focused_source_review(question: &str) -> bool {
+    let q = question.trim().to_lowercase();
+    let asks_to_inspect = [
+        "checar", "chec", "verific", "confer", "revis", "investig",
+        "inspec", "examinar", "examine", "analis", "anális",
+        "entender", "entenda", "entend", "como funciona",
+        "check", "verify", "inspect", "trace", "analyze", "analyse",
+        "review", "audit", "how does",
+    ].iter().any(|verb| q.contains(verb));
+    let implementation_target = [
+        "mecanismo", "reason", "thinking", "código", "codigo",
+        "arquivo", "file", "fonte", "source", "função", "funcao",
+        "módulo", "modulo", "module", "runtime", "pipeline", "fluxo",
+        "orquestr", "tool", "handler", "implement", "projeto",
+        "project", "repositório", "repository", "sistema",
+        "src/", ".rs", ".py", ".js", ".ts",
+    ].iter().any(|target| q.contains(target));
+    asks_to_inspect && implementation_target
+}
+
 /// Keep project investigation policy and file tools out of ordinary conversation.
 pub fn is_technical(question: &str) -> bool {
     let q = question.to_lowercase();
@@ -356,5 +378,17 @@ mod intent_tests {
         assert!(is_technical("leia os arquivos e explique o projeto"));
         assert!(is_technical("Investigate the user request: inspect main.rs code"));
         assert!(is_technical("faça uma análise mais profunda"));
+    }
+
+    #[test]
+    fn focused_inspection_requires_source_evidence_not_just_search_hits() {
+        assert!(focused_source_review("checar o mecanismo de reason"));
+        assert!(focused_source_review("verificar implementação do filtro de thinking"));
+        assert!(focused_source_review("inspect the tool pipeline"));
+        assert!(focused_source_review("analisar src/response_filter.rs"));
+        assert!(!focused_source_review("oi buddy"));
+        assert!(!focused_source_review("liste os arquivos"));
+        assert!(!focused_source_review("o que é raciocínio lógico?"));
+        assert!(!focused_source_review("qual a previsão do tempo?"));
     }
 }
