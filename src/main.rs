@@ -1730,6 +1730,15 @@ fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &st
     });
 }
 
+/// Local 8B models may need longer than the original 30 seconds to produce
+/// a complete revision, especially when a large workspace baseline was read.
+/// Keep the retry bounded; the default is longer than a normal first answer.
+fn citation_retry_timeout_seconds(raw: Option<&str>) -> u64 {
+    raw.and_then(|value| value.parse::<u64>().ok())
+        .map(|secs| secs.clamp(30, 300))
+        .unwrap_or(120)
+}
+
 /// One bounded repair pass: reconstruct the answer from actual observed source
 /// excerpts and ask for file:line citations. The previous answer is an untrusted
 /// draft, not evidence. Never fabricate citations or silently bypass the gate.
@@ -1742,8 +1751,13 @@ async fn repair_direct_review_citations(
     observed: &evidence::EvidenceCache,
     metrics: &metrics::Metrics,
 ) -> Result<String, String> {
-    let source: String = observed.export().chars().take(22_000).collect();
-    let old_draft: String = draft.chars().take(2_400).collect();
+    // Source-only compact context: prioritize files named in the original
+    // question and avoid shipping directory listings and unrelated search hits.
+    let source = observed.citation_retry_context(question);
+    let old_draft: String = draft.chars().take(900).collect();
+    let retry_seconds = citation_retry_timeout_seconds(
+        env::var("DUDE_CITATION_RETRY_TIMEOUT_SECS").ok().as_deref()
+    );
     let instruction = concat!(
         "Você é o revisor de evidências do DUDE. Redija uma resposta final em português ",
         "baseada EXCLUSIVAMENTE nas linhas SOURCE EXCERPT observadas abaixo. ",
@@ -1758,13 +1772,13 @@ async fn repair_direct_review_citations(
     let started = Instant::now();
     let repaired: Result<String, String> = async {
         let response = client.post(format!("{}/api/chat", host.trim_end_matches('/')))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(retry_seconds))
             .json(&json!({
                 "model":model,
                 "stream":false,
                 "think":false,
                 "tools":[],
-                "options":{"num_ctx":investigation::context_size()},
+                "options":{"num_ctx":investigation::context_size(),"num_predict":1100},
                 "messages":[
                     {"role":"system","content":instruction},
                     {"role":"user","content":format!(
@@ -1773,7 +1787,15 @@ async fn repair_direct_review_citations(
                     )}
                 ]
             }))
-            .send().await.map_err(|e|format!("Retry de citações falhou: {e}"))?;
+            .send().await.map_err(|error| {
+                if error.is_timeout() {
+                    format!(
+                        "Retry de citações excedeu {retry_seconds}s; ajuste DUDE_CITATION_RETRY_TIMEOUT_SECS (30-300) ou reduza o escopo. A leitura original continua registrada."
+                    )
+                } else {
+                    format!("Erro HTTP/conexão no retry de citações: {error}")
+                }
+            })?;
         let status = response.status();
         if !status.is_success() {
             return Err(format!(
@@ -1970,6 +1992,19 @@ async fn query_direct_ollama(
                 role: "system".into(), content: grounded
             });
         }
+    }
+    if analysis_requested && observed.source_read_count() > 0 {
+        insert_context_before_latest_user(&mut direct_messages, Message {
+            role: "system".into(),
+            content: concat!(
+                "Antes de concluir, inclua referências reais de código no formato ",
+                "src/arquivo.ext:linha para os pontos que descrevem implementação. ",
+                "Somente números de linha presentes nos SOURCE EXCERPT fornecidos. ",
+                "O DUDE rejeitará a resposta sem pelo menos uma citação verificável. ",
+                "Se propuser melhorias, indique uma sugestão, não uma alteração aplicada; ",
+                "não faça afirmações sobre código não lido."
+            ).into(),
+        });
     }
     let source_bootstrapped = observed.source_read_count() > 0;
     // Never pretend that a non-native JSON tool request was executed. When
