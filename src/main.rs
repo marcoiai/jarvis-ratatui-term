@@ -1836,6 +1836,16 @@ mod citation_repair_regression_tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[test]
+    fn citation_retry_allows_slower_local_models_with_bounded_override() {
+        assert_eq!(citation_retry_timeout_seconds(None), 120);
+        assert_eq!(citation_retry_timeout_seconds(Some("garbage")), 120);
+        assert_eq!(citation_retry_timeout_seconds(Some("30")), 30);
+        assert_eq!(citation_retry_timeout_seconds(Some("90")), 90);
+        assert_eq!(citation_retry_timeout_seconds(Some("10")), 30);
+        assert_eq!(citation_retry_timeout_seconds(Some("500")), 300);
+    }
+
     #[tokio::test]
     async fn missing_citation_is_retried_against_observed_lines_only() {
         let root = std::env::temp_dir().join(format!(
