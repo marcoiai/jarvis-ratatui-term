@@ -102,9 +102,17 @@ timeout (the previous 30-second limit caused failures with Llama 3.1 8B).
 Override with `DUDE_CITATION_RETRY_TIMEOUT_SECS` (30–300 seconds). The retry
 prioritizes read-only source excerpts from files named in the user's question
 and sends a bounded context without tool listings or search results. A concise
-citation reminder is also injected before the initial analysis to reduce the
-need for a second model request. This does not guarantee correct semantic
-analysis; missing or unsupported citations still fail visibly.
+citation reminder and sample *observed* line coordinates are also injected
+before the initial analysis to reduce the need for a second model request.
+
+To improve compatibility with small local models, the correction pass requests
+JSON with `answer` and `references` fields. DUDE independently checks every
+model-selected reference against lines returned by `read_file` before rendering
+them. Plain text with observed citations remains accepted for compatibility.
+The validator also recognizes `src/main.rs:L42` and `src/main.rs#L42` as
+equivalent to `src/main.rs:42`, provided line 42 was read. Unsupported
+references still fail closed. This validates source **provenance**, not the
+truth of the model's conclusions.
 
 If the Interpreter cannot classify a request, the TUI now shows a specific
 reason: timeout, failed connection, unavailable model/endpoint, invalid JSON
