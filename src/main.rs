@@ -1736,12 +1736,21 @@ async fn query_direct_ollama(
     evidence: evidence::EvidenceCache,
     metrics: metrics::Metrics,
     updates: mpsc::UnboundedSender<ResultMessage>,
+    force_source_review: bool,
+    interpreter_guidance: Option<&str>,
 ) -> Result<String, String> {
     let is_greeting = direct_is_greeting(&messages);
-    let analysis_requested = direct_source_analysis_intent(&messages);
+    let analysis_requested = direct_source_analysis_intent(&messages) || force_source_review;
     let allow_change_proposals = direct_change_intent(&messages);
     let observed = evidence.clone();
     let mut direct_messages = direct_chat_messages(messages);
+    // direct_chat_messages deliberately rebuilds the system prompt: insert
+    // trusted runtime guidance AFTER compacting so it is not silently dropped.
+    if let Some(guidance) = interpreter_guidance {
+        insert_context_before_latest_user(&mut direct_messages, Message {
+            role: "system".into(), content: guidance.into()
+        });
+    }
     if analysis_requested {
         // Deterministic, trusted-in-the-runtime root listing; the model still
         // has to request real source reads. This avoids asking a small Llama
@@ -1882,7 +1891,8 @@ mod direct_mode_context_tests {
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
-    updates: Option<mpsc::UnboundedSender<ResultMessage>>) -> Result<String,String> {
+    updates: Option<mpsc::UnboundedSender<ResultMessage>>,
+    force_source_review: bool) -> Result<String,String> {
     let mut messages = compact_model_messages(messages);
     let question = messages.iter().rev().find(|m|m.role == "user")
         .map(|m|m.content.as_str()).unwrap_or("");
@@ -1891,7 +1901,8 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     // chooses which read-only tools and implementation files are relevant.
     let initial_review = allow_tools && investigation::needs_baseline(question);
     let review_followup = allow_tools && investigation::review_followup(question, previous_user);
-    let focused_review = allow_tools && investigation::focused_source_review(question);
+    let focused_review = allow_tools && (force_source_review
+        || investigation::focused_source_review(question));
     let require_project_evidence = initial_review || review_followup || focused_review;
     let minimum_new_reads = if review_followup { 2 } else if initial_review || focused_review { 1 } else { 0 };
     let require_change_evidence = allow_tools && (
@@ -2078,7 +2089,7 @@ async fn extract_knowledge_after_response(
         query_provider(
             client, provider, extraction, workspace.to_owned(), host,
             ollama_model, groq_model, gemini_model, false,
-            evidence.clone(), metrics::Metrics::default(), None,
+            evidence.clone(), metrics::Metrics::default(), None, false,
         ),
     ).await {
         Ok(result) => result,
@@ -2107,7 +2118,8 @@ async fn extract_knowledge_after_response(
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
     groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
-    updates: mpsc::UnboundedSender<ResultMessage>) -> Result<String,String> {
+    updates: mpsc::UnboundedSender<ResultMessage>,
+    force_source_review: bool) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
@@ -2136,7 +2148,8 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if *provider=="groq"{selected_model}else{groq_model},
             if *provider=="gemini"{selected_model}else{gemini_model},
             index == 0,evidence.clone(),metrics.clone(),
-            if index == 2 {Some(updates.clone())} else {None}).await;
+            if index == 2 {Some(updates.clone())} else {None},
+            index == 0 && force_source_review).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         // A durable stage record is historical evidence, never an automatic replay.
