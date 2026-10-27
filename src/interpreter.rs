@@ -119,20 +119,30 @@ pub async fn interpret(
     );
     let query: String = question.chars().take(1400).collect();
     let previous: String = previous_user.unwrap_or("").chars().take(350).collect();
-    let response = client
-        .post(format!("{}/api/chat", host.trim_end_matches('/')))
-        .timeout(Duration::from_secs(12))
-        .json(&json!({
-            "model": model,
-            "stream": false,
-            "think": false,
+    // Opt-in OpenAI-compatible MLX endpoint. Default remains Ollama.
+    let mlx = std::env::var("DUDE_INTERPRETER_BACKEND")
+        .is_ok_and(|v| v.eq_ignore_ascii_case("mlx"));
+    let messages = json!([
+        {"role":"system", "content":SYSTEM},
+        {"role":"user", "content":format!("Previous user turn (context only): {previous}\\nCurrent request: {query}")}
+    ]);
+    let (path, payload) = if mlx {
+        ("/v1/chat/completions", json!({
+            "model": model, "stream": false, "temperature": 0,
+            "max_tokens": 180, "messages": messages
+        }))
+    } else {
+        ("/api/chat", json!({
+            "model": model, "stream": false, "think": false,
             "format": "json",
             "options": {"temperature": 0, "num_predict": 180, "num_ctx": 2048},
-            "messages": [
-                {"role":"system", "content":SYSTEM},
-                {"role":"user", "content":format!("Previous user turn (context only): {previous}\nCurrent request: {query}")}
-            ]
-        }));
+            "messages": messages
+        }))
+    };
+    let response = client
+        .post(format!("{}{path}", host.trim_end_matches('/')))
+        .timeout(Duration::from_secs(12))
+        .json(&payload);
     let response = match response.send().await {
         Ok(response) => response,
         Err(error) if error.is_timeout() => return Interpretation::failed(fallback, "Timeout ao consultar o modelo Interpreter"),
@@ -148,8 +158,13 @@ pub async fn interpret(
     let Ok(payload) = response.json::<Value>().await else {
         return Interpretation::failed(fallback, "Resposta HTTP do Interpreter não é JSON Ollama");
     };
-    let Some(content) = payload["message"]["content"].as_str() else {
-        return Interpretation::failed(fallback, "Ollama não retornou message.content para o Interpreter");
+    let content = if mlx {
+        payload["choices"][0]["message"]["content"].as_str()
+    } else {
+        payload["message"]["content"].as_str()
+    };
+    let Some(content) = content else {
+        return Interpretation::failed(fallback, "Interpreter não retornou conteúdo de resposta");
     };
     parse(content, mode, fallback)
 }
