@@ -86,11 +86,16 @@ is an extra request, so latency and local-model memory usage may increase.
 
 **Llama 3 source investigation:** on a focused code-analysis request, the runtime
 performs bounded `search_text` discovery followed by actual `read_file`
-operations (logged as `automatic_bootstrap`). If excerpts are available,
+operations (logged as `automatic_bootstrap`). For project-wide reviews,
+DUDE uses the existing bounded project baseline to sample manifests, entry
+points, and representative source modules instead of keyword-searching generic
+words from the question. If excerpts are available,
 Llama 3.1/3.2 synthesizes directly from that code without a native tool call,
 since these models can emit tool-call JSON as plain text. No model-generated
 pseudo-tool call is executed. An answer without a confirmed `path:line`
-citation is still rejected. Other models can keep using native tools.
+citation gets one bounded, source-only correction attempt and is still rejected
+if no real observed line is cited. Unverified drafts are withheld from the
+final TUI response. Other models can keep using native tools.
 
 If the Interpreter cannot classify a request, the TUI now shows a specific
 reason: timeout, failed connection, unavailable model/endpoint, invalid JSON
@@ -119,7 +124,7 @@ can you review more?
 
 - The mode is saved per workspace in `.dude/roles.json` until you select `/mode solo` or `/mode symphony`.
 - Direct uses the **local Ollama provider**, ignoring Solo's optional cloud-role assignments. To use another locally installed model, type `/model MODEL_NAME` (for example `/model llama3.1:8b`). The model is rechecked when you switch, and stale checks for previous selections are ignored. Check availability using `/ollama` and `/ollama retry`.
-- Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, auto-baseline, second-pass semantic audit and automatic knowledge extraction are bypassed. Targeted code-review evidence gates remain active, and the optional Interpreter may add task classification when enabled.
+- Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, second-pass semantic audit and automatic knowledge extraction are bypassed. Targeted reviews still use bounded read-only source baselines, evidence checks, and a single optional citation-correction pass; the Interpreter may add task classification when enabled.
 - Ollama still decides whether to use the read-only `list_files`, `read_file` and `search_text` tools. For explicit source reviews in Direct mode, DUDE first gathers a **read-only root-directory inventory** with Rust, labels it as a directory listing (not a code read), and then lets the model choose native `read_file` calls. A source review with **zero successful read_file operations fails visibly** instead of being reported as a completed code analysis. **Source-file mention gate:** if the answer names a source file in inline Markdown code (such as `knowledge.rs`) but there is no successful `read_file` for that path, the review is refused and the omitted source paths plus actual read manifest are displayed. This blocks accidentally attributing functions read in `file_tools.rs` to unread `knowledge.rs`. It checks provenance only and cannot prove the semantics of claims about files that were read. Direct does **not** guarantee that a model successfully calls tools.
 - **Cancel an in-progress thinking/response (including macOS):** press **`Esc` while a model is generating**, `Control+X`, `Control+G`, or enter `/stop` while DUDE is busy. On Mac use the **Control** key, not Command (`⌘`); Command+X is generally handled by the terminal. `Esc` is the recommended macOS fallback. While idle, `Esc` and `Ctrl+C` still exit the application. The UI processes streamed token events in bounded batches so keyboard input remains responsive, and queued stale stream fragments are ignored after cancellation. The visible partial output is not saved as a completed assistant answer; Ollama may take a moment to release backend work.
 - **Optional code changes (direct mode only):** the model may propose `edit_file`, `create_file` or `run_command` for builds/tests. The runtime only **prepares** one proposed action; it never writes or runs the proposed command automatically. The TUI displays the change/command, `/diff` repeats the preview, `/approve` performs only that proposal, and `/reject` discards it. Each new change requires separate approval. `edit_file` replaces one uniquely matching text fragment in a regular workspace file; `create_file` needs a nonexistent path in an existing directory. Sensitive paths, symlinks and traversal outside the workspace are blocked, and file content is checked again before writing.
