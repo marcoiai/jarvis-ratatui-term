@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn accepts_fenced_json_but_never_promotes_arbitrary_text() {
-        let body = "```json\\n{\\"intent\\":\\"INSPECT_CODE\\",\\"route\\":\\"SOLO\\",\\"requires_source\\":true}\\n```";
+        let body = "```json\n{\"intent\":\"INSPECT_CODE\",\"route\":\"SOLO\",\"requires_source\":true}\n```";
         let result = parse(body, "direct", Route::Direct);
         assert_eq!(result.intent, "inspect_code");
         assert!(result.requires_source);
@@ -234,7 +234,7 @@ mod tests {
             let mut request = [0u8; 4096];
             let _ = socket.read(&mut request).await.unwrap();
             socket.write_all(
-                b"HTTP/1.1 404 Not Found\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n"
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             ).await.unwrap();
         });
         let result = interpret(&reqwest::Client::new(),
