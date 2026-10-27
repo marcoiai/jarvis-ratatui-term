@@ -1286,7 +1286,7 @@ impl App {
                         if solo_provider=="ollama"{selected}else{&ollama_model},
                         if solo_provider=="groq"{selected}else{&groq_model},
                         if solo_provider=="gemini"{selected}else{&gemini_model}, true,
-                        evidence.clone(), metrics.clone(), Some(tx.clone()), forced_source_review).await;
+                        evidence.clone(), metrics.clone(), Some(tx.clone()), forced_source_review, None).await;
                     // Do NOT hold the user's answer hostage to optional knowledge
                     // extraction. The main response and its telemetry complete first;
                     // a best-effort, read-only extraction reports back separately.
@@ -2107,10 +2107,14 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
     updates: Option<mpsc::UnboundedSender<ResultMessage>>,
-    force_source_review: bool) -> Result<String,String> {
+    force_source_review: bool,
+    original_intent_query: Option<&str>) -> Result<String,String> {
     let mut messages = compact_model_messages(messages);
-    let question = messages.iter().rev().find(|m|m.role == "user")
-        .map(|m|m.content.as_str()).unwrap_or("");
+    // Symphony wraps each real request with an evidence handoff. Classifying
+    // the wrapper as user intent can falsely trigger a code review just
+    // because it says "review" and "tools" even if the user only said "review".
+    let question = original_intent_query.unwrap_or_else(|| messages.iter().rev()
+        .find(|m|m.role == "user").map(|m|m.content.as_str()).unwrap_or(""));
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
     // Follow-up reviews carry the previous technical intent, but the model still
     // chooses which read-only tools and implementation files are relevant.
@@ -2129,9 +2133,7 @@ async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<
     // never remove tools from an otherwise authorized request.
     if allow_tools {
         let root = workspace.clone();
-        let question = messages.iter().rev().find(|m|m.role == "user")
-            .map(|m|m.content.clone()).unwrap_or_default();
-        let bootstrap = investigation::needs_baseline(&question);
+        let bootstrap = investigation::needs_baseline(question);
         let cache = evidence.clone();
         // Never append tool policy after the actual user turn: keep the
         // user's current request as the last message presented to the model.
@@ -2304,7 +2306,7 @@ async fn extract_knowledge_after_response(
         query_provider(
             client, provider, extraction, workspace.to_owned(), host,
             ollama_model, groq_model, gemini_model, false,
-            evidence.clone(), metrics::Metrics::default(), None, false,
+            evidence.clone(), metrics::Metrics::default(), None, false, None,
         ),
     ).await {
         Ok(result) => result,
@@ -2364,7 +2366,7 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if *provider=="gemini"{selected_model}else{gemini_model},
             index == 0,evidence.clone(),metrics.clone(),
             if index == 2 {Some(updates.clone())} else {None},
-            index == 0 && force_source_review).await;
+            index == 0 && force_source_review, Some(question)).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         // A durable stage record is historical evidence, never an automatic replay.
