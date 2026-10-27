@@ -118,7 +118,7 @@ fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
         } else {rejected.push(finding);}
     }
     let mut warnings=vec!["Evidence IDs and exact quoted diff lines verified; semantic truth is NOT verified".into()];
-    if !rejected.is_empty(){warnings.push("Some findings cite unknown or missing evidence".into());}
+    if !rejected.is_empty(){warnings.push("Some findings failed evidence validation (unknown hunk ID, missing quote, or quote not matching an exact diff line)".into());}
     warnings.push("No patch creation or file modification permitted".into());
         Outcome {
         status:if rejected.is_empty(){"proposed"}else{"partial_rejection"}.into(),
