@@ -68,7 +68,7 @@ async fn mlx_chat(endpoint:&str,model:&str,prompt:&str)->Result<String,String>{
             "messages":[{"role":"system","content":"Return only a JSON object."},
                         {"role":"user","content":prompt}],
             "temperature":0,
-            "max_tokens":800,
+            "max_tokens":1400,
             "stream":false
         }))
         .send().await.map_err(|e|format!("MLX connection: {e}"))?
@@ -77,6 +77,20 @@ async fn mlx_chat(endpoint:&str,model:&str,prompt:&str)->Result<String,String>{
     data.choices.into_iter().next()
         .and_then(|choice|choice.message.content)
         .ok_or_else(||"MLX returned no message content".into())
+}
+fn parse_model_report(reply: &str) -> Result<ModelReport, String> {
+    let trimmed = reply.trim();
+    if trimmed.is_empty() { return Err("empty model response".into()); }
+    let candidate = if let Some(after) = trimmed.strip_prefix("```") {
+        let newline = after.find('\n').ok_or("unterminated JSON code fence")?;
+        let language = after[..newline].trim();
+        if !language.is_empty() && language != "json" { return Err(format!("unexpected fence: {language}")); }
+        after[newline + 1..].strip_suffix("```").ok_or("unterminated JSON fence")?.trim()
+    } else { trimmed };
+    serde_json::from_str(candidate).map_err(|e| {
+        let preview: String = trimmed.chars().take(240).collect();
+        format!("invalid JSON ({e}); reply chars={}; preview={preview:?}", trimmed.chars().count())
+    })
 }
 fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
     let mut accepted=Vec::new();
@@ -157,7 +171,7 @@ async fn main() -> ExitCode {
         Ok(v)=>v,
         Err(e)=>{eprintln!("{backend}: {e}");return ExitCode::FAILURE;}
     };
-    let parsed:ModelReport=match serde_json::from_str(&reply) {
+    let parsed:ModelReport=match parse_model_report(&reply) {
         Ok(v)=>v,Err(e)=>{eprintln!("Model JSON invalid: {e}");return ExitCode::FAILURE}
     };
     let after=match read_page(&binary,&args[0],&args[1],&args[3],ordinal){
@@ -178,6 +192,15 @@ async fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_json_fences_and_reports_empty_response() {
+        let report = r#"{"findings":[],"uncertainty":[],"recommendation":"requires_review"}"#;
+        assert!(parse_model_report(report).is_ok());
+        let wrapped = format!("{}\n{}\n{}", "```json", report, "```");
+        assert!(parse_model_report(&wrapped).is_ok());
+        assert!(parse_model_report("").unwrap_err().contains("empty model response"));
+        assert!(parse_model_report("unfinished {").unwrap_err().contains("preview="));
+    }
     #[test]
     fn refuses_unobserved_references(){
         let valid=BTreeSet::from(["hunk-1".to_string()]);
