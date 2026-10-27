@@ -2,6 +2,7 @@ mod claim_audit;
 mod progress;
 mod response_filter;
 mod investigation;
+mod interpreter;
 mod alignment;
 mod environment;
 mod metrics;
@@ -1065,6 +1066,19 @@ impl App {
             return;
         }
 
+        if input == "/interpreter" {
+            match env::var("DUDE_INTERPRETER_MODEL").ok().filter(|m| !m.trim().is_empty()) {
+                Some(model) => self.output.push_str(&format!(
+                    "Interpreter: ATIVO | modelo: {} | host: {}\n",
+                    model,
+                    env::var("DUDE_INTERPRETER_HOST").unwrap_or_else(|_| self.ollama_url.clone())
+                )),
+                None => self.output.push_str(
+                    "Interpreter: DESATIVADO. Configure DUDE_INTERPRETER_MODEL e, opcionalmente, DUDE_INTERPRETER_HOST.\n"
+                ),
+            }
+            return;
+        }
         let selection = router::route(&input, &self.roles.mode, &self.communication.language);
         if let router::Route::Local(reply) = &selection {
             self.output.push_str(reply);
@@ -1103,9 +1117,18 @@ impl App {
             let messages = self.history.clone();
             let roles = self.roles.clone();
             let route = selection;
+            let interpreter_model = env::var("DUDE_INTERPRETER_MODEL").ok()
+                .filter(|model| !model.trim().is_empty() && model.len() <= 128
+                    && model.chars().all(|c| c.is_ascii_alphanumeric()
+                        || matches!(c, '-' | '_' | '.' | '/' | ':')));
             let evidence = evidence::EvidenceCache::default();
             let metrics = metrics::Metrics::default();
             let url = self.ollama_url.clone();
+            let interpreter_host = env::var("DUDE_INTERPRETER_HOST")
+                .ok().filter(|host| host.starts_with("http://") || host.starts_with("https://"))
+                .unwrap_or_else(|| url.clone());
+            let cloud_permission = self.cloud_allowed;
+            let local_ready = self.model_ready;
             let workspace = self.workspace.clone();
             let ollama_model = self.model.clone();
             let groq_model = self.groq_model.clone();
@@ -1165,10 +1188,70 @@ impl App {
                 }
             }
             let request_task = tokio::spawn(async move {
-                let is_symphony=matches!(&route, router::Route::Symphony);
-                let is_direct=matches!(&route, router::Route::Direct);
                 let start=Instant::now();
                 let metrics_for_report=metrics.clone();
+                // The Interpreter is optional and never receives authority to
+                // bypass the human's mode, cloud setting or native tool guards.
+                let original_question = messages.iter().rev().find(|m| m.role == "user")
+                    .map(|m| m.content.as_str()).unwrap_or("");
+                let previous_user = messages.iter().rev().filter(|m| m.role == "user")
+                    .nth(1).map(|m| m.content.as_str());
+                let explicit_route = {
+                    let q = original_question.trim().to_lowercase();
+                    q.starts_with("solo:") || q.starts_with("symphony:") || q.starts_with("sinfônica:")
+                };
+                let skip_interpretation = explicit_route
+                    || matches!(&route, router::Route::Direct)
+                        && direct_is_greeting(&messages);
+                let mut interpreted = if let Some(model) = interpreter_model.as_deref()
+                    && !skip_interpretation
+                {
+                    let _ = tx.send(ResultMessage::ChatStage("Interpretando intenção"));
+                    let started = Instant::now();
+                    let result = interpreter::interpret(
+                        &client, &interpreter_host, model, original_question, previous_user,
+                        &roles.mode, route
+                    ).await;
+                    metrics.stage("Interpreter", "ollama", started, result.interpreted);
+                    if result.interpreted {
+                        let _ = tx.send(ResultMessage::ChatNotice(format!(
+                            "🧭 DUDE Interpreter ({model}): intenção={}, profundidade={}, leitura exigida={}.",
+                            result.intent, result.depth, result.requires_source
+                        )));
+                    } else {
+                        let _ = tx.send(ResultMessage::ChatNotice(
+                            "⚠ Interpreter indisponível ou resposta inválida; utilizando o roteamento original.".into()
+                        ));
+                    }
+                    result
+                } else {
+                    interpreter::Interpretation::fallback(route)
+                };
+                let can_use_symphony = [&roles.investigator, &roles.architect, &roles.reviewer]
+                    .iter().all(|provider| match provider.as_str() {
+                        "ollama" => local_ready,
+                        "groq" => cloud_permission && credentials::get("groq").is_some(),
+                        "gemini" => cloud_permission && credentials::get("gemini").is_some(),
+                        _ => false,
+                    });
+                if matches!(&interpreted.route, router::Route::Symphony) && !can_use_symphony {
+                    interpreted.route = router::Route::Solo;
+                    let _ = tx.send(ResultMessage::ChatNotice(
+                        "⚠ Symphony sugerido pelo Interpreter, mas indisponível; mantendo Solo sem ampliar permissões.".into()
+                    ));
+                }
+                let forced_source_review = interpreted.requires_source;
+                let advisory = interpreted.guidance();
+                let route = interpreted.route;
+                let is_symphony = matches!(&route, router::Route::Symphony);
+                let is_direct = matches!(&route, router::Route::Direct);
+                let mut messages = messages;
+                if !is_direct {
+                    if let Some(ref guidance) = advisory {
+                        insert_context_before_latest_user(&mut messages,
+                            Message { role: "system".into(), content: guidance.clone() });
+                    }
+                }
                 let evidence_for_report=evidence.clone();
                 let workspace_for_report=workspace.clone();
                 let solo_provider=roles.selected_provider().to_owned();
@@ -1179,13 +1262,15 @@ impl App {
                     // knowledge extraction. Read-only tools remain available.
                     let result = query_direct_ollama(
                         &client, &url, &ollama_model, messages, workspace,
-                        evidence, metrics.clone(), tx.clone()
+                        evidence, metrics.clone(), tx.clone(),
+                        forced_source_review, advisory.as_deref()
                     ).await;
                     metrics.stage("Direct", "ollama", direct_start, result.is_ok());
                     result
                 } else if is_symphony {
                     run_symphony(&client, &roles, messages, workspace, &url,
-                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(), tx.clone()).await
+                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(),
+                        tx.clone(), forced_source_review).await
                 } else {
                     let solo_start=Instant::now();
                     let question = messages.iter().rev().find(|m| m.role == "user")
@@ -1198,7 +1283,7 @@ impl App {
                         if solo_provider=="ollama"{selected}else{&ollama_model},
                         if solo_provider=="groq"{selected}else{&groq_model},
                         if solo_provider=="gemini"{selected}else{&gemini_model}, true,
-                        evidence.clone(), metrics.clone(), Some(tx.clone())).await;
+                        evidence.clone(), metrics.clone(), Some(tx.clone()), forced_source_review).await;
                     // Do NOT hold the user's answer hostage to optional knowledge
                     // extraction. The main response and its telemetry complete first;
                     // a best-effort, read-only extraction reports back separately.
