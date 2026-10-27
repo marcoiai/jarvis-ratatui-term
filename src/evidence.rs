@@ -590,6 +590,34 @@ mod tests {
     }
 
     #[test]
+    fn actual_source_lines_allow_common_llama_reference_formats() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-llama-reference-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"),
+            "mod route;\npub fn main() {}\n").unwrap();
+        let observed = EvidenceCache::default();
+        observed.execute_bootstrap(&root, "read_file", &json!({
+            "path":"src/main.rs","start_line":1,"end_line":2
+        }));
+        for reference in ["src/main.rs:2", "src/main.rs:L2",
+            "src/main.rs#L2", "src/main.rs:1-2"] {
+            assert!(observed.has_supported_citation(reference), "{reference}");
+        }
+        for reference in ["src/main.rs:3", "src/main.rs:L3",
+            "src/main.rs#L3", "src/main.rs:1-3"] {
+            assert!(!observed.has_supported_citation(reference), "{reference}");
+        }
+        let examples = observed.citation_examples("review current project");
+        assert!(examples.contains(&"src/main.rs:1".to_owned()));
+        assert!(examples.contains(&"src/main.rs:2".to_owned()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn exposes_cache_limits_without_claiming_file_tool_limits() {
         let description = limits_description();
         assert!(description.contains("80"));
