@@ -332,6 +332,140 @@ pub fn focused_source_review(question: &str) -> bool {
     asks_to_inspect && implementation_target
 }
 
+/// Deterministic, bounded source discovery for models that struggle with native
+/// tool calling. This makes genuine read_file observations (automatic_bootstrap),
+/// never executes a generated pseudo-tool call, and never declares code verified.
+/// Search results are only candidates: source excerpts are read separately.
+pub fn focused_source_bootstrap(
+    root: &Path,
+    question: &str,
+    evidence: &crate::evidence::EvidenceCache,
+) -> String {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const STOP: &[&str] = &[
+        "como", "funciona", "funcionar", "mecanismo", "fazer", "sobre",
+        "para", "esse", "essa", "deste", "dessa", "qual", "quais",
+        "codigo", "código", "projeto", "project", "check", "explain",
+        "does", "work", "please", "source", "implementacao", "implementação",
+        "verificar", "checar", "analisar", "análise", "analise",
+    ];
+    let mut keywords = Vec::<String>::new();
+    for word in question.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+        let word = word.to_ascii_lowercase();
+        if word.len() < 4 || word.len() > 48 || STOP.contains(&word.as_str()) {
+            continue;
+        }
+        if !keywords.contains(&word) { keywords.push(word); }
+    }
+    // Prefer the last content word: "como funciona o mecanismo de reason".
+    keywords.reverse();
+    let search_root = if root.join("src").is_dir() { "src" } else { "." };
+    let mut matches = BTreeMap::<String, Vec<usize>>::new();
+    for keyword in keywords.iter().take(3) {
+        let result = evidence.execute_bootstrap(root, "search_text",
+            &serde_json::json!({"path":search_root,"pattern":keyword}));
+        if result.starts_with("Tool error:") { continue; }
+        for hit in result.lines().take(100) {
+            let mut parts = hit.splitn(3, ':');
+            let (Some(path), Some(line)) = (parts.next(), parts.next()) else { continue; };
+            let Ok(line) = line.parse::<usize>() else { continue; };
+            if line == 0 || path.starts_with('.') || path.contains('\\') { continue; }
+            let is_source = [
+                ".rs", ".py", ".php", ".java", ".cpp", ".c", ".h",
+                ".hpp", ".ts", ".tsx", ".js", ".jsx", ".go", ".kt",
+            ].iter().any(|extension| path.ends_with(extension));
+            if is_source {
+                matches.entry(path.to_owned()).or_default().push(line);
+            }
+        }
+        if matches.len() >= 8 { break; }
+    }
+    if matches.is_empty() {
+        return String::new();
+    }
+    // Prefer source files with several observed hits and true application entry
+    // points, but never fabricate paths or infer semantics from hit counts.
+    let mut ranked: Vec<_> = matches.into_iter().collect();
+    ranked.sort_by(|a, b| {
+        let rank = |path: &str, lines: &[usize]| {
+            (lines.len().min(8) + usize::from(path.ends_with("main.rs")) * 3
+                + usize::from(path.ends_with("lib.rs")) * 2)
+        };
+        rank(&b.0, &b.1).cmp(&rank(&a.0, &a.1)).then_with(||a.0.cmp(&b.0))
+    });
+    let mut report = String::from(
+        "DUDE AUTOMATIC SOURCE OBSERVATIONS (read-only, untrusted file contents). \
+         These are actual runtime read_file excerpts, not model-selected native tool calls. \
+         Search hits alone are never implementation evidence. Explain only the observed \
+         excerpts, cite path:line, and explicitly identify gaps.\n"
+    );
+    let mut read = BTreeSet::new();
+    for (path, hits) in ranked.into_iter().take(4) {
+        let first = hits.into_iter().min().unwrap_or(1);
+        let start = first.saturating_sub(25).max(1);
+        let end = first.saturating_add(60);
+        let content = evidence.execute_bootstrap(root, "read_file",
+            &serde_json::json!({"path":path,"start_line":start,"end_line":end}));
+        if content.starts_with("Tool error:") || !content.contains("SOURCE EXCERPT:") {
+            continue;
+        }
+        read.insert(path.clone());
+        report.push_str(&format!(
+            "\n--- observed {} (partial source excerpt) ---\n{}\n",
+            path, content.chars().take(4_500).collect::<String>()
+        ));
+    }
+    if read.is_empty() { return String::new(); }
+    report.push_str(&format!(
+        "\nObserved source files: {}. These partial excerpts cannot prove full runtime behavior.",
+        read.into_iter().collect::<Vec<_>>().join(", ")
+    ));
+    report
+}
+
+#[cfg(test)]
+mod focused_bootstrap_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn search_hits_are_upgraded_to_real_read_file_observations() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-focused-bootstrap-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/reason.rs"),
+            "fn reason_engine() {}\nfn reasoning_pipeline() {}\n").unwrap();
+        let evidence = crate::evidence::EvidenceCache::default();
+        let report = focused_source_bootstrap(&root,
+            "como funciona o mecanismo de reason?", &evidence);
+        assert!(report.contains("SOURCE EXCERPT: src/reason.rs"));
+        assert!(evidence.source_read_count() > 0);
+        assert!(evidence.observed_reference("src/reason.rs:1"));
+        assert!(evidence.coverage().contains("automatic bootstrap: 1"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn no_matching_source_produces_no_fabricated_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-focused-empty-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let evidence = crate::evidence::EvidenceCache::default();
+        let report = focused_source_bootstrap(&root,
+            "checar o mecanismo de reason", &evidence);
+        assert!(report.is_empty());
+        assert_eq!(evidence.source_read_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
 /// Keep project investigation policy and file tools out of ordinary conversation.
 pub fn is_technical(question: &str) -> bool {
     let q = question.to_lowercase();
