@@ -58,7 +58,7 @@ fn symbols(content: &str) -> Vec<String> {
         for prefix in prefixes {
             if let Some(rest) = line.strip_prefix(prefix) {
                 let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
-                if !name.is_empty() { out.push(format!("{}{}", prefix.trim(), name)); }
+                if !name.is_empty() { out.push(format!("{prefix}{name}")); }
                 break;
             }
         }

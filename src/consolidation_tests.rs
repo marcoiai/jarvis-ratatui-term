@@ -54,8 +54,17 @@ fn reply(text: &str) -> String {
 
 async fn ask(host: &str, workspace: &Workspace, tools: bool, cache: evidence::EvidenceCache, metrics: metrics::Metrics) -> Result<String, String> {
     let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
-    ask_ollama(&client, host, "test-model", vec![Message {role:"user".into(), content:"review".into()}],
-        workspace.0.clone(), tools, cache, metrics, None).await
+    ask_ollama(
+        &client, host, "test-model",
+        vec![Message {role:"user".into(), content:"review".into()}],
+        workspace.0.clone(),
+        tools,
+        false, // The existing test only uses read-only tools.
+        false, // Preserve the non-direct test request/streaming behavior.
+        0,     // The original test did not require new source reads.
+        0,     // No bootstrap took place in this isolated test.
+        cache, metrics, None,
+    ).await
 }
 
 #[tokio::test]
@@ -216,7 +225,10 @@ async fn symphony_uses_role_models_preserves_evidence_and_checkpoints_before_fai
     let (updates, _receiver) = mpsc::unbounded_channel();
     let result = run_symphony(&client, &roles,
         vec![Message {role:"user".into(), content:"review".into()}],
-        workspace.0.clone(), &host, "default", "unused", "unused", cache.clone(), metrics::Metrics::default(), updates).await;
+        workspace.0.clone(), &host, "default", "unused", "unused",
+        cache.clone(), metrics::Metrics::default(), updates,
+        false, // This regression checks normal Symphony behavior, not forced source review.
+    ).await;
     assert!(result.unwrap_err().contains("Reviewer (ollama) failed"));
     let requests = task.await.unwrap();
     assert_eq!(requests[0]["model"], "investigator:4b");

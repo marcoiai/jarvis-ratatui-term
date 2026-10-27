@@ -2,6 +2,7 @@ mod claim_audit;
 mod progress;
 mod response_filter;
 mod investigation;
+mod interpreter;
 mod alignment;
 mod environment;
 mod metrics;
@@ -1065,6 +1066,19 @@ impl App {
             return;
         }
 
+        if input == "/interpreter" {
+            match env::var("DUDE_INTERPRETER_MODEL").ok().filter(|m| !m.trim().is_empty()) {
+                Some(model) => self.output.push_str(&format!(
+                    "Interpreter: ATIVO | modelo: {} | host: {}\n",
+                    model,
+                    env::var("DUDE_INTERPRETER_HOST").unwrap_or_else(|_| self.ollama_url.clone())
+                )),
+                None => self.output.push_str(
+                    "Interpreter: DESATIVADO. Configure DUDE_INTERPRETER_MODEL e, opcionalmente, DUDE_INTERPRETER_HOST.\n"
+                ),
+            }
+            return;
+        }
         let selection = router::route(&input, &self.roles.mode, &self.communication.language);
         if let router::Route::Local(reply) = &selection {
             self.output.push_str(reply);
@@ -1103,9 +1117,18 @@ impl App {
             let messages = self.history.clone();
             let roles = self.roles.clone();
             let route = selection;
+            let interpreter_model = env::var("DUDE_INTERPRETER_MODEL").ok()
+                .filter(|model| !model.trim().is_empty() && model.len() <= 128
+                    && model.chars().all(|c| c.is_ascii_alphanumeric()
+                        || matches!(c, '-' | '_' | '.' | '/' | ':')));
             let evidence = evidence::EvidenceCache::default();
             let metrics = metrics::Metrics::default();
             let url = self.ollama_url.clone();
+            let interpreter_host = env::var("DUDE_INTERPRETER_HOST")
+                .ok().filter(|host| host.starts_with("http://") || host.starts_with("https://"))
+                .unwrap_or_else(|| url.clone());
+            let cloud_permission = self.cloud_allowed;
+            let local_ready = self.model_ready;
             let workspace = self.workspace.clone();
             let ollama_model = self.model.clone();
             let groq_model = self.groq_model.clone();
@@ -1165,27 +1188,92 @@ impl App {
                 }
             }
             let request_task = tokio::spawn(async move {
-                let is_symphony=matches!(&route, router::Route::Symphony);
-                let is_direct=matches!(&route, router::Route::Direct);
                 let start=Instant::now();
                 let metrics_for_report=metrics.clone();
+                // The Interpreter is optional and never receives authority to
+                // bypass the human's mode, cloud setting or native tool guards.
+                let original_question = messages.iter().rev().find(|m| m.role == "user")
+                    .map(|m| m.content.as_str()).unwrap_or("");
+                let previous_user = messages.iter().rev().filter(|m| m.role == "user")
+                    .nth(1).map(|m| m.content.as_str());
+                let explicit_route = {
+                    let q = original_question.trim().to_lowercase();
+                    q.starts_with("solo:") || q.starts_with("symphony:") || q.starts_with("sinfônica:")
+                };
+                let skip_interpretation = explicit_route
+                    || matches!(&route, router::Route::Direct)
+                        && direct_is_greeting(&messages);
+                let mut interpreted = if let Some(model) = interpreter_model.as_deref()
+                    && !skip_interpretation
+                {
+                    let _ = tx.send(ResultMessage::ChatStage("Interpretando intenção"));
+                    let started = Instant::now();
+                    let result = interpreter::interpret(
+                        &client, &interpreter_host, model, original_question, previous_user,
+                        &roles.mode, route
+                    ).await;
+                    metrics.stage("Interpreter", "ollama", started, result.interpreted);
+                    if result.interpreted {
+                        let _ = tx.send(ResultMessage::ChatNotice(format!(
+                            "🧭 DUDE Interpreter ({model}): intenção={}, profundidade={}, leitura exigida={}.",
+                            result.intent, result.depth, result.requires_source
+                        )));
+                    } else {
+                        let reason = result.failure.unwrap_or("Interpreter indisponível");
+                        let _ = tx.send(ResultMessage::ChatNotice(format!(
+                            "⚠ Interpreter ({model}): {reason}. Usando roteamento original."
+                        )));
+                    }
+                    result
+                } else {
+                    interpreter::Interpretation::fallback(route)
+                };
+                let can_use_symphony = [&roles.investigator, &roles.architect, &roles.reviewer]
+                    .iter().all(|provider| match provider.as_str() {
+                        "ollama" => local_ready,
+                        "groq" => cloud_permission && credentials::get("groq").is_some(),
+                        "gemini" => cloud_permission && credentials::get("gemini").is_some(),
+                        _ => false,
+                    });
+                if matches!(&interpreted.route, router::Route::Symphony) && !can_use_symphony {
+                    interpreted.route = router::Route::Solo;
+                    let _ = tx.send(ResultMessage::ChatNotice(
+                        "⚠ Symphony sugerido pelo Interpreter, mas indisponível; mantendo Solo sem ampliar permissões.".into()
+                    ));
+                }
+                let forced_source_review = interpreted.requires_source;
+                let broad_source_review = interpreted.intent == "project_review"
+                    || investigation::needs_baseline(original_question);
+                let advisory = interpreted.guidance();
+                let route = interpreted.route;
+                let is_symphony = matches!(&route, router::Route::Symphony);
+                let is_direct = matches!(&route, router::Route::Direct);
+                let mut messages = messages;
+                if !is_direct {
+                    if let Some(ref guidance) = advisory {
+                        insert_context_before_latest_user(&mut messages,
+                            Message { role: "system".into(), content: guidance.clone() });
+                    }
+                }
                 let evidence_for_report=evidence.clone();
                 let workspace_for_report=workspace.clone();
                 let solo_provider=roles.selected_provider().to_owned();
                 let result = if is_direct {
                     let direct_start = Instant::now();
-                    // Chat straight with the installed Ollama model. No project
-                    // bootstrap, forced read count, semantic auditor, or automatic
-                    // knowledge extraction. Read-only tools remain available.
+                    // Direct mode remains local: no cloud auditor or knowledge
+                    // extraction. Code reviews still require observable evidence.
+                    // Broad reviews use a bounded source baseline before synthesis.
                     let result = query_direct_ollama(
                         &client, &url, &ollama_model, messages, workspace,
-                        evidence, metrics.clone(), tx.clone()
+                        evidence, metrics.clone(), tx.clone(),
+                        forced_source_review, broad_source_review, advisory.as_deref()
                     ).await;
                     metrics.stage("Direct", "ollama", direct_start, result.is_ok());
                     result
                 } else if is_symphony {
                     run_symphony(&client, &roles, messages, workspace, &url,
-                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(), tx.clone()).await
+                        &ollama_model, &groq_model, &gemini_model, evidence, metrics.clone(),
+                        tx.clone(), forced_source_review).await
                 } else {
                     let solo_start=Instant::now();
                     let question = messages.iter().rev().find(|m| m.role == "user")
@@ -1198,7 +1286,7 @@ impl App {
                         if solo_provider=="ollama"{selected}else{&ollama_model},
                         if solo_provider=="groq"{selected}else{&groq_model},
                         if solo_provider=="gemini"{selected}else{&gemini_model}, true,
-                        evidence.clone(), metrics.clone(), Some(tx.clone())).await;
+                        evidence.clone(), metrics.clone(), Some(tx.clone()), forced_source_review, None).await;
                     // Do NOT hold the user's answer hostage to optional knowledge
                     // extraction. The main response and its telemetry complete first;
                     // a best-effort, read-only extraction reports back separately.
@@ -1642,6 +1730,295 @@ fn insert_direct_workspace_inventory(messages: &mut Vec<Message>, inventory: &st
     });
 }
 
+/// Local 8B models may need longer than the original 30 seconds to produce
+/// a complete revision, especially when a large workspace baseline was read.
+/// Keep the retry bounded; the default is longer than a normal first answer.
+fn citation_retry_timeout_seconds(raw: Option<&str>) -> u64 {
+    raw.and_then(|value| value.parse::<u64>().ok())
+        .map(|secs| secs.clamp(30, 300))
+        .unwrap_or(120)
+}
+
+/// A model may produce either a conventional cited answer or structured JSON.
+/// JSON references are individually verified against real read_file observations
+/// before the runtime renders them; this checks provenance, not claim semantics.
+fn parse_citation_repair_output(
+    content: &str, observed: &evidence::EvidenceCache,
+) -> Result<String, String> {
+    let content = response_filter::strip_completed(content)?;
+    if let Ok(value) = serde_json::from_str::<Value>(content.trim())
+        && let Some(answer) = value.get("answer").and_then(Value::as_str) {
+            if answer.trim().is_empty() {
+                return Err("Retry de citações retornou uma resposta vazia.".into());
+            }
+            let refs = value.get("references").and_then(Value::as_array)
+                .ok_or("Retry de citações não retornou a lista 'references'.")?;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut verified = Vec::new();
+            for item in refs {
+                let reference = item.as_str()
+                    .ok_or("Citação do Interpreter precisa ser texto.")?;
+                // Normalize common line-prefix spellings without inventing paths
+                // or line numbers. Every reference is checked against source.
+                let normalized = if let Some((path, line)) = reference.rsplit_once("#L") {
+                    format!("{path}:{line}")
+                } else if let Some((path, line)) = reference.rsplit_once(":L") {
+                    format!("{path}:{line}")
+                } else {
+                    reference.to_owned()
+                };
+                if !observed.observed_reference(&normalized) {
+                    return Err(format!(
+                        "Retry citou linha não observada ({reference}); a resposta não foi validada."
+                    ));
+                }
+                if seen.insert(normalized.clone()) {
+                    verified.push(normalized);
+                }
+            }
+            if verified.is_empty() {
+                return Err("Retry não produziu nenhuma referência real do código.".into());
+            }
+            // Never silently treat a model-selected source as semantic proof.
+            return Ok(format!(
+                "{}\n\nReferências escolhidas pelo modelo (linhas lidas pelo runtime; \
+                 interpretação não auditada semanticamente): {}",
+                answer.trim(), verified.join(", ")
+            ));
+        }
+    if observed.has_supported_citation(&content) {
+        Ok(content)
+    } else {
+        Err("Retry não retornou referências arquivo:linha observadas em read_file.".into())
+    }
+}
+
+/// One bounded repair pass: reconstruct the answer from actual observed source
+/// excerpts and ask for file:line citations. The previous answer is an untrusted
+/// draft, not evidence. Never fabricate citations or silently bypass the gate.
+async fn repair_direct_review_citations(
+    client: &reqwest::Client,
+    host: &str,
+    model: &str,
+    question: &str,
+    draft: &str,
+    observed: &evidence::EvidenceCache,
+    metrics: &metrics::Metrics,
+) -> Result<String, String> {
+    // Source-only compact context: prioritize files named in the original
+    // question and avoid shipping directory listings and unrelated search hits.
+    let source = observed.citation_retry_context(question);
+    let permitted = observed.citation_examples(question).join(", ");
+    let old_draft: String = draft.chars().take(900).collect();
+    let retry_seconds = citation_retry_timeout_seconds(
+        env::var("DUDE_CITATION_RETRY_TIMEOUT_SECS").ok().as_deref()
+    );
+    let instruction = concat!(
+        "Você é o revisor de evidências do DUDE. Baseie-se apenas nos ",
+        "SOURCE EXCERPT realmente lidos. Produza um JSON válido com duas chaves: ",
+        "{\"answer\":\"resposta curta, incluindo uma melhoria específica\",",
+        "\"references\":[\"src/main.rs:12\"]}. ",
+        "references deve conter uma ou mais coordenadas EXATAS de linhas ",
+        "que sustentam a resposta e que aparecem nos trechos. ",
+        "NÃO copie src/main.rs:12 se essa linha não estiver disponível. ",
+        "Use os exemplos fornecidos somente se forem realmente pertinentes. ",
+        "Não invente módulos, arquivos, conteúdo ou linhas. ",
+        "Diferencie fatos de sugestões e declare limites da revisão. ",
+        "A resposta anterior não é evidência. Nenhuma ferramenta está disponível."
+    );
+    let started = Instant::now();
+    let repaired: Result<String, String> = async {
+        let response = client.post(format!("{}/api/chat", host.trim_end_matches('/')))
+            .timeout(Duration::from_secs(retry_seconds))
+            .json(&json!({
+                "model":model,
+                "stream":false,
+                "think":false,
+                "tools":[],
+                "format":"json",
+                "options":{"num_ctx":investigation::context_size(),"num_predict":1100},
+                "messages":[
+                    {"role":"system","content":instruction},
+                    {"role":"user","content":format!(
+                        "PEDIDO ORIGINAL:\n{question}\n\nEVIDÊNCIAS REAIS:\n{source}\n\n\
+                         COORDENADAS EXISTENTES (copie apenas as pertinentes):\n{permitted}\n\n\
+                         RASCUNHO NÃO VERIFICADO (não confiar):\n{old_draft}\n\n\
+                         Forneça JSON com answer e references verificáveis."
+                    )}
+                ]
+            }))
+            .send().await.map_err(|error| {
+                if error.is_timeout() {
+                    format!(
+                        "Retry de citações excedeu {retry_seconds}s; ajuste DUDE_CITATION_RETRY_TIMEOUT_SECS (30-300) ou reduza o escopo. A leitura original continua registrada."
+                    )
+                } else {
+                    format!("Erro HTTP/conexão no retry de citações: {error}")
+                }
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "Retry de citações retornou HTTP {status}. Revisão não concluída."
+            ));
+        }
+        let reply: OllamaReply = response.json().await
+            .map_err(|e|format!("JSON inválido no retry de citações: {e}"))?;
+        if let (Some(input), Some(output)) = (reply.prompt_eval_count, reply.eval_count) {
+            metrics.tokens("ollama", model, input, output);
+        }
+        if !reply.message.tool_calls.is_empty() {
+            return Err("O modelo tentou chamar ferramentas durante a síntese sem ferramentas.".into());
+        }
+        let answer = parse_citation_repair_output(&reply.message.content, observed)
+            .map_err(|reason|format!(
+                "Revisão incompleta: {reason}\nLeituras disponíveis:\n{}",
+                observed.read_manifest()
+            ))?;
+        let unread = observed.uninspected_source_mentions(&answer);
+        if !unread.is_empty() {
+            return Err(format!(
+                "Retry de citações mencionou arquivos não lidos: {}. Revisão não concluída.",
+                unread.join(", ")
+            ));
+        }
+        Ok(answer)
+    }.await;
+    metrics.stage("direct_source_citation_retry", "ollama", started, repaired.is_ok());
+    repaired
+}
+
+#[cfg(test)]
+mod citation_repair_regression_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn citation_retry_allows_slower_local_models_with_bounded_override() {
+        assert_eq!(citation_retry_timeout_seconds(None), 120);
+        assert_eq!(citation_retry_timeout_seconds(Some("garbage")), 120);
+        assert_eq!(citation_retry_timeout_seconds(Some("30")), 30);
+        assert_eq!(citation_retry_timeout_seconds(Some("90")), 90);
+        assert_eq!(citation_retry_timeout_seconds(Some("10")), 30);
+        assert_eq!(citation_retry_timeout_seconds(Some("500")), 300);
+    }
+
+    #[test]
+    fn structured_citation_retry_requires_observed_noninvented_refs() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-json-citation-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"),
+            "pub fn main() {}\n").unwrap();
+        let observed = evidence::EvidenceCache::default();
+        observed.execute_bootstrap(&root, "read_file",
+            &json!({"path":"src/main.rs","start_line":1,"end_line":1}));
+        let good = r#"{"answer":"Sugiro separar o entrypoint em módulos menores.","references":["src/main.rs:L1"]}"#;
+        let validated = parse_citation_repair_output(good, &observed).unwrap();
+        assert!(validated.contains("src/main.rs:1"));
+        assert!(validated.contains("interpretação não auditada semanticamente"));
+        assert!(observed.has_supported_citation(&validated));
+        for bad in [
+            r#"{"answer":"Tudo verificado","references":[]}"#,
+            r#"{"answer":"Tudo verificado","references":["src/main.rs:999"]}"#,
+            r#"{"answer":"Tudo verificado","references":["src/not_read.rs:1"]}"#,
+            r#"{"answer":"Tudo verificado","references":["src/main.rs:1","src/not_read.rs:1"]}"#,
+            "A análise não menciona nenhuma linha observada.",
+        ] {
+            assert!(parse_citation_repair_output(bad, &observed).is_err(), "{bad}");
+        }
+        assert!(parse_citation_repair_output(
+            "Sugestão localizada em src/main.rs#L1.", &observed
+        ).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn missing_citation_is_retried_against_observed_lines_only() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-citation-review-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("observed.rs"), "pub fn answer() {}\n").unwrap();
+        let cache = evidence::EvidenceCache::default();
+        let read = cache.execute_bootstrap(
+            &root, "read_file", &json!({"path":"observed.rs","start_line":1,"end_line":1})
+        );
+        assert!(read.contains("1: pub fn answer()"));
+        for (content, valid) in [
+            ("A função observada em observed.rs:1 é answer.", true),
+            ("A implementação completa já foi revisada.", false)
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let response_text = content.to_string();
+            let mock = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await.unwrap();
+                let payload = json!({"message":{"content":response_text}}).to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(), payload
+                );
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            });
+            let repaired = repair_direct_review_citations(
+                &reqwest::Client::new(), &endpoint, "mock:llama",
+                "analise o projeto atual", "Resumo sem referências.",
+                &cache, &metrics::Metrics::default()
+            ).await;
+            mock.await.unwrap();
+            assert_eq!(repaired.is_ok(), valid);
+            if valid {
+                assert!(cache.has_supported_citation(&repaired.unwrap()));
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn broad_scope_detection_covers_actual_regression_request() {
+        assert!(investigation::needs_baseline(
+            "faz uma analise do codigo do projeto atual"
+        ));
+        assert!(investigation::needs_baseline(
+            "análise da arquitetura do projeto"
+        ));
+        assert!(!investigation::needs_baseline(
+            "como funciona o mecanismo de reason?"
+        ));
+    }
+}
+
+/// Llama 3.x can serialize native tool calls as text. Only bypass tool calling
+/// once DUDE has actual read_file evidence for an analysis-only request.
+fn use_grounded_llama_synthesis(
+    model: &str, analysis_requested: bool, source_read: bool, proposes_changes: bool
+) -> bool {
+    analysis_requested && source_read && !proposes_changes
+        && model.to_ascii_lowercase().starts_with("llama3.")
+}
+
+#[cfg(test)]
+mod grounded_llama_tests {
+    use super::*;
+
+    #[test]
+    fn bypasses_unreliable_native_calls_only_with_real_source_reads() {
+        assert!(use_grounded_llama_synthesis("llama3.1:8b", true, true, false));
+        assert!(use_grounded_llama_synthesis("llama3.2:3b", true, true, false));
+        assert!(!use_grounded_llama_synthesis("llama3.1:8b", true, false, false));
+        assert!(!use_grounded_llama_synthesis("llama3.1:8b", false, true, false));
+        assert!(!use_grounded_llama_synthesis("llama3.1:8b", true, true, true));
+        assert!(!use_grounded_llama_synthesis("qwen3:4b", true, true, false));
+    }
+}
+
 async fn query_direct_ollama(
     client: &reqwest::Client,
     host: &str,
@@ -1651,12 +2028,25 @@ async fn query_direct_ollama(
     evidence: evidence::EvidenceCache,
     metrics: metrics::Metrics,
     updates: mpsc::UnboundedSender<ResultMessage>,
+    force_source_review: bool,
+    broad_source_review: bool,
+    interpreter_guidance: Option<&str>,
 ) -> Result<String, String> {
+    let original_question = direct_latest_user_text(&messages);
+    let broad_source_review = broad_source_review
+        || investigation::needs_baseline(&original_question);
     let is_greeting = direct_is_greeting(&messages);
-    let analysis_requested = direct_source_analysis_intent(&messages);
+    let analysis_requested = direct_source_analysis_intent(&messages) || force_source_review;
     let allow_change_proposals = direct_change_intent(&messages);
     let observed = evidence.clone();
     let mut direct_messages = direct_chat_messages(messages);
+    // direct_chat_messages deliberately rebuilds the system prompt: insert
+    // trusted runtime guidance AFTER compacting so it is not silently dropped.
+    if let Some(guidance) = interpreter_guidance {
+        insert_context_before_latest_user(&mut direct_messages, Message {
+            role: "system".into(), content: guidance.into()
+        });
+    }
     if analysis_requested {
         // Deterministic, trusted-in-the-runtime root listing; the model still
         // has to request real source reads. This avoids asking a small Llama
@@ -1677,15 +2067,72 @@ async fn query_direct_ollama(
             insert_direct_workspace_inventory(&mut direct_messages, &listing);
         }
     }
-    // Source-inspection requests must perform at least one NEW native read_file.
-    // ask_ollama already retries once if the model stops after search_text/list_files;
-    // zero here previously disabled that safeguard in direct mode.
+    // Search hits alone never count. Perform bounded runtime-controlled file
+    // discovery and real read_file calls to help models with weak tool calling.
+    // The user request decides the scope, not model-printed pseudo tool JSON.
+    if analysis_requested && !allow_change_proposals {
+        let root = workspace.clone();
+        let cache = evidence.clone();
+        let question = original_question.clone();
+        let grounded = tokio::task::spawn_blocking(move || {
+            if broad_source_review {
+                investigation::baseline(&root, &cache)
+            } else {
+                investigation::focused_source_bootstrap(&root, &question, &cache)
+            }
+        }).await.map_err(|error|format!("Bootstrap de código falhou: {error}"))?;
+        if !grounded.is_empty() && observed.source_read_count() > 0 {
+            let description = if broad_source_review {
+                "📖 DUDE: revisão ampla iniciada com uma amostra real dos módulos do workspace (leitura parcial)."
+            } else {
+                "📖 DUDE: código lido automaticamente pelo runtime via read_file; trechos disponíveis para análise."
+            };
+            let _ = updates.send(ResultMessage::ChatNotice(description.into()));
+            insert_context_before_latest_user(&mut direct_messages, Message {
+                role: "system".into(), content: grounded
+            });
+        }
+    }
+    if analysis_requested && observed.source_read_count() > 0 {
+        let available_references = observed.citation_examples(&original_question).join(", ");
+        insert_context_before_latest_user(&mut direct_messages, Message {
+            role: "system".into(),
+            content: concat!(
+                "Antes de concluir, inclua referências reais de código no formato ",
+                "src/arquivo.ext:linha para os pontos que descrevem implementação. ",
+                "Somente números de linha presentes nos SOURCE EXCERPT fornecidos. ",
+                "Uma forma válida é src/main.rs:42 ou src/main.rs:L42. ",
+                "O DUDE rejeitará a resposta sem pelo menos uma citação verificável. ",
+                "Se propuser melhorias, indique uma sugestão, não uma alteração aplicada; ",
+                "não faça afirmações sobre código não lido."
+            ).to_string() + &format!(
+                " Exemplos reais de coordenadas observadas (use somente se pertinentes): {available_references}."
+            ),
+        });
+    }
+    let source_bootstrapped = observed.source_read_count() > 0;
+    // Never pretend that a non-native JSON tool request was executed. When
+    // Llama 3.1/3.2 already has source observations, answer without tools.
+    // Other models can continue using native tool calls as desired.
+    let llama_tool_fallback = use_grounded_llama_synthesis(
+        model, analysis_requested, source_bootstrapped, allow_change_proposals
+    );
+    if llama_tool_fallback {
+        let _ = updates.send(ResultMessage::ChatNotice(
+            "🧭 DUDE: Llama usará trechos realmente lidos pelo runtime, sem simular chamadas nativas.".into()
+        ));
+    }
+    // Bootstrap source reads count as actual code observations, not as
+    // model-requested calls. Only demand a new native read if no source was read.
     let baseline_event_count = observed.event_count();
-    let minimum_new_reads = usize::from(analysis_requested);
+    let minimum_new_reads = usize::from(analysis_requested && !source_bootstrapped);
+    // Review drafts must not be shown as final while citations have not passed
+    // the evidence gate. Send one validated response through Chat on completion.
     let answer = ask_ollama(
         client, host, model, direct_messages, workspace,
-        !is_greeting, allow_change_proposals, true,
-        minimum_new_reads, baseline_event_count, evidence, metrics, Some(updates),
+        !is_greeting && !llama_tool_fallback, allow_change_proposals, true,
+        minimum_new_reads, baseline_event_count, evidence, metrics.clone(),
+        if analysis_requested { None } else { Some(updates.clone()) },
     ).await?;
     // A greeting or a simple directory listing needs no read_file evidence.
     // For an explicit code review, a fluent or pseudo-tool response without
@@ -1699,13 +2146,14 @@ async fn query_direct_ollama(
              Modelo: {model}."
         ));
     }
+    let answer = if analysis_requested && !observed.has_supported_citation(&answer) {
+        let _ = updates.send(ResultMessage::ChatNotice(
+            "🔎 DUDE: resposta sem citações válidas; tentando uma síntese corretiva a partir das leituras reais.".into()
+        ));
+        repair_direct_review_citations(client, host, model, &original_question,
+            &answer, &observed, &metrics).await?
+    } else { answer };
     if analysis_requested {
-        if !observed.has_supported_citation(&answer) {
-            return Err(format!(
-                "Investigação incompleta: a resposta não contém nenhuma referência arquivo:linha                  confirmada por read_file. Uma busca textual ou uma leitura sem citação                  não valida conclusões sobre o mecanismo. Leituras efetivas:\n{}",
-                observed.read_manifest()
-            ));
-        }
         let unread = observed.uninspected_source_mentions(&answer);
         if !unread.is_empty() {
             return Err(format!(
@@ -1797,29 +2245,34 @@ mod direct_mode_context_tests {
 async fn query_provider(client: &reqwest::Client, provider: &str, messages: Vec<Message>,
     workspace: PathBuf, host: &str, local_model: &str, groq_model: &str,
     gemini_model: &str, allow_tools: bool, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
-    updates: Option<mpsc::UnboundedSender<ResultMessage>>) -> Result<String,String> {
+    updates: Option<mpsc::UnboundedSender<ResultMessage>>,
+    force_source_review: bool,
+    original_intent_query: Option<&str>) -> Result<String,String> {
     let mut messages = compact_model_messages(messages);
-    let question = messages.iter().rev().find(|m|m.role == "user")
-        .map(|m|m.content.as_str()).unwrap_or("");
+    // Symphony wraps each real request with an evidence handoff. Classifying
+    // the wrapper as user intent can falsely trigger a code review just
+    // because it says "review" and "tools" even if the user only said "review".
+    let question: String = original_intent_query.map(str::to_owned)
+        .unwrap_or_else(|| messages.iter().rev().find(|m|m.role == "user")
+            .map(|m|m.content.clone()).unwrap_or_default());
     let previous_user = messages.iter().rev().filter(|m| m.role == "user").nth(1).map(|m| m.content.as_str());
     // Follow-up reviews carry the previous technical intent, but the model still
     // chooses which read-only tools and implementation files are relevant.
-    let initial_review = allow_tools && investigation::needs_baseline(question);
-    let review_followup = allow_tools && investigation::review_followup(question, previous_user);
-    let focused_review = allow_tools && investigation::focused_source_review(question);
+    let initial_review = allow_tools && investigation::needs_baseline(&question);
+    let review_followup = allow_tools && investigation::review_followup(&question, previous_user);
+    let focused_review = allow_tools && (force_source_review
+        || investigation::focused_source_review(&question));
     let require_project_evidence = initial_review || review_followup || focused_review;
     let minimum_new_reads = if review_followup { 2 } else if initial_review || focused_review { 1 } else { 0 };
     let require_change_evidence = allow_tools && (
-        investigation::is_code_change_request(question)
+        investigation::is_code_change_request(&question)
         || previous_user.is_some_and(|previous| investigation::is_code_change_request(previous)
-            && investigation::investigation_intent(question, Some(previous)))
+            && investigation::investigation_intent(&question, Some(previous)))
     );
     // The model decides whether to call read-only tools. Keyword heuristics must
     // never remove tools from an otherwise authorized request.
     if allow_tools {
         let root = workspace.clone();
-        let question = messages.iter().rev().find(|m|m.role == "user")
-            .map(|m|m.content.clone()).unwrap_or_default();
         let bootstrap = investigation::needs_baseline(&question);
         let cache = evidence.clone();
         // Never append tool policy after the actual user turn: keep the
@@ -1993,7 +2446,7 @@ async fn extract_knowledge_after_response(
         query_provider(
             client, provider, extraction, workspace.to_owned(), host,
             ollama_model, groq_model, gemini_model, false,
-            evidence.clone(), metrics::Metrics::default(), None,
+            evidence.clone(), metrics::Metrics::default(), None, false, None,
         ),
     ).await {
         Ok(result) => result,
@@ -2022,7 +2475,8 @@ async fn extract_knowledge_after_response(
 async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
     messages: Vec<Message>, workspace: PathBuf, host: &str, local_model: &str,
     groq_model: &str, gemini_model: &str, evidence: evidence::EvidenceCache, metrics: metrics::Metrics,
-    updates: mpsc::UnboundedSender<ResultMessage>) -> Result<String,String> {
+    updates: mpsc::UnboundedSender<ResultMessage>,
+    force_source_review: bool) -> Result<String,String> {
     let steps = [
         ("Investigator", roles.investigator.as_str(),
             "Investigate the user's request. Use file tools to gather evidence. Cite file names and lines where available. Distinguish documented, verified and inferred findings. Keep your handoff below 900 words; prioritize concrete evidence."),
@@ -2051,7 +2505,8 @@ async fn run_symphony(client: &reqwest::Client, roles: &roles::Roles,
             if *provider=="groq"{selected_model}else{groq_model},
             if *provider=="gemini"{selected_model}else{gemini_model},
             index == 0,evidence.clone(),metrics.clone(),
-            if index == 2 {Some(updates.clone())} else {None}).await;
+            if index == 2 {Some(updates.clone())} else {None},
+            index == 0 && force_source_review, Some(question)).await;
         metrics.stage(name,provider,stage_start,result.is_ok());
         let response=result.map_err(|e|format!("{name} ({provider}) failed: {e}"))?;
         // A durable stage record is historical evidence, never an automatic replay.
@@ -2213,7 +2668,7 @@ mod meta_llama_tool_handling_tests {
 
     #[test]
     fn change_tools_are_not_exposed_for_read_only_questions() {
-        let ask = |content| vec![Message { role:"user".into(), content: content.into() }];
+        let ask = |content: &str| vec![Message { role:"user".into(), content: content.into() }];
         assert!(!direct_change_intent(&ask("Analise a arquitetura deste projeto")));
         assert!(!direct_change_intent(&ask("try again")));
         assert!(direct_change_intent(&ask("Corrija esta função")));
@@ -2269,6 +2724,20 @@ async fn ask_ollama(
                 return Err("Revisão incompleta: as chamadas nativas read_file não examinaram arquivos suficientes. Raciocínio textual e listagem de diretórios não são evidência de leitura.".into());
             }
             conversation.push(json!({"role":"user","content":format!("{}\n\nInvestigation coverage: {}\nOnly cite lines actually read. Do not treat source listing as implementation evidence.",investigation::FINALIZE,format!("{}\n{}", evidence.coverage(), evidence.read_manifest()))}));
+        }
+        // The model may receive read_file results after the initial instructions.
+        // Repeat the citation contract immediately before synthesis, using only
+        // real observed coordinates. This does not relax the evidence gate.
+        if allow_tools && evidence.source_read_count() > 0 && round > 0 {
+            let references = evidence.citation_examples("").join(", ");
+            if !references.is_empty() {
+                conversation.push(json!({
+                    "role": "system",
+                    "content": format!(
+                        "DUDE citation contract: cite every implementation observation using the complete path:line notation, e.g. {references}. Bare 'line 86', 'linhas 85-94', or a filename followed separately by a range do NOT count. Only cite lines from actual read_file results; do not invent measurements or attribute semantics not supported by observed code. If evidence is insufficient, state that instead of manufacturing a conclusion."
+                    )
+                }));
+            }
         }
         // Stream both answer and Ollama's structured thinking field to the TUI.
         // Non-interactive extraction keeps its previous fast, non-thinking mode.

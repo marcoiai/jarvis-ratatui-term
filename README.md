@@ -36,6 +36,145 @@ If your server is elsewhere, set `OLLAMA_HOST=http://127.0.0.1:11434`.
 
 DUDE prefers `llama3.1:8b` (Meta Llama 3.1 8B) and checks `/api/tags` at startup. If missing, it downloads the model through `/api/pull` while keeping the interface responsive. It does **not** download when the requested model is already installed. If a download fails and another model is installed, it falls back to that model. Ollama itself must be running. You can override the preferred model with `OLLAMA_MODEL` and inspect installed models using `ollama list`.
 
+## MLX local backend (opt-in development preview)
+
+The existing DUDE executor expects Ollama's `/api/chat`, tool-call frames and
+`/api/tags`. MLX-LM exposes OpenAI-compatible `/v1/chat/completions`.
+To preserve DUDE's existing local file tools, source-evidence checks and
+mutation-approval boundaries, a small compatibility bridge translates only
+the HTTP protocol; it does **not** execute the model's tools.
+
+With MLX-LM already running on the Mac at `10.10.10.95:8081` (Qwen3 4B)
+and `10.10.10.95:8082` (Qwen2.5-Coder 7B), run this bridge on the **Linux
+machine where DUDE runs**:
+
+```sh
+python3 tools/mlx_ollama_bridge.py --mlx-url http://10.10.10.95:8082 --port 11882
+```
+
+In a separate Linux terminal, inside your chosen project workspace:
+
+```sh
+DUDE_WORKSPACE=/path/to/target/project \
+DUDE_INTERPRETER_BACKEND=mlx \
+DUDE_INTERPRETER_HOST=http://10.10.10.95:8081 \
+DUDE_INTERPRETER_MODEL=default_model \
+OLLAMA_HOST=http://127.0.0.1:11882 \
+OLLAMA_MODEL=mlx-local \
+cargo run --bin dude
+```
+
+Use `/interpreter` to inspect the Interpreter configuration and `/ollama`
+to inspect the executor endpoint (its name remains Ollama for compatibility).
+The bridge reports a virtual local model `mlx-local` via `/api/tags`.
+It does not download models. All model weights stay with the MLX server.
+
+**Development limitations:** the bridge currently buffers upstream responses
+before emitting one Ollama NDJSON frame, so it does not offer incremental token
+streaming. MLX-LM tool-call fidelity depends on the server/model implementation
+and must be tested in an actual DUDE source review before declaring the native
+`read_file` workflow operational. Model tool-call *text* is never executed.
+DUDE's existing evidence requirements remain active and can reject an
+incomplete source review. Restrict the endpoints to trusted localhost/LAN;
+neither server nor bridge should be exposed publicly without authentication.
+
+Bridge protocol tests (no MLX server needed):
+
+```sh
+python3 -m unittest discover -s tools -p 'test_mlx_ollama_bridge.py' -v
+```
+
+## Optional two-model Interpreter
+
+DUDE can use **one small Ollama model to interpret the request** and a different
+model to execute it. This recovers the earlier Interpreter experiment without
+merging the obsolete Symfony/Symphony branch. **Opt-in:** by default DUDE
+keeps its existing deterministic router and makes no additional model call.
+
+Example with two models on the same Ollama instance:
+
+```sh
+ollama pull qwen3:4b
+ollama pull llama3.1:8b
+DUDE_INTERPRETER_MODEL=qwen3:4b OLLAMA_MODEL=llama3.1:8b cargo run --bin dude
+```
+
+Example with the Interpreter running on a different host (such as a Mac)
+while the executor uses the configured `OLLAMA_HOST`:
+
+```sh
+OLLAMA_HOST=http://127.0.0.1:11434 \
+DUDE_INTERPRETER_HOST=http://192.168.1.10:11434 \
+DUDE_INTERPRETER_MODEL=qwen3:4b \
+OLLAMA_MODEL=llama3.1:8b \
+cargo run --bin dude
+```
+
+The separate Interpreter host must expose Ollama's `/api/chat` endpoint; the
+model must already be installed there. No automatic Interpreter-model download
+is performed. Check `/interpreter` for active model and host. The primary
+`/model` command still controls the executor.
+
+**How it works:** after ordinary command and permission preflight, a bounded
+12-second Ollama request classifies intent, response depth, evidence
+requirements, and (only in configured Symphony mode) Solo vs Symphony.
+The response is a small JSON object with fixed enums, **not a rewritten user
+prompt**. DUDE preserves the original user text in history and provides only
+runtime-authored task guidance to the executor. For implementation analysis,
+the runtime requires actual `read_file` evidence and citations (in addition to
+the focused-review safeguards). This is an evidence-presence check, not proof
+that every technical conclusion is correct.
+
+The Interpreter cannot authorize writes or commands, switch out of Direct or
+Solo mode, override explicit `solo:` / `symphony:` selections, or enable
+a cloud provider without `/cloud allow`. If the Interpreter times out or
+returns invalid JSON, DUDE uses its original routing and safeguards. Simple
+greetings and TUI commands do not trigger extra model calls. The Interpreter
+is an extra request, so latency and local-model memory usage may increase.
+
+**Llama 3 source investigation:** on a focused code-analysis request, the runtime
+performs bounded `search_text` discovery followed by actual `read_file`
+operations (logged as `automatic_bootstrap`). For project-wide reviews,
+DUDE uses the existing bounded project baseline to sample manifests, entry
+points, and representative source modules instead of keyword-searching generic
+words from the question. If excerpts are available,
+Llama 3.1/3.2 synthesizes directly from that code without a native tool call,
+since these models can emit tool-call JSON as plain text. No model-generated
+pseudo-tool call is executed. An answer without a confirmed `path:line`
+citation gets one bounded, source-only correction attempt and is still rejected
+if no real observed line is cited. Unverified drafts are withheld from the
+final TUI response. Other models can keep using native tools.
+
+**Slow Ollama citation retry:** the one repair request has a default 120-second
+timeout (the previous 30-second limit caused failures with Llama 3.1 8B).
+Override with `DUDE_CITATION_RETRY_TIMEOUT_SECS` (30–300 seconds). The retry
+prioritizes read-only source excerpts from files named in the user's question
+and sends a bounded context without tool listings or search results. A concise
+citation reminder and sample *observed* line coordinates are also injected
+before the initial analysis to reduce the need for a second model request.
+
+To improve compatibility with small local models, the correction pass requests
+JSON with `answer` and `references` fields. DUDE independently checks every
+model-selected reference against lines returned by `read_file` before rendering
+them. Plain text with observed citations remains accepted for compatibility.
+The validator also recognizes `src/main.rs:L42` and `src/main.rs#L42` as
+equivalent to `src/main.rs:42`, provided line 42 was read. Unsupported
+references still fail closed. This validates source **provenance**, not the
+truth of the model's conclusions.
+
+If the Interpreter cannot classify a request, the TUI now shows a specific
+reason: timeout, failed connection, unavailable model/endpoint, invalid JSON
+or an unknown intent. The original router remains the fallback. Verify
+`/interpreter` and check that the named model is installed at that host.
+
+Validate in a Rust-enabled development environment:
+
+```sh
+cargo fmt --all --check
+cargo check
+cargo test
+```
+
 ## Temporary direct local-model mode
 
 To use Ollama much like a normal chat assistant **without DUDE's experimental
@@ -50,7 +189,7 @@ can you review more?
 
 - The mode is saved per workspace in `.dude/roles.json` until you select `/mode solo` or `/mode symphony`.
 - Direct uses the **local Ollama provider**, ignoring Solo's optional cloud-role assignments. To use another locally installed model, type `/model MODEL_NAME` (for example `/model llama3.1:8b`). The model is rechecked when you switch, and stale checks for previous selections are ignored. Check availability using `/ollama` and `/ollama retry`.
-- Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, auto-baseline, evidence gates, second-pass semantic audit and automatic knowledge extraction are bypassed.
+- Only a brief DUDE system prompt and up to ten recent dialogue messages are sent. DUDE's long persisted project context, second-pass semantic audit and automatic knowledge extraction are bypassed. Targeted reviews still use bounded read-only source baselines, evidence checks, and a single optional citation-correction pass; the Interpreter may add task classification when enabled.
 - Ollama still decides whether to use the read-only `list_files`, `read_file` and `search_text` tools. For explicit source reviews in Direct mode, DUDE first gathers a **read-only root-directory inventory** with Rust, labels it as a directory listing (not a code read), and then lets the model choose native `read_file` calls. A source review with **zero successful read_file operations fails visibly** instead of being reported as a completed code analysis. **Source-file mention gate:** if the answer names a source file in inline Markdown code (such as `knowledge.rs`) but there is no successful `read_file` for that path, the review is refused and the omitted source paths plus actual read manifest are displayed. This blocks accidentally attributing functions read in `file_tools.rs` to unread `knowledge.rs`. It checks provenance only and cannot prove the semantics of claims about files that were read. Direct does **not** guarantee that a model successfully calls tools.
 - **Cancel an in-progress thinking/response (including macOS):** press **`Esc` while a model is generating**, `Control+X`, `Control+G`, or enter `/stop` while DUDE is busy. On Mac use the **Control** key, not Command (`⌘`); Command+X is generally handled by the terminal. `Esc` is the recommended macOS fallback. While idle, `Esc` and `Ctrl+C` still exit the application. The UI processes streamed token events in bounded batches so keyboard input remains responsive, and queued stale stream fragments are ignored after cancellation. The visible partial output is not saved as a completed assistant answer; Ollama may take a moment to release backend work.
 - **Optional code changes (direct mode only):** the model may propose `edit_file`, `create_file` or `run_command` for builds/tests. The runtime only **prepares** one proposed action; it never writes or runs the proposed command automatically. The TUI displays the change/command, `/diff` repeats the preview, `/approve` performs only that proposal, and `/reject` discards it. Each new change requires separate approval. `edit_file` replaces one uniquely matching text fragment in a regular workspace file; `create_file` needs a nonexistent path in an existing directory. Sensitive paths, symlinks and traversal outside the workspace are blocked, and file content is checked again before writing.

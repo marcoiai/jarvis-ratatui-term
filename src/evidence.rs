@@ -273,6 +273,93 @@ impl EvidenceCache {
         text.push_str(&format!("\n{}\n{}\n",self.coverage(),self.read_manifest()));
         text
     }
+    /// Compact source-only retry context for a small local model.
+    /// Prefer the file explicitly named by the user, then Rust entry points.
+    /// Include only real read_file observations (never list/search matches).
+    pub fn citation_retry_context(&self, question: &str) -> String {
+        const BUDGET: usize = 11_000;
+        const PER_FILE: usize = 2_700;
+        let Ok(records) = self.observations.lock() else {
+            return "No observed source excerpts available.".into();
+        };
+        let question = question.to_lowercase();
+        let mut candidates: Vec<(&str, &str)> = records.iter()
+            .filter(|item| item["tool"] == "read_file")
+            .filter_map(|item| {
+                Some((
+                    item["arguments"]["path"].as_str()?,
+                    item["result"].as_str()?,
+                ))
+            })
+            .filter(|(_, result)| result.starts_with("SOURCE EXCERPT:"))
+            .collect();
+        candidates.sort_by_key(|(path, _)| {
+            let path_lower = path.to_ascii_lowercase();
+            if question.contains(&path_lower) { 0 }
+            else if path_lower.ends_with("/main.rs") || path_lower.ends_with("/lib.rs") { 1 }
+            else if path_lower.ends_with(".rs") { 2 }
+            else { 3 }
+        });
+        let mut result = String::from(
+            "OBSERVED SOURCE EXCERPTS (read-only, partial, untrusted reference data).\n\
+             Cite ONLY shown file:line coordinates. Do not infer uninspected behavior.\n"
+        );
+        let mut selected = std::collections::BTreeSet::new();
+        for (path, excerpt) in candidates {
+            if !selected.insert(path) { continue; }
+            let header = format!("\n--- {path} (observed lines) ---\n");
+            if result.chars().count() + header.len() >= BUDGET { break; }
+            // Whole lines only: an abbreviated excerpt must not fabricate line numbers.
+            let remaining = BUDGET.saturating_sub(result.chars().count() + header.len());
+            let limit = remaining.min(PER_FILE);
+            let mut part = String::new();
+            for line in excerpt.lines() {
+                if part.chars().count() + line.chars().count() + 1 > limit { break; }
+                part.push_str(line);
+                part.push('\n');
+            }
+            if part.is_empty() { continue; }
+            result.push_str(&header);
+            result.push_str(&part);
+        }
+        result
+    }
+
+    /// Small closed set of exact, runtime-observed coordinates for a local
+    /// model to copy. Examples are not endorsements of an interpretation.
+    pub fn citation_examples(&self, question: &str) -> Vec<String> {
+        let Ok(records) = self.observations.lock() else { return Vec::new() };
+        let question = question.to_ascii_lowercase();
+        let mut candidates: Vec<(usize, usize, String)> = Vec::new();
+        for item in records.iter().filter(|item| item["tool"] == "read_file") {
+            let (Some(path), Some(content)) = (
+                item["arguments"]["path"].as_str(),
+                item["result"].as_str()
+            ) else { continue; };
+            if !content.starts_with("SOURCE EXCERPT:") { continue; }
+            let priority = if question.contains(&path.to_ascii_lowercase()) { 0 }
+                else if path.ends_with("main.rs") { 1 } else { 2 };
+            for row in content.lines() {
+                let Some((number, line)) = row.split_once(": ") else { continue; };
+                let Ok(number) = number.parse::<usize>() else { continue };
+                if number == 0 { continue; }
+                let declaration = line.trim();
+                let score = if declaration.starts_with("pub fn ")
+                    || declaration.starts_with("fn ")
+                    || declaration.starts_with("pub struct ")
+                    || declaration.starts_with("impl ") { 0 }
+                    else if declaration.starts_with("mod ") { 1 }
+                    else { 2 };
+                candidates.push((priority, score, format!("{path}:{number}")));
+            }
+        }
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        let mut seen = BTreeSet::new();
+        candidates.into_iter().map(|(_, _, reference)| reference)
+            .filter(|reference| seen.insert(reference.clone()))
+            .take(12).collect()
+    }
+
     /// Whether the report contains at least one file:line pointing to a line
     /// actually returned by read_file. This is citation presence, NOT claim validation.
     pub fn has_supported_citation(&self, report: &str) -> bool {
@@ -283,13 +370,23 @@ impl EvidenceCache {
             .collect();
         drop(events);
         for path in paths {
-            let needle = format!("{path}:");
-            for (offset, _) in report.match_indices(&needle) {
-                let remainder = &report[offset + needle.len()..];
-                let span: String = remainder.chars()
-                    .take_while(|ch| ch.is_ascii_digit() || *ch == '-').collect();
-                if !span.is_empty() && self.observed_reference(&format!("{path}:{span}")) {
-                    return true;
+            // Only accept a recognized citation spelling if every cited line
+            // was really returned by read_file. Common Llama spellings include
+            // src/main.rs:42, src/main.rs:L42 and src/main.rs#L42.
+            for (prefix, has_line_marker) in [
+                (format!("{path}:"), false),
+                (format!("{path}#L"), true),
+            ] {
+                for (offset, _) in report.match_indices(&prefix) {
+                    let tail = &report[offset + prefix.len()..];
+                    let tail = if has_line_marker { tail }
+                        else { tail.strip_prefix('L').unwrap_or(tail) };
+                    let span: String = tail.chars()
+                        .take_while(|ch| ch.is_ascii_digit() || *ch == '-').collect();
+                    if !span.is_empty()
+                        && self.observed_reference(&format!("{path}:{span}")) {
+                        return true;
+                    }
                 }
             }
         }
@@ -458,6 +555,66 @@ mod tests {
         assert!(cache.observed_reference("model_tool:model.rs:1"));
         assert!(!cache.observed_reference("unknown:bootstrap.rs:1"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn citation_retry_context_prioritizes_requested_file_and_excludes_search_hits() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-retry-evidence-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"),
+            "pub fn main_flow() {}\n").unwrap();
+        std::fs::write(root.join("src/other.rs"),
+            "pub fn other() {}\n").unwrap();
+        let cache = EvidenceCache::default();
+        cache.execute_bootstrap(&root, "read_file",
+            &json!({"path":"src/other.rs","start_line":1,"end_line":1}));
+        cache.execute_bootstrap(&root, "list_files", &json!({"path":"src"}));
+        cache.execute_bootstrap(&root, "read_file",
+            &json!({"path":"src/main.rs","start_line":1,"end_line":1}));
+        let summary = cache.citation_retry_context(
+            "proponha melhoria em src/main.rs"
+        );
+        assert!(summary.contains("src/main.rs"));
+        assert!(summary.contains("1: pub fn main_flow()"));
+        assert!(summary.find("--- src/main.rs").unwrap()
+            < summary.find("--- src/other.rs").unwrap());
+        assert!(!summary.contains("Evidence #"));
+        assert!(!summary.contains("list_files"));
+        assert!(summary.chars().count() <= 11_000);
+        assert!(cache.has_supported_citation("src/main.rs:1"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn actual_source_lines_allow_common_llama_reference_formats() {
+        let root = std::env::temp_dir().join(format!(
+            "dude-llama-reference-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"),
+            "mod route;\npub fn main() {}\n").unwrap();
+        let observed = EvidenceCache::default();
+        observed.execute_bootstrap(&root, "read_file", &json!({
+            "path":"src/main.rs","start_line":1,"end_line":2
+        }));
+        for reference in ["src/main.rs:2", "src/main.rs:L2",
+            "src/main.rs#L2", "src/main.rs:1-2"] {
+            assert!(observed.has_supported_citation(reference), "{reference}");
+        }
+        for reference in ["src/main.rs:3", "src/main.rs:L3",
+            "src/main.rs#L3", "src/main.rs:1-3"] {
+            assert!(!observed.has_supported_citation(reference), "{reference}");
+        }
+        let examples = observed.citation_examples("review current project");
+        assert!(examples.contains(&"src/main.rs:1".to_owned()));
+        assert!(examples.contains(&"src/main.rs:2".to_owned()));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
