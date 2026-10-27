@@ -41,14 +41,14 @@ fn read_page(binary:&Path,src:&str,dst:&str,file:&str,hunk:usize)->Result<DiffPa
     if !output.status.success(){return Err(format!("workspace_diff: {}",String::from_utf8_lossy(&output.stderr)));}
     serde_json::from_slice(&output.stdout).map_err(|e|format!("workspace_diff JSON: {e}"))
 }
-fn ollama(endpoint:&str,model:&str,prompt:&str)->Result<String,String>{
-    let client=reqwest::blocking::Client::builder()
+async fn ollama(endpoint:&str,model:&str,prompt:&str)->Result<String,String>{
+    let client=reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180)).build().map_err(|e|e.to_string())?;
     let response=client.post(format!("{endpoint}/api/generate"))
         .json(&json!({"model":model,"prompt":prompt,"stream":false,"format":"json","options":{"temperature":0,"num_ctx":4096}}))
-        .send().map_err(|e|e.to_string())?
+        .send().await.map_err(|e|e.to_string())?
         .error_for_status().map_err(|e|e.to_string())?;
-    let data:OllamaResponse=response.json().map_err(|e|e.to_string())?;
+    let data:OllamaResponse=response.json().await.map_err(|e|e.to_string())?;
     Ok(data.response)
 }
 fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
@@ -75,7 +75,6 @@ fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
 }
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Tokio only wraps a blocking call here; no callbacks or shell evaluation.
     let args:Vec<String>=env::args().skip(1).collect();
     if args.len()!=6 || args[2]!="--file" || args[4]!="--hunk" {
         eprintln!("Usage: workspace_investigator SOURCE DEST --file REL --hunk N");
@@ -109,7 +108,7 @@ async fn main() -> ExitCode {
     let endpoint=env::var("OLLAMA_HOST").unwrap_or_else(|_|"http://127.0.0.1:11434".into());
     let endpoint=if endpoint.starts_with("http"){endpoint}else{format!("http://{endpoint}")};
     let model=env::var("DUDE_INVESTIGATOR_MODEL").unwrap_or_else(|_|"qwen3:4b-instruct-2507-q4_K_M".into());
-    let reply=match ollama(endpoint.trim_end_matches('/'),&model,&prompt){
+    let reply=match ollama(endpoint.trim_end_matches('/'),&model,&prompt).await {
         Ok(v)=>v,Err(e)=>{eprintln!("Ollama: {e}");return ExitCode::FAILURE}
     };
     let parsed:ModelReport=match serde_json::from_str(&reply) {
