@@ -1242,6 +1242,8 @@ impl App {
                     ));
                 }
                 let forced_source_review = interpreted.requires_source;
+                let broad_source_review = interpreted.intent == "project_review"
+                    || investigation::needs_baseline(original_question);
                 let advisory = interpreted.guidance();
                 let route = interpreted.route;
                 let is_symphony = matches!(&route, router::Route::Symphony);
@@ -1258,13 +1260,13 @@ impl App {
                 let solo_provider=roles.selected_provider().to_owned();
                 let result = if is_direct {
                     let direct_start = Instant::now();
-                    // Chat straight with the installed Ollama model. No project
-                    // bootstrap, forced read count, semantic auditor, or automatic
-                    // knowledge extraction. Read-only tools remain available.
+                    // Direct mode remains local: no cloud auditor or knowledge
+                    // extraction. Code reviews still require observable evidence.
+                    // Broad reviews use a bounded source baseline before synthesis.
                     let result = query_direct_ollama(
                         &client, &url, &ollama_model, messages, workspace,
                         evidence, metrics.clone(), tx.clone(),
-                        forced_source_review, advisory.as_deref()
+                        forced_source_review, broad_source_review, advisory.as_deref()
                     ).await;
                     metrics.stage("Direct", "ollama", direct_start, result.is_ok());
                     result
@@ -1762,8 +1764,12 @@ async fn query_direct_ollama(
     metrics: metrics::Metrics,
     updates: mpsc::UnboundedSender<ResultMessage>,
     force_source_review: bool,
+    broad_source_review: bool,
     interpreter_guidance: Option<&str>,
 ) -> Result<String, String> {
+    let original_question = direct_latest_user_text(&messages);
+    let broad_source_review = broad_source_review
+        || investigation::needs_baseline(&original_question);
     let is_greeting = direct_is_greeting(&messages);
     let analysis_requested = direct_source_analysis_intent(&messages) || force_source_review;
     let allow_change_proposals = direct_change_intent(&messages);
@@ -1802,14 +1808,21 @@ async fn query_direct_ollama(
     if analysis_requested && !allow_change_proposals {
         let root = workspace.clone();
         let cache = evidence.clone();
-        let question = direct_latest_user_text(&direct_messages);
+        let question = original_question.clone();
         let grounded = tokio::task::spawn_blocking(move || {
-            investigation::focused_source_bootstrap(&root, &question, &cache)
-        }).await.map_err(|error|format!("Bootstrap focado falhou: {error}"))?;
-        if !grounded.is_empty() {
-            let _ = updates.send(ResultMessage::ChatNotice(
-                "📖 DUDE: código lido automaticamente pelo runtime via read_file; trechos disponíveis para análise.".into()
-            ));
+            if broad_source_review {
+                investigation::baseline(&root, &cache)
+            } else {
+                investigation::focused_source_bootstrap(&root, &question, &cache)
+            }
+        }).await.map_err(|error|format!("Bootstrap de código falhou: {error}"))?;
+        if !grounded.is_empty() && observed.source_read_count() > 0 {
+            let description = if broad_source_review {
+                "📖 DUDE: revisão ampla iniciada com uma amostra real dos módulos do workspace (leitura parcial)."
+            } else {
+                "📖 DUDE: código lido automaticamente pelo runtime via read_file; trechos disponíveis para análise."
+            };
+            let _ = updates.send(ResultMessage::ChatNotice(description.into()));
             insert_context_before_latest_user(&mut direct_messages, Message {
                 role: "system".into(), content: grounded
             });
@@ -1831,10 +1844,13 @@ async fn query_direct_ollama(
     // model-requested calls. Only demand a new native read if no source was read.
     let baseline_event_count = observed.event_count();
     let minimum_new_reads = usize::from(analysis_requested && !source_bootstrapped);
+    // Review drafts must not be shown as final while citations have not passed
+    // the evidence gate. Send one validated response through Chat on completion.
     let answer = ask_ollama(
         client, host, model, direct_messages, workspace,
         !is_greeting && !llama_tool_fallback, allow_change_proposals, true,
-        minimum_new_reads, baseline_event_count, evidence, metrics, Some(updates),
+        minimum_new_reads, baseline_event_count, evidence, metrics.clone(),
+        if analysis_requested { None } else { Some(updates.clone()) },
     ).await?;
     // A greeting or a simple directory listing needs no read_file evidence.
     // For an explicit code review, a fluent or pseudo-tool response without
@@ -1848,13 +1864,14 @@ async fn query_direct_ollama(
              Modelo: {model}."
         ));
     }
+    let answer = if analysis_requested && !observed.has_supported_citation(&answer) {
+        let _ = updates.send(ResultMessage::ChatNotice(
+            "🔎 DUDE: resposta sem citações válidas; tentando uma síntese corretiva a partir das leituras reais.".into()
+        ));
+        repair_direct_review_citations(client, host, model, &original_question,
+            &answer, &observed, &metrics).await?
+    } else { answer };
     if analysis_requested {
-        if !observed.has_supported_citation(&answer) {
-            return Err(format!(
-                "Investigação incompleta: a resposta não contém nenhuma referência arquivo:linha                  confirmada por read_file. Uma busca textual ou uma leitura sem citação                  não valida conclusões sobre o mecanismo. Leituras efetivas:\n{}",
-                observed.read_manifest()
-            ));
-        }
         let unread = observed.uninspected_source_mentions(&answer);
         if !unread.is_empty() {
             return Err(format!(
