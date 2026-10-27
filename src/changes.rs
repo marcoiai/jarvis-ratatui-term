@@ -286,12 +286,17 @@ pub async fn apply(root: PathBuf, action: PreparedAction) -> Result<String,Strin
 mod tests {
     use super::*;
     fn test_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        // macOS timestamps can have coarser-than-nanosecond precision.
+        // A per-process counter prevents parallel unit tests sharing a folder.
         let dir = std::env::temp_dir().join(format!(
-            "dude-approved-change-{}-{}",
+            "dude-approved-change-{}-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         dir
     }
     #[test]
