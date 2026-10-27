@@ -389,8 +389,8 @@ pub fn focused_source_bootstrap(
     let mut ranked: Vec<_> = matches.into_iter().collect();
     ranked.sort_by(|a, b| {
         let rank = |path: &str, lines: &[usize]| {
-            (lines.len().min(8) + usize::from(path.ends_with("main.rs")) * 3
-                + usize::from(path.ends_with("lib.rs")) * 2)
+            lines.len().min(8) + usize::from(path.ends_with("main.rs")) * 3
+                + usize::from(path.ends_with("lib.rs")) * 2
         };
         rank(&b.0, &b.1).cmp(&rank(&a.0, &a.1)).then_with(||a.0.cmp(&b.0))
     });
