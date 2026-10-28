@@ -41,7 +41,11 @@ fn public_key_parts(line: &str) -> Option<(&str, &str)> {
 }
 fn identity_loaded(key: &Path) -> Result<bool, String> {
     let pubkey=key.with_extension(format!("{}.pub", key.extension().and_then(|s|s.to_str()).unwrap_or("")));
-    let meta=std::fs::symlink_metadata(&pubkey).map_err(|_|"Public key companion unavailable; cannot verify loaded identity".to_string())?;
+    let meta=match std::fs::symlink_metadata(&pubkey) {
+        Ok(meta)=>meta,
+        Err(err) if err.kind()==std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err)=>return Err(format!("Cannot inspect public key companion: {err}")),
+    };
     if !meta.is_file() || meta.file_type().is_symlink() {return Err("Public key companion is unsafe".into());}
     let public=std::fs::read_to_string(&pubkey).map_err(|e|format!("Unable to read public key: {e}"))?;
     let expected=public_key_parts(public.trim()).ok_or("Invalid public key format")?;
@@ -106,6 +110,11 @@ mod tests {
         assert_eq!(public_key_parts(a),public_key_parts(b));
         assert!(public_key_parts("garbage").is_none());
         assert_ne!(public_key_parts(a),public_key_parts("ssh-rsa AAAAC3NzaC1lZDI1NTE5AAAA"));
+    }
+    #[test]
+    fn missing_public_key_does_not_block_unlock() {
+        let key=env::temp_dir().join(format!("dude-missing-pub-{}",std::process::id()));
+        assert_eq!(identity_loaded(&key).unwrap(),false);
     }
     #[test]
     fn rejects_arbitrary_identity_names() {
