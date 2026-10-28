@@ -78,12 +78,39 @@ fn render_investigation(raw: &str) -> String {
         Err(_) => format!("Saída não interpretável do Investigator:\n{}", raw.chars().take(2200).collect::<String>()),
     }
 }
+// Bounded read-only discovery. No inferred permission to execute code or edit files.
+fn select_file(source: &str, dest: &str, question: &str) -> Result<String, String> {
+    let explicit=question.split_whitespace()
+        .map(|w|w.trim_matches(|c:char| !c.is_alphanumeric() && c!='/' && c!='.' && c!='_'))
+        .find(|w|w.starts_with("src/") && w.ends_with(".rs"));
+    if let Some(file)=explicit { return Ok(file.to_string()); }
+    let terms:Vec<String>=question.split(|c:char| !c.is_alphanumeric() && c!='_')
+        .filter(|t|t.len()>=4).map(|t|t.to_ascii_lowercase()).collect();
+    let mut matches=Vec::new();
+    let src_root=Path::new(source).join("src");
+    let dst_root=Path::new(dest).join("src");
+    let entries=std::fs::read_dir(&dst_root).map_err(|e|format!("Não foi possível listar src/: {e}"))?;
+    for entry in entries.take(200).flatten() {
+        let Ok(kind)=entry.file_type() else { continue };
+        if !kind.is_file() || kind.is_symlink() { continue; }
+        let name=entry.file_name().to_string_lossy().to_string();
+        let Some(stem)=name.strip_suffix(".rs") else {continue};
+        if stem=="main" || stem=="lib" {continue;}
+        if !terms.iter().any(|t|t==stem) {continue;}
+        let left=src_root.join(&name);
+        if !left.is_file() || left.symlink_metadata().is_ok_and(|m|m.file_type().is_symlink()) {continue;}
+        matches.push(format!("src/{name}"));
+    }
+    matches.sort();
+    matches.dedup();
+    match matches.len() {
+        1=>Ok(matches.remove(0)),
+        0=>Err("Não encontrei um módulo correspondente presente nos dois diretórios. Informe um arquivo, ex.: analisa src/main.rs 1".into()),
+        _=>Err(format!("Pedido ambíguo; módulos encontrados: {}. Informe um caminho explícito.",matches.join(", "))),
+    }
+}
 fn investigate(source: String, dest: String, question: String) -> Result<ReviewResult, String> {
-    // First vertical slice: deterministic routing, no model-driven tool execution.
-    // Only explicit path tokens or the conventional entry point are considered.
-    let file = question.split_whitespace().map(|w|w.trim_matches(|c:char| !c.is_alphanumeric() && c!='/' && c!='.' && c!='_'))
-        .find(|w|w.starts_with("src/") && (w.ends_with(".rs") || w.ends_with(".toml")))
-        .unwrap_or("src/main.rs").to_string();
+    let file=select_file(&source,&dest,&question)?;
     let hunk = question.split_whitespace().find_map(|w|w.parse::<usize>().ok()).filter(|n|*n>0).unwrap_or(1);
     let left=Path::new(&source).join(&file);
     let right=Path::new(&dest).join(&file);
@@ -187,6 +214,22 @@ fn main()->std::process::ExitCode{
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_requires_matching_files_and_clear_intent() {
+        let root=std::env::temp_dir().join(format!("dude-discovery-{}",std::process::id()));
+        let left=root.join("old"); let right=root.join("new");
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(left.join("src")).unwrap();
+        std::fs::create_dir_all(right.join("src")).unwrap();
+        for dir in [&left,&right] {
+            std::fs::write(dir.join("src/interpreter.rs"),"// code").unwrap();
+        }
+        let a=left.to_str().unwrap();let b=right.to_str().unwrap();
+        assert_eq!(select_file(a,b,"analisa interpreter").unwrap(),"src/interpreter.rs");
+        assert!(select_file(a,b,"oi").is_err());
+        assert_eq!(select_file(a,b,"analisa src/main.rs 1").unwrap(),"src/main.rs");
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn renders_structural_observation_without_semantic_promotion() {
         let report = serde_json::json!({
