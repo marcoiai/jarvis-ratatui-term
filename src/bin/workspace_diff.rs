@@ -102,7 +102,14 @@ fn safe_rel(raw: &str) -> Result<&Path, String> {
     if rel.as_os_str().is_empty() || rel.is_absolute() { return Err("expected a relative file path".into()); }
     for part in rel.components() {
         match part {
-            Component::Normal(name) if !matches!(name.to_str(), Some(".git" | ".dude" | "target" | ".venv")) => {}
+            Component::Normal(name) => {
+                let Some(part) = name.to_str() else { return Err("non-UTF-8 path segment rejected".into()); };
+                let sensitive = part.starts_with(".env") || matches!(part,
+                    ".git" | ".dude" | ".ssh" | ".aws" | ".config" |
+                    "target" | ".venv" | "node_modules" | "vendor" |
+                    "id_rsa" | "id_ed25519" | "credentials" | "secrets");
+                if sensitive { return Err("protected or sensitive path segment".into()); }
+            }
             _ => return Err("unsafe path segment, protected data, or traversal".into()),
         }
     }
@@ -219,6 +226,18 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sensitive_paths_cannot_be_compared_or_copied() {
+        for path in [".env", ".env.local", ".ssh/id_rsa", ".aws/credentials",
+            ".config/key", "src/.dude/context.md", "node_modules/a.js",
+            "target/debug/app", "secrets/token.txt", "credentials/config"] {
+            assert!(safe_rel(path).is_err(), "unexpectedly accepted {path}");
+        }
+        for path in ["src/main.rs", "Cargo.toml", "src/interpreter.rs"] {
+            assert!(safe_rel(path).is_ok(), "unexpectedly rejected {path}");
+        }
+    }
+
     fn fixture() -> (PathBuf, PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("dude-diff-test-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = fs::remove_dir_all(&root);
