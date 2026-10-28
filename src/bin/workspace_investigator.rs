@@ -230,8 +230,8 @@ async fn main() -> ExitCode {
     outcome.destination_blob=first.destination_blob;
     outcome.total_hunks=data.total_hunks;
     match serde_json::to_string_pretty(&outcome){
-        Ok(v)=>{println!("{v}");ExitCode::SUCCESS},
-        Err(e)=>{eprintln!("{e}");ExitCode::FAILURE}
+        Ok(v)=>{println!("{v}");return ExitCode::SUCCESS},
+        Err(e)=>{eprintln!("{e}");return ExitCode::FAILURE}
     }
     }
     ExitCode::FAILURE
@@ -270,7 +270,7 @@ mod tests {
         let valid=BTreeSet::from(["hunk-1".to_string()]);
         let report=ModelReport{findings:vec![
             Finding{claim:"observed".into(),evidence_ids:vec!["hunk-1".into()],confidence:"high".into(),quote:String::new(),line_ids:vec!["D2".into()]},
-            Finding{claim:"invented".into(),evidence_ids:vec!["hunk-99".into()],confidence:"high".into(),quote:"mod interpreter;".into()}
+            Finding{claim:"invented".into(),evidence_ids:vec!["hunk-99".into()],confidence:"high".into(),quote:String::new(),line_ids:vec!["D2".into()]}
         ],uncertainty:vec![],recommendation:"requires_review".into()};
         let outcome=verify(report,&valid,"@@ -1 +1 @@\n+mod interpreter;\n");
         assert_eq!(outcome.validated_findings.len(),1);
