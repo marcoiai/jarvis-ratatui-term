@@ -29,10 +29,41 @@ fn agent_status() -> Result<bool, String> {
     }
 }
 
+// Public keys are not private secrets. Compare key type + base64 body only;
+// the trailing comment is optional and may differ between ssh-add and .pub.
+fn public_key_parts(line: &str) -> Option<(&str, &str)> {
+    let mut words=line.split_whitespace();
+    let kind=words.next()?;
+    let blob=words.next()?;
+    if !kind.starts_with("ssh-") && !kind.starts_with("ecdsa-") {return None;}
+    if blob.is_empty() {return None;}
+    Some((kind,blob))
+}
+fn identity_loaded(key: &Path) -> Result<bool, String> {
+    let pubkey=key.with_extension(format!("{}.pub", key.extension().and_then(|s|s.to_str()).unwrap_or("")));
+    let meta=std::fs::symlink_metadata(&pubkey).map_err(|_|"Public key companion unavailable; cannot verify loaded identity".to_string())?;
+    if !meta.is_file() || meta.file_type().is_symlink() {return Err("Public key companion is unsafe".into());}
+    let public=std::fs::read_to_string(&pubkey).map_err(|e|format!("Unable to read public key: {e}"))?;
+    let expected=public_key_parts(public.trim()).ok_or("Invalid public key format")?;
+    let output=Command::new("ssh-add").arg("-L").stdin(Stdio::null()).output()
+        .map_err(|e|format!("ssh-add unavailable: {e}"))?;
+    match output.status.code() {
+        Some(0)=>Ok(String::from_utf8_lossy(&output.stdout).lines()
+            .filter_map(public_key_parts).any(|found|found==expected)),
+        Some(1)=>Ok(false),
+        Some(2)=>Err("Cannot contact ssh-agent".into()),
+        _=>Err("ssh-add -L failed".into()),
+    }
+}
+
 fn ensure(name: &str) -> Result<(), String> {
     let home=PathBuf::from(env::var_os("HOME").ok_or("HOME is unset")?);
     let key=identity_path(&home,name)?;
-    let _ = agent_status()?; // checks agent reachability; not proof that selected key is loaded
+    let _ = agent_status()?;
+    if identity_loaded(&key)? {
+        println!("Requested SSH identity is already loaded; no new approval or passphrase required.");
+        return Ok(());
+    }
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Err("Interactive terminal required for approval and system passphrase prompt".into());
     }
@@ -68,6 +99,14 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn matches_public_keys_ignoring_comments() {
+        let a="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA sample@device";
+        let b="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA another@device";
+        assert_eq!(public_key_parts(a),public_key_parts(b));
+        assert!(public_key_parts("garbage").is_none());
+        assert_ne!(public_key_parts(a),public_key_parts("ssh-rsa AAAAC3NzaC1lZDI1NTE5AAAA"));
+    }
     #[test]
     fn rejects_arbitrary_identity_names() {
         let home=Path::new("/tmp");
