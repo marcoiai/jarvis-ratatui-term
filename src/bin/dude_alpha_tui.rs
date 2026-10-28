@@ -67,7 +67,7 @@ fn render_investigation(raw: &str) -> String {
                     let paths = check["checked_paths"].as_array()
                         .map(|xs| xs.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
                         .unwrap_or_default();
-                    summary.push_str(&format!("\\nEstrutura Rust: {declaration} — {status}\\n   caminhos: {paths}\\n   Não comprova uso, compilação ou comportamento.\\n"));
+                    summary.push_str(&format!("\nEstrutura Rust: {declaration} — {status}\n   caminhos: {paths}\n   Não comprova uso, compilação ou comportamento.\n"));
                 }
             }
             if let Some(rejected) = v["rejected_findings"].as_array() { if !rejected.is_empty() { summary.push_str(&format!("\n{} afirmações rejeitadas.\n",rejected.len())); } }
