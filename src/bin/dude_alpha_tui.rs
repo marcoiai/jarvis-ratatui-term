@@ -169,3 +169,22 @@ fn main()->std::process::ExitCode{
     restore(t);
     if let Err(e)=result{eprintln!("{e}");std::process::ExitCode::FAILURE}else{std::process::ExitCode::SUCCESS}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn evidence_view_requires_matching_blobs() {
+        let report=serde_json::json!({"source_blob":"a","destination_blob":"b",
+            "validated_findings":[{"claim":"new function","line_ids":["D2","D3"]}]});
+        let diff=serde_json::json!({"source_blob":"a","destination_blob":"b",
+            "diff":{"hunks":[{"content":"@@ -0,0 +1,2 @@\\n+fn new() {}\\n+let x = 1;\\n"}]}});
+        let views=evidence_views(&report,&diff).unwrap();
+        assert_eq!(views.len(),1);
+        assert!(views[0].contains("D2 +fn new()"));
+        assert!(views[0].contains("2 adicionadas"));
+        let changed=serde_json::json!({"source_blob":"changed","destination_blob":"b",
+            "diff":{"hunks":[{"content":"@@ -0 +1 @@\\n+changed\\n"}]}});
+        assert!(evidence_views(&report,&changed).is_err());
+    }
+}
