@@ -36,6 +36,33 @@ struct Outcome {
     model_reviewed_hunks: usize, proposal_only: bool,
     evidence_diagnostics: Vec<EvidenceDiagnostic>,
     recommendation: Option<String>, warnings: Vec<String>,
+    structural_checks: Vec<StructuralCheck>,
+}
+#[derive(Debug, Serialize)]
+struct StructuralCheck { declaration: String, status: String, checked_paths: Vec<String>, note: String }
+/// File-presence observation only; never a semantic or runtime verdict.
+fn structural_module_checks(dest: &Path, file: &str, diff: &str) -> Vec<StructuralCheck> {
+    if !matches!(file, "src/main.rs" | "src/lib.rs") { return Vec::new(); }
+    let Ok(root) = dest.canonicalize() else { return Vec::new(); };
+    let mut results = Vec::new();
+    for line in diff.lines().filter_map(|line| line.strip_prefix('+')) {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("mod ") else { continue };
+        let Some(name) = rest.strip_suffix(';') else { continue };
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') ||
+            !(name.as_bytes()[0].is_ascii_alphabetic() || name.as_bytes()[0] == b'_') { continue; }
+        let candidates = [format!("src/{name}.rs"), format!("src/{name}/mod.rs")];
+        let existing = candidates.iter().any(|p| {
+            root.join(p).canonicalize().ok().is_some_and(|resolved| resolved.starts_with(&root) && resolved.is_file())
+        });
+        results.push(StructuralCheck {
+            declaration: trimmed.to_owned(),
+            status: if existing { "module_file_observed" } else { "module_file_not_found" }.into(),
+            checked_paths: candidates.to_vec(),
+            note: "Destination filesystem only; does not verify usage, compilation, or behavior".into(),
+        });
+    }
+    results
 }
 #[derive(Serialize)]
 struct EvidenceDiagnostic {
@@ -179,6 +206,7 @@ fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
         model_reviewed_hunks:0, validated_findings:accepted,evidence_diagnostics:diagnostics,
         rejected_findings:rejected,uncertainty:report.uncertainty,
         proposal_only:true,recommendation:Some(report.recommendation),warnings,
+        structural_checks:Vec::new(),
     }
 }
 #[tokio::main]
@@ -266,6 +294,7 @@ async fn main() -> ExitCode {
     outcome.source_blob=first.source_blob;
     outcome.destination_blob=first.destination_blob;
     outcome.total_hunks=data.total_hunks;
+    outcome.structural_checks=structural_module_checks(Path::new(&args[1]), &args[3], &hunk.content);
     match serde_json::to_string_pretty(&outcome){
         Ok(v)=>{println!("{v}");return ExitCode::SUCCESS},
         Err(e)=>{eprintln!("{e}");return ExitCode::FAILURE}
@@ -276,6 +305,20 @@ async fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structural_checks_only_observe_files_in_entrypoints() {
+        let root=std::env::temp_dir().join(format!("dude-module-check-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/interpreter.rs"), "// exists").unwrap();
+        let diff="@@ -1 +1,2 @@\n+mod interpreter;\n+mod missing;\n+mod ../unsafe;\n";
+        let checks=structural_module_checks(&root,"src/main.rs",diff);
+        assert_eq!(checks.len(),2);
+        assert_eq!(checks[0].status,"module_file_observed");
+        assert_eq!(checks[1].status,"module_file_not_found");
+        assert!(structural_module_checks(&root,"src/other.rs",diff).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn parses_json_fences_and_reports_empty_response() {
         let report = r#"{"findings":[],"uncertainty":[],"recommendation":"requires_review"}"#;

@@ -56,6 +56,20 @@ fn render_investigation(raw: &str) -> String {
                     summary.push_str(&format!("\n{}. {}\n   evidência: {} [{}{}]\n", i+1, f["claim"].as_str().unwrap_or(""), f["evidence_ids"][0].as_str().unwrap_or(""), lines, if f["line_ids"].as_array().is_some_and(|x|x.len()>8) {", ..."} else {""}));
                 }
             }
+            if let Some(checks) = v["structural_checks"].as_array() {
+                for check in checks {
+                    let declaration = check["declaration"].as_str().unwrap_or("unknown");
+                    let status = match check["status"].as_str() {
+                        Some("module_file_observed") => "arquivo de módulo encontrado",
+                        Some("module_file_not_found") => "arquivo de módulo NÃO encontrado",
+                        _ => "checagem inconclusiva",
+                    };
+                    let paths = check["checked_paths"].as_array()
+                        .map(|xs| xs.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    summary.push_str(&format!("\nEstrutura Rust: {declaration} — {status}\n   caminhos: {paths}\n   Não comprova uso, compilação ou comportamento.\n"));
+                }
+            }
             if let Some(rejected) = v["rejected_findings"].as_array() { if !rejected.is_empty() { summary.push_str(&format!("\n{} afirmações rejeitadas.\n",rejected.len())); } }
             if let Some(uncertain) = v["uncertainty"].as_array() { for u in uncertain { if let Some(t)=u.as_str(){summary.push_str(&format!("\nIncerteza: {t}\n"));} } }
             summary.push_str("\nSem modificações no workspace.");
@@ -173,6 +187,19 @@ fn main()->std::process::ExitCode{
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn renders_structural_observation_without_semantic_promotion() {
+        let report = serde_json::json!({
+            "status":"proposed","validated_findings":[],
+            "structural_checks":[{"declaration":"mod interpreter;",
+                "status":"module_file_observed",
+                "checked_paths":["src/interpreter.rs","src/interpreter/mod.rs"]}]
+        });
+        let rendered=render_investigation(&report.to_string());
+        assert!(rendered.contains("arquivo de módulo encontrado"));
+        assert!(rendered.contains("NÃO verificada semanticamente"));
+        assert!(rendered.contains("Não comprova uso, compilação ou comportamento"));
+    }
     #[test]
     fn evidence_view_requires_matching_blobs() {
         let report=serde_json::json!({"source_blob":"a","destination_blob":"b",
