@@ -34,7 +34,36 @@ struct Outcome {
     total_hunks: usize, delivered_hunks: Vec<String>, validated_findings: Vec<Finding>,
     rejected_findings: Vec<Finding>, uncertainty: Vec<String>,
     model_reviewed_hunks: usize, proposal_only: bool,
+    evidence_diagnostics: Vec<EvidenceDiagnostic>,
     recommendation: Option<String>, warnings: Vec<String>,
+}
+#[derive(Serialize)]
+struct EvidenceDiagnostic {
+    claim: String,
+    cited_lines: usize,
+    added_lines: usize,
+    removed_lines: usize,
+    context_lines: usize,
+    citation_scope: String,
+}
+fn diagnose(finding: &Finding, raw: &str) -> EvidenceDiagnostic {
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut added=0; let mut removed=0; let mut context=0;
+    for id in &finding.line_ids {
+        if let Some(index) = id.strip_prefix('D').and_then(|s| s.parse::<usize>().ok()).and_then(|n|n.checked_sub(1)) {
+            if let Some(line) = lines.get(index) {
+                if line.starts_with('+') { added+=1; }
+                else if line.starts_with('-') { removed+=1; }
+                else { context+=1; }
+            }
+        }
+    }
+    let citation_scope=if added>0 && removed==0 {"addition_only"}
+        else if removed>0 && added==0 {"removal_only"}
+        else if added>0 && removed>0 {"mixed_change"}
+        else {"context_only"}.to_string();
+    EvidenceDiagnostic{claim:finding.claim.clone(),cited_lines:finding.line_ids.len(),
+        added_lines:added,removed_lines:removed,context_lines:context,citation_scope}
 }
 fn diff_binary() -> Result<std::path::PathBuf, String> {
     env::current_exe().map(|exe| exe.with_file_name(format!("workspace_diff{}",env::consts::EXE_SUFFIX)))
@@ -123,23 +152,31 @@ fn numbered_evidence(raw: &str) -> (String, BTreeSet<String>) {
 fn verify(report:ModelReport, valid:&BTreeSet<String>, evidence:&str)->Outcome {
     let (_, line_ids) = numbered_evidence(evidence);
     let mut accepted=Vec::new();
+    let mut diagnostics=Vec::new();
     let mut rejected=Vec::new();
     for finding in report.findings {
         if !finding.claim.trim().is_empty() && !finding.evidence_ids.is_empty()
             && finding.evidence_ids.iter().all(|id|valid.contains(id))
             && !finding.line_ids.is_empty()
-            && finding.line_ids.iter().all(|id|line_ids.contains(id)) {
+            && finding.line_ids.iter().all(|id|line_ids.contains(id))
+            && finding.line_ids.iter().any(|id| {
+                id.strip_prefix('D').and_then(|s|s.parse::<usize>().ok())
+                    .and_then(|n|evidence.lines().nth(n.saturating_sub(1)))
+                    .is_some_and(|line|line.starts_with('+') || line.starts_with('-'))
+            }) {
+            diagnostics.push(diagnose(&finding,evidence));
             accepted.push(finding);
         } else {rejected.push(finding);}
     }
     let mut warnings=vec!["Evidence hunk IDs and numbered diff-line references verified; semantic truth is NOT verified".into()];
     if !rejected.is_empty(){warnings.push("Some findings failed evidence validation (unknown hunk ID or missing/invalid diff-line references)".into());}
+    warnings.push("Citations must include at least one changed diff line; diagnostic scope does not prove relevance".into());
     warnings.push("No patch creation or file modification permitted".into());
         Outcome {
         status:if rejected.is_empty(){"proposed"}else{"partial_rejection"}.into(),
         source_blob:None,destination_blob:None,total_hunks:0,
         delivered_hunks:valid.iter().cloned().collect(),
-        model_reviewed_hunks:0, validated_findings:accepted,
+        model_reviewed_hunks:0, validated_findings:accepted,evidence_diagnostics:diagnostics,
         rejected_findings:rejected,uncertainty:report.uncertainty,
         proposal_only:true,recommendation:Some(report.recommendation),warnings,
     }
@@ -264,6 +301,26 @@ mod tests {
         assert!(ids.contains("D3"));
         assert!(!ids.contains("D1"));
         assert!(!ids.contains("D99"));
+    }
+    #[test]
+    fn accepts_large_new_function_without_arbitrary_line_limit() {
+        let mut evidence=String::from("@@ -0,0 +1,200 @@\n");
+        for n in 0..200 { evidence.push_str(&format!("+let value_{n} = {n};\n")); }
+        let ids=(2..=201).map(|n|format!("D{n}")).collect();
+        let report=ModelReport{findings:vec![Finding{claim:"new function body".into(),
+            evidence_ids:vec!["hunk-1".into()],confidence:"medium".into(),
+            quote:String::new(),line_ids:ids}],uncertainty:vec![],recommendation:"requires_review".into()};
+        let outcome=verify(report,&BTreeSet::from(["hunk-1".to_string()]),&evidence);
+        assert_eq!(outcome.validated_findings.len(),1);
+        assert_eq!(outcome.evidence_diagnostics[0].added_lines,200);
+    }
+    #[test]
+    fn rejects_context_only_citations() {
+        let report=ModelReport{findings:vec![Finding{claim:"some claim".into(),
+            evidence_ids:vec!["hunk-1".into()],confidence:"high".into(),
+            quote:String::new(),line_ids:vec!["D2".into()]}],uncertainty:vec![],recommendation:"requires_review".into()};
+        let outcome=verify(report,&BTreeSet::from(["hunk-1".to_string()]),"@@ -1,2 +1,2 @@\n unchanged\n+new_line\n");
+        assert_eq!(outcome.rejected_findings.len(),1);
     }
     #[test]
     fn refuses_unobserved_references(){
