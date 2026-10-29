@@ -22,11 +22,17 @@ pub fn append_with_origin(
     }
     // A bounded path prevents oversized lines or accidental inclusion of tool arguments.
     let relative = args.get("path").and_then(Value::as_str).unwrap_or(".");
+    let requested = Path::new(relative);
+    let candidate = if requested.is_absolute() { requested.to_path_buf() } else { root.join(requested) };
+    let resolved = candidate.canonicalize().ok();
+    let external = resolved.as_ref().is_some_and(|path| !path.starts_with(root));
     let entry = json!({
         "timestamp_utc": chrono::Utc::now().to_rfc3339(),
         "tool": tool,
         "path": relative.chars().take(512).collect::<String>(),
         "origin": origin,
+        "resolved_path": resolved.as_ref().map(|path|path.to_string_lossy().chars().take(512).collect::<String>()),
+        "external": external,
         "success": success,
         "cache_hit": cache_hit,
         "start_line": args.get("start_line").and_then(Value::as_u64),
@@ -49,6 +55,7 @@ mod tests {
         let data=fs::read_to_string(root.join(".dude/investigation_progress.jsonl")).unwrap();
         assert!(data.contains("src/main.rs"));
         assert!(data.contains("model_tool"));
+        assert!(data.contains("\\"external\\":false"));
         assert!(!data.contains("secret-pattern"));
         fs::remove_dir_all(root).unwrap();
     }
