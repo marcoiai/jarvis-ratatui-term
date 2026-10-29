@@ -22,16 +22,27 @@ pub fn definitions() -> Vec<Value> {
 
 fn resolve(root: &Path, relative: &str) -> Result<PathBuf,String> {
     let p = Path::new(relative);
-    if p.is_absolute() { return Err("Absolute paths are disabled".into()); }
     if p.components().any(|c| {
         let v = c.as_os_str().to_string_lossy();
         v == ".env" || v.starts_with(".env.") || v == ".dude" || v == ".git" || v == ".ssh" ||
-        v == ".aws" || v == ".config" || v == "id_rsa" || v == "id_ed25519"
+        v == ".aws" || v == ".config" || v == "id_rsa" || v == "id_ed25519" ||
+        v == "id_ecdsa" || v == "id_dsa" || v == "shadow" || v == "gshadow" ||
+        v == ".netrc" || v == ".npmrc" || v == ".pypirc" || v == "credentials"
     }) {
         return Err("Sensitive paths are blocked from AI tools".into());
     }
-    let target = root.join(p).canonicalize().map_err(|e| e.to_string())?;
-    if !target.starts_with(root) { return Err("Path outside workspace denied".into()); }
+    let candidate = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+    let target = candidate.canonicalize().map_err(|e| e.to_string())?;
+    // Check the resolved path, too: otherwise symlinks can bypass the
+    // sensitive-component filter. Read-only access may leave the workspace.
+    if target.components().any(|c| {
+        let v = c.as_os_str().to_string_lossy();
+        v == ".env" || v.starts_with(".env.") || v == ".dude" || v == ".git" ||
+        v == ".ssh" || v == ".aws" || v == ".config" || v == "id_rsa" ||
+        v == "id_ed25519" || v == "id_ecdsa" || v == "id_dsa" ||
+        v == "shadow" || v == "gshadow" || v == ".netrc" ||
+        v == ".npmrc" || v == ".pypirc" || v == "credentials"
+    }) { return Err("Sensitive resolved path blocked from AI tools".into()); }
     Ok(target)
 }
 
@@ -48,7 +59,7 @@ fn scan(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
             let v = n.to_string_lossy();
             v == ".dude" || v == ".git" || v == "target" || v == "node_modules" || v == ".env" ||
             v.starts_with(".env.") || v == ".ssh" || v == ".aws" || v == ".config" ||
-            v == "id_rsa" || v == "id_ed25519"
+            v == "id_rsa" || v == "id_ed25519" || v == "id_ecdsa" || v == "shadow" || v == "gshadow"
         }) { continue; }
         // Never recurse into symlinks or leave the workspace.
         if fs::symlink_metadata(&entry).map_err(|e| e.to_string())?.file_type().is_symlink() { continue; }
@@ -143,6 +154,22 @@ mod source_excerpt_contract_tests {
         assert!(whole.contains("complete_file=true"));
         assert!(whole.contains("3: line3"));
         let _=std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn external_read_is_allowed_but_secrets_are_not() {
+        let base=std::env::temp_dir().join(format!("dude-external-{}",std::process::id()));
+        let workspace=base.join("workspace");
+        let external=base.join("other");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(external.join("readme.txt"),"external observation").unwrap();
+        std::fs::write(external.join(".env"),"SECRET").unwrap();
+        let content=execute(&workspace,"read_file",&json!({"path":external.join("readme.txt").to_string_lossy()})).unwrap();
+        assert!(content.contains("external observation"));
+        assert!(execute(&workspace,"read_file",&json!({"path":external.join(".env").to_string_lossy()})).is_err());
+        assert!(execute(&workspace,"read_file",&json!({"path":"../other/.env"})).is_err());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
