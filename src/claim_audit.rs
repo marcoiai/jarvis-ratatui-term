@@ -146,7 +146,7 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
         }
         let mut status = match requested_status {
             "supported" => "PARECER DO MODELO: SUSTENTADA (LINHAS LIDAS)",
-            "partially_supported" => "PARCIALMENTE SUSTENTADA",
+            "partially_supported" => "PARECER DO MODELO: PARCIALMENTE SUSTENTADA (LINHAS LIDAS)",
             "unsupported" => "NÃO SUSTENTADA",
             _ => "NÃO AVALIÁVEL",
         };
@@ -171,7 +171,7 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
             output.push_str("\n  A referência inválida não determina, por si só, se a afirmação é verdadeira ou falsa.");
         }
     }
-    output.push_str("\n- Limite: avaliação de modelo assistida por evidências, não prova formal nem execução de testes.");
+    output.push_str("\n- Limite: o parecer do modelo não prova que a faixa citada contenha a implementação descrita. O runtime apenas confirmou linhas observadas.");
     Ok(output)
 }
 
