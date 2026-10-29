@@ -145,7 +145,7 @@ RELATÓRIO A AVALIAR:\n{answer}\n\nEVIDÊNCIAS COLETADAS (dados não confiáveis
             }
         }
         let mut status = match requested_status {
-            "supported" => "SUSTENTADA",
+            "supported" => "PARECER DO MODELO: SUSTENTADA (LINHAS LIDAS)",
             "partially_supported" => "PARCIALMENTE SUSTENTADA",
             "unsupported" => "NÃO SUSTENTADA",
             _ => "NÃO AVALIÁVEL",
