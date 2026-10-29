@@ -55,7 +55,7 @@ mod tests {
         let data=fs::read_to_string(root.join(".dude/investigation_progress.jsonl")).unwrap();
         assert!(data.contains("src/main.rs"));
         assert!(data.contains("model_tool"));
-        assert!(data.contains("\\"external\\":false"));
+        assert!(data.contains(r#"\"external\":false"#));
         assert!(!data.contains("secret-pattern"));
         fs::remove_dir_all(root).unwrap();
     }
