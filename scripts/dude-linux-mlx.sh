@@ -65,21 +65,31 @@ model_list="$(curl --silent --show-error --fail --max-time 5 "http://127.0.0.1:$
   echo "Cannot read MLX /v1/models" >&2; exit 1;
 }
 if [[ -z "$MODEL" ]]; then
-  MODEL="$(printf '%s' "$model_list" | python3 -c '
+  # If several models are advertised, offer a numbered choice on the terminal.
+  # A single available model needs no prompt.
+  available_models="$(printf '%s' "$model_list" | python3 -c '
 import json, sys
 try:
     payload = json.load(sys.stdin)
     ids = [item["id"] for item in payload.get("data", []) if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
-    if len(ids) == 1:
-        print(ids[0])
-    else:
-        print("Expected exactly one MLX model; found: " + (", ".join(ids) if ids else "(none)") + ". Set DUDE_MLX_MODEL explicitly.", file=sys.stderr)
-        sys.exit(1)
-except (ValueError, TypeError, KeyError) as exc:
-    print("Invalid MLX model discovery response: " + str(exc), file=sys.stderr)
-    sys.exit(1)
+    if not ids: sys.exit("MLX did not advertise any model")
+    print("\\n".join(ids))
+except (ValueError, TypeError, KeyError, AttributeError) as exc:
+    sys.exit("Invalid MLX model discovery response: " + str(exc))
 ')" || exit 1
-else
+  mapfile -t choices <<< "$available_models"
+  if (( ${#choices[@]} > 1 )); then
+    [[ -t 0 ]] || { echo "Several MLX models found; set DUDE_MLX_MODEL for non-interactive use." >&2; exit 1; }
+    echo "Available MLX models:"
+    for i in "${!choices[@]}"; do printf '  %d) %s\\n' "$((i+1))" "${choices[i]}"; done
+    read -r -p "Select model [1-${#choices[@]}]: " choice
+    [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#choices[@]} )) || { echo "Invalid model selection" >&2; exit 1; }
+    MODEL="${choices[choice-1]}"
+  else
+    MODEL="${choices[0]}"
+  fi
+fi
+if [[ -n "$MODEL" && -n "${DUDE_MLX_MODEL:-}" ]]; then
   if ! printf '%s' "$model_list" | python3 -c '
 import json, sys
 selected = sys.argv[1]
