@@ -73,7 +73,7 @@ try:
     payload = json.load(sys.stdin)
     ids = [item["id"] for item in payload.get("data", []) if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
     if not ids: sys.exit("MLX did not advertise any model")
-    print("\\n".join(ids))
+    print("\n".join(ids))
 except (ValueError, TypeError, KeyError, AttributeError) as exc:
     sys.exit("Invalid MLX model discovery response: " + str(exc))
 ')" || exit 1
@@ -81,7 +81,7 @@ except (ValueError, TypeError, KeyError, AttributeError) as exc:
   if (( ${#choices[@]} > 1 )); then
     [[ -t 0 ]] || { echo "Several MLX models found; set DUDE_MLX_MODEL for non-interactive use." >&2; exit 1; }
     echo "Available MLX models:"
-    for i in "${!choices[@]}"; do printf '  %d) %s\\n' "$((i+1))" "${choices[i]}"; done
+    for i in "${!choices[@]}"; do printf '  %d) %s\n' "$((i+1))" "${choices[i]}"; done
     read -r -p "Select model [1-${#choices[@]}]: " choice
     [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#choices[@]} )) || { echo "Invalid model selection" >&2; exit 1; }
     MODEL="${choices[choice-1]}"
