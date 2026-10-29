@@ -8,7 +8,7 @@ MAC_USER="${DUDE_MLX_MAC_USER:-}"
 MLX_PORT="${DUDE_MLX_REMOTE_PORT:-8081}"
 TUNNEL_PORT="${DUDE_MLX_TUNNEL_PORT:-18081}"
 BRIDGE_PORT="${DUDE_MLX_BRIDGE_PORT:-11882}"
-MODEL="${DUDE_MLX_MODEL:-default_model}"
+MODEL="${DUDE_MLX_MODEL:-}"
 BRIDGE_MODEL="${DUDE_MLX_BRIDGE_MODEL:-mlx-local}"
 TUNNEL_PID=""
 BRIDGE_PID=""
@@ -59,6 +59,39 @@ for _ in {1..30}; do
   sleep 1
 done
 if ((ready==0)); then echo "MLX is not reachable through SSH. Start mlx_lm.server on the Mac." >&2; exit 1; fi
+# Resolve the actual model advertised by the upstream server; do not silently
+# label a remote model "default_model" or guess among multiple choices.
+model_list="$(curl --silent --show-error --fail --max-time 5 "http://127.0.0.1:$TUNNEL_PORT/v1/models")" || {
+  echo "Cannot read MLX /v1/models" >&2; exit 1;
+}
+if [[ -z "$MODEL" ]]; then
+  MODEL="$(printf '%s' "$model_list" | python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+    ids = [item["id"] for item in payload.get("data", []) if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
+    if len(ids) == 1:
+        print(ids[0])
+    else:
+        print("Expected exactly one MLX model; found: " + (", ".join(ids) if ids else "(none)") + ". Set DUDE_MLX_MODEL explicitly.", file=sys.stderr)
+        sys.exit(1)
+except (ValueError, TypeError, KeyError) as exc:
+    print("Invalid MLX model discovery response: " + str(exc), file=sys.stderr)
+    sys.exit(1)
+')" || exit 1
+else
+  if ! printf '%s' "$model_list" | python3 -c '
+import json, sys
+selected = sys.argv[1]
+try:
+    ids = [item.get("id") for item in json.load(sys.stdin).get("data", []) if isinstance(item, dict)]
+except (ValueError, TypeError, AttributeError):
+    sys.exit("Invalid MLX model discovery response")
+if selected not in ids:
+    sys.exit("Selected DUDE_MLX_MODEL is not listed by MLX: " + selected)
+' "$MODEL"; then exit 1; fi
+fi
+echo "MLX model: $MODEL (from /v1/models)"
 echo "MLX reachable. Starting bridge on localhost:$BRIDGE_PORT"
 MLX_MODEL="$MODEL" DUDE_BRIDGE_MODEL="$BRIDGE_MODEL" python3 "$ROOT/tools/mlx_ollama_bridge.py" \
   --listen 127.0.0.1 --mlx-url "http://127.0.0.1:$TUNNEL_PORT" --port "$BRIDGE_PORT" </dev/null >"$LOG_DIR/bridge.log" 2>&1 &
