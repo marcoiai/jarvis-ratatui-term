@@ -10,6 +10,7 @@ mod router;
 mod knowledge;
 mod evidence;
 mod credentials;
+mod ssh_identity_status;
 mod cloud;
 mod roles;
 mod memory;
@@ -920,6 +921,22 @@ impl App {
         if input == "/cloud deny" {
             self.cloud_allowed = false;
             self.output.push_str("Cloud access disabled.\n");
+            return;
+        }
+        if input == "/ssh" || input == "/ssh status" {
+            self.output.push_str(&format!("SSH identity: {}\n",
+                ssh_identity_status::status("id_ed25519")
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|err| format!("Status unavailable: {err}"))
+            ));
+            return;
+        }
+        if let Some(identity)=input.strip_prefix("/ssh status ") {
+            let reply=ssh_identity_status::status(identity.trim())
+                .map(|message| message.to_string())
+                .unwrap_or_else(|err| format!("SSH status unavailable: {err}"));
+            self.output.push_str(&reply);
+            self.output.push('\n');
             return;
         }
         if input == "/roles" {
