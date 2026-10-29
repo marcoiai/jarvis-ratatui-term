@@ -3120,8 +3120,19 @@ async fn ask_ollama(
             let tool_name = name.clone();
             let tool_path = args.get("path").and_then(Value::as_str).unwrap_or(".").to_string();
             if let Some(sender) = &updates {
+                let requested = std::path::Path::new(&tool_path);
+                let candidate = if requested.is_absolute() {
+                    requested.to_path_buf()
+                } else {
+                    root.join(requested)
+                };
+                let resolved = candidate.canonicalize().ok();
+                let external = resolved.as_ref().is_some_and(|p| !p.starts_with(&root));
+                let detail = resolved.as_ref().map(|p|p.display().to_string())
+                    .unwrap_or_else(|| "(caminho não resolvido)".to_string());
+                let scope = if external { "EXTERNO ao workspace" } else { "workspace ou caminho não resolvido" };
                 let _ = sender.send(ResultMessage::ChatNotice(format!(
-                    "🔧 DUDE: executando {tool_name}({tool_path:?})"
+                    "🔎 DUDE: leitura {scope} solicitada pelo modelo: {tool_name}({tool_path:?}) → {detail}"
                 )));
             }
             let output = tokio::task::spawn_blocking(move || {
