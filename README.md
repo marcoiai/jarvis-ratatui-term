@@ -443,3 +443,23 @@ Symphony also saves the most recently completed stage in `.dude/symphony_checkpo
 Ollama's specific XML tool-parser failure receives at most one text-only recovery request using observed source excerpts. Recovery output passes through the reasoning filter and remains subject to the current evidence gate. Empty output and unexpected tool calls fail closed. Per-request telemetry records round, message count, payload size and retry token usage without recording prompt bodies in the labels.
 
 Source reads identify requested excerpt boundaries, total file lines and output truncation. `complete_file=true` describes returned source coverage, not semantic verification. Explicit `!command` invocations run in the selected DUDE workspace.
+
+
+### SSH-agent status (read-only)
+
+The DUDE TUI supports `/ssh status` (default `id_ed25519`) and
+`/ssh status id_rsa` / `/ssh status id_ecdsa`. This is a local, read-only
+check of the requested identity against the public keys already present in
+`ssh-agent`. The command never reads the private key, unlocks it, or sends
+credentials to a model. The companion CLI remains available:
+
+```sh
+cargo run --bin dude_ssh_agent -- status id_ed25519
+cargo run --bin dude_ssh_agent -- ensure id_ed25519  # explicit interactive approval
+```
+
+The TUI does **not** call `ensure` automatically. To test this branch, first run
+`cargo test`, then `cargo run`, then `/ssh status`. No credentials or real
+keys are necessary for unit tests; the tests only check parsing and synthetic
+public-key comparisons. A missing agent or missing public key is reported as
+unavailable, not interpreted as an unlocked identity.
