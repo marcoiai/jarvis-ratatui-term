@@ -2732,6 +2732,7 @@ async fn ask_ollama(
     let rounds = if allow_tools { investigation::tool_rounds() } else { 0 };
     let mut stalled_rounds = 0usize;
     let mut review_retry_issued = false;
+    let mut citation_retry_issued = false;
     let mut pseudo_tool_retry_issued = false;
     for round in 0..=rounds {
         // Stop requesting more tools after two rounds without new observations.
@@ -2990,6 +2991,25 @@ async fn ask_ollama(
             }
             let answer = response_filter::strip_completed(&reply.message.content)?;
             if !answer.trim().is_empty() {
+                // A read is not a citation. Retry once when the model referenced
+                // source lines only as prose (e.g. "linhas 55-65").
+                // Never accept an unobserved path:line or fabricate a reference.
+                if minimum_new_reads > 0
+                    && !evidence.has_supported_citation(&answer)
+                    && !citation_retry_issued
+                    && round < rounds
+                {
+                    citation_retry_issued = true;
+                    if let Some(sender) = &updates {
+                        let _ = sender.send(ResultMessage::ChatNotice(
+                            "⚠ Citações sem referência arquivo:linha confirmada. Solicitando uma correção de formato.".into()
+                        ));
+                    }
+                    conversation.push(json!({"role":"assistant","content":answer}));
+                    conversation.push(json!({"role":"user","content":
+                        "Revise sua resposta anterior. Cada afirmação sobre o código deve citar a referência completa path:line ou path:start-end, por exemplo src/interpreter.rs:55-65. Use SOMENTE linhas realmente retornadas por read_file nesta conversa. Não invente linhas, caminhos, conteúdo ou novas leituras. Se não houver evidência para uma afirmação, remova-a ou declare a limitação. Responda com o relatório corrigido."}));
+                    continue;
+                }
                 return Ok(answer);
             }
             if tools_enabled {
