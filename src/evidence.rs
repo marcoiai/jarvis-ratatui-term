@@ -56,7 +56,7 @@ impl EvidenceCache {
             && let Some(item) = cache.get(key) {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 let result = item["result"].as_str().unwrap_or_default().to_owned();
-                self.record(name, args, started, true, true, &result, origin);
+                self.record(&root, name, args, started, true, true, &result, origin);
                 let _ = crate::progress::append_with_origin(&root, name, args, true, true, origin);
                 return result;
         }
@@ -74,7 +74,7 @@ impl EvidenceCache {
             && cache.len() < MAX_CACHED_RESULTS {
                 cache.insert(key, json!({"tool":name,"arguments":args,"result":result}));
         }
-        self.record(name, args, started, false, success, &result, origin);
+        self.record(&root, name, args, started, false, success, &result, origin);
         let _ = crate::progress::append_with_origin(&root, name, args, success, false, origin);
         if success && let Ok(mut records) = self.observations.lock()
             && records.len() < MAX_OBSERVATIONS {
@@ -82,11 +82,17 @@ impl EvidenceCache {
         }
         result
     }
-    fn record(&self, name: &str, args: &Value, started: Instant, cache_hit: bool, success: bool, result: &str, origin: &str) {
+    fn record(&self, root: &Path, name: &str, args: &Value, started: Instant, cache_hit: bool, success: bool, result: &str, origin: &str) {
+        let requested = args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let requested_path = Path::new(requested);
+        let candidate = if requested_path.is_absolute() { requested_path.to_path_buf() } else { root.join(requested_path) };
+        let resolved = candidate.canonicalize().ok();
+        let external = resolved.as_ref().is_some_and(|p| !p.starts_with(root));
         if let Ok(mut entries) = self.events.lock()
             && entries.len() < 256 {
                 entries.push(json!({
-                    "tool":name, "path":args.get("path").and_then(Value::as_str).unwrap_or("."), "origin":origin,
+                    "tool":name, "path":requested, "resolved_path":resolved.as_ref().map(|p|p.to_string_lossy().to_string()),
+                    "external": external, "origin":origin,
                     "cache_hit":cache_hit, "success":success, "elapsed_ms":started.elapsed().as_millis(),
                     "start_line":args.get("start_line").and_then(Value::as_u64).unwrap_or(1),
                     "end_line":args.get("end_line").and_then(Value::as_u64),
