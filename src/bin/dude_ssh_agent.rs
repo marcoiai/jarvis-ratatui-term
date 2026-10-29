@@ -133,10 +133,9 @@ mod tests {
     }
     #[test]
     fn status_cannot_accept_arbitrary_identity_names() {
-        let dir=env::temp_dir().join(format!("dude-status-test-{}",std::process::id()));
+        let home=Path::new("/tmp");
         for name in ["../id_ed25519","id_ed25519.pub","../../secret",""] {
-            let _=dir.as_os_str(); // no files, no private key access in this fixture
-            assert!(identity_path(&dir,name).is_err());
+            assert!(identity_path(home,name).is_err());
         }
     }
     #[test]
