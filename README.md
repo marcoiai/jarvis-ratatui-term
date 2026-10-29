@@ -463,3 +463,33 @@ The TUI does **not** call `ensure` automatically. To test this branch, first run
 keys are necessary for unit tests; the tests only check parsing and synthetic
 public-key comparisons. A missing agent or missing public key is reported as
 unavailable, not interpreted as an unlocked identity.
+
+### Start DUDE on Linux using MLX from the Mac
+
+Start the MLX OpenAI-compatible server on the **Mac** on port 8081, listening at
+`127.0.0.1`; enable SSH access to the Mac and confirm a trusted SSH connection
+from Linux. On **Linux**, run:
+
+```bash
+bash scripts/dude-linux-mlx.sh
+```
+
+This script checks prerequisites, creates its own localhost-only SSH tunnel,
+waits for MLX `/v1/models`, starts the existing Ollama-compatible Python bridge,
+then launches `cargo run --bin dude` with the proper interpreter and model
+endpoints. It cleans up only the subprocesses it created when DUDE exits.
+It does **not** start MLX on the Mac or load SSH keys automatically.
+
+Overrides: `DUDE_MLX_MAC_HOST` (default `10.10.10.95`),
+`DUDE_MLX_MAC_USER` (optional), `DUDE_MLX_REMOTE_PORT` (default `8081`),
+`DUDE_MLX_TUNNEL_PORT` (default `18081`),
+`DUDE_MLX_BRIDGE_PORT` (default `11882`),
+`DUDE_MLX_MODEL` (default `default_model`),
+`DUDE_MLX_BRIDGE_MODEL` (default `mlx-local`).
+The SSH host key must already be trusted; SSH BatchMode prevents interactive
+key/passphrase prompting. If any local port is already occupied, stop the
+existing process or select a free port rather than killing unknown processes.
+
+**Smoke test in the TUI:** `/ssh status`, then `/workspace`, then ask the
+model a short question. SSH status is local to the Linux machine, independent
+of whether the remote MLX is reachable.
