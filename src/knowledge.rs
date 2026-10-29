@@ -157,5 +157,12 @@ mod tests{
     fn draft_parsing(){
         let draft:CandidateDraft=serde_json::from_str(r#"{"classification":"documented","claim":"A","evidence":["README.md:1"]}"#).unwrap();
         assert_eq!(draft.evidence[0],"README.md:1");
+        let scalar: CandidateDraft = serde_json::from_str(
+            r#"{"classification":"verified","claim":"A","evidence":"src/interpreter.rs:6-14"}"#
+        ).unwrap();
+        assert_eq!(scalar.evidence, vec!["src/interpreter.rs:6-14"]);
+        assert!(serde_json::from_str::<CandidateDraft>(
+            r#"{"classification":"verified","claim":"A","evidence":17}"#
+        ).is_err());
     }
 }
