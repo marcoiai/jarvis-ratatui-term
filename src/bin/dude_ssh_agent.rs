@@ -1,6 +1,6 @@
 //! Explicit, local-only SSH-agent credential helper.
 //! Never reads private-key contents or accepts passphrases through DUDE/LLM.
-//! Usage: cargo run --bin dude_ssh_agent -- status|ensure [identity]
+//! Usage: cargo run --bin dude_ssh_agent -- status [identity] | ensure [identity]
 use std::{env, io::{self, IsTerminal, Write}, path::{Path, PathBuf}, process::{Command, ExitCode, Stdio}};
 
 const TTL: &str = "900"; // 15 minutes
@@ -60,6 +60,20 @@ fn identity_loaded(key: &Path) -> Result<bool, String> {
     }
 }
 
+// Read-only probe for the TUI: distinguish the requested identity from unrelated
+// agent keys. Never unlock, prompt, or read private-key bytes while checking.
+fn selected_identity_status(name: &str) -> Result<(), String> {
+    let home=PathBuf::from(env::var_os("HOME").ok_or("HOME is unset")?);
+    let key=identity_path(&home,name)?;
+    let _=agent_status()?;
+    println!("{}", if identity_loaded(&key)? {
+        "Requested SSH identity is loaded"
+    } else {
+        "Requested SSH identity is not loaded"
+    });
+    Ok(())
+}
+
 fn ensure(name: &str) -> Result<(), String> {
     let home=PathBuf::from(env::var_os("HOME").ok_or("HOME is unset")?);
     let key=identity_path(&home,name)?;
@@ -93,9 +107,10 @@ fn main() -> ExitCode {
         [cmd] if cmd=="status" => agent_status().map(|has|{
             println!("{}",if has {"SSH agent accessible; one or more identities are loaded"} else {"SSH agent accessible; no identities loaded"});
         }),
+        [cmd,name] if cmd=="status" => selected_identity_status(name),
         [cmd] if cmd=="ensure" => ensure("id_ed25519"),
         [cmd,name] if cmd=="ensure" => ensure(name),
-        _=>Err("Usage: dude_ssh_agent status | ensure [id_ed25519|id_rsa|id_ecdsa]".into()),
+        _=>Err("Usage: dude_ssh_agent status [id_ed25519|id_rsa|id_ecdsa] | ensure [id_ed25519|id_rsa|id_ecdsa]".into()),
     };
     match result {Ok(())=>ExitCode::SUCCESS,Err(e)=>{eprintln!("{e}");ExitCode::FAILURE}}
 }
@@ -115,6 +130,14 @@ mod tests {
     fn missing_public_key_does_not_block_unlock() {
         let key=env::temp_dir().join(format!("dude-missing-pub-{}",std::process::id()));
         assert_eq!(identity_loaded(&key).unwrap(),false);
+    }
+    #[test]
+    fn status_cannot_accept_arbitrary_identity_names() {
+        let dir=env::temp_dir().join(format!("dude-status-test-{}",std::process::id()));
+        for name in ["../id_ed25519","id_ed25519.pub","../../secret",""] {
+            let _=dir.as_os_str(); // no files, no private key access in this fixture
+            assert!(identity_path(&dir,name).is_err());
+        }
     }
     #[test]
     fn rejects_arbitrary_identity_names() {
