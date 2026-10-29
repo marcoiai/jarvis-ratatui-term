@@ -75,8 +75,18 @@ pub fn propose(workspace:&Path,question:&str,claims:&[CandidateDraft], observati
 pub struct CandidateDraft{
     pub classification:String,
     pub claim:String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "decode_evidence_refs")]
     pub evidence:Vec<String>,
+}
+fn decode_evidence_refs<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where D: serde::Deserializer<'de> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Refs { Single(String), Multiple(Vec<String>) }
+    match Refs::deserialize(deserializer)? {
+        Refs::Single(value) => Ok(vec![value]),
+        Refs::Multiple(values) => Ok(values),
+    }
 }
 /// Return the oldest reviewable candidate so the UI can request consent.
 pub fn next_pending(workspace:&Path)->Result<Option<Candidate>,String>{
