@@ -30,8 +30,8 @@ class BridgeTests(unittest.TestCase):
         converted = messages_for_mlx(entries)
         self.assertEqual([item["role"] for item in converted],
                          ["system", "user", "assistant", "tool"])
-        self.assertEqual(converted[0]["content"],
-                         "Base safety instructions.\\n\\nCite evidence from files.")
+        self.assertEqual(converted[0]["content"].splitlines(),
+                         ["Base safety instructions.", "", "Cite evidence from files."])
         self.assertEqual(converted[3]["tool_call_id"],
                          converted[2]["tool_calls"][0]["id"])
 
