@@ -1,5 +1,7 @@
 import unittest
-from mlx_ollama_bridge import messages_for_mlx, to_mlx, to_ollama
+from io import BytesIO
+from urllib.error import HTTPError
+from mlx_ollama_bridge import messages_for_mlx, to_mlx, to_ollama, upstream_error_detail
 
 
 class BridgeTests(unittest.TestCase):
@@ -26,6 +28,17 @@ class BridgeTests(unittest.TestCase):
         converted = to_ollama(result)
         self.assertEqual(converted["message"]["tool_calls"][0]["function"]["arguments"]["path"], "Cargo.toml")
         self.assertEqual(converted["eval_count"], 9)
+
+    def test_bridge_reports_upstream_mlx_error(self):
+        upstream = HTTPError(
+            "http://127.0.0.1:8083/v1/chat/completions", 404,
+            "Not Found", {}, BytesIO(b'{"error":"prompt exceeds context window"}')
+        )
+        self.assertEqual(upstream_error_detail(upstream), "prompt exceeds context window")
+
+    def test_bridge_requests_no_thinking(self):
+        payload = to_mlx({"messages": [{"role": "user", "content": "Hello"}]})
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
 
     def test_payload_disables_upstream_streaming(self):
         result = to_mlx({"model": "local", "stream": True,
