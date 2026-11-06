@@ -17,6 +17,34 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(converted[1]["tool_calls"][0]["id"], "dude_1")
         self.assertEqual(converted[2]["tool_call_id"], "dude_1")
 
+    def test_system_messages_are_consolidated_at_start(self):
+        entries = [
+            {"role": "system", "content": "Base safety instructions."},
+            {"role": "user", "content": "Inspect src/main.rs"},
+            {"role": "system", "content": "Cite evidence from files."},
+            {"role": "assistant", "content": "Searching", "tool_calls": [
+                {"function": {"name": "read_file", "arguments": {"path": "src/main.rs"}}}
+            ]},
+            {"role": "tool", "content": "1: fn main() {}"},
+        ]
+        converted = messages_for_mlx(entries)
+        self.assertEqual([item["role"] for item in converted],
+                         ["system", "user", "assistant", "tool"])
+        self.assertEqual(converted[0]["content"],
+                         "Base safety instructions.\\n\\nCite evidence from files.")
+        self.assertEqual(converted[3]["tool_call_id"],
+                         converted[2]["tool_calls"][0]["id"])
+
+    def test_system_message_after_user_is_moved_to_start(self):
+        converted = messages_for_mlx([
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "Use actual evidence"},
+        ])
+        self.assertEqual(converted, [
+            {"role": "system", "content": "Use actual evidence"},
+            {"role": "user", "content": "Hello"},
+        ])
+
     def test_tool_result_without_call_is_rejected(self):
         with self.assertRaises(ValueError):
             messages_for_mlx([{"role": "tool", "content": "fake"}])
