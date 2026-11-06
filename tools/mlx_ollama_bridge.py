@@ -24,10 +24,26 @@ def upstream_error_detail(error):
 
 
 def messages_for_mlx(messages):
+    # Qwen3.5's MLX chat template requires a single system message at index 0.
+    # DUDE may inject additional system instructions after evidence bootstrap.
+    # Consolidate them without rearranging user, assistant, or tool turns.
+    system_parts = []
+    for entry in messages:
+        if entry.get("role") == "system":
+            content = entry.get("content")
+            if content:
+                if not isinstance(content, str):
+                    raise ValueError("system message content must be text")
+                system_parts.append(content)
+
     output, pending = [], []
+    if system_parts:
+        output.append({"role": "system", "content": "\n\n".join(system_parts)})
     call_index = 0
     for entry in messages:
         role = entry.get("role")
+        if role == "system":
+            continue
         if role == "assistant" and entry.get("tool_calls"):
             calls = []
             for call in entry["tool_calls"]:
