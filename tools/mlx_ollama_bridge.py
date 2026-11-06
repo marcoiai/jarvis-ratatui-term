@@ -50,6 +50,7 @@ def to_mlx(body):
     if "temperature" in options:
         result["temperature"] = options["temperature"]
     result["max_tokens"] = int(os.getenv("MLX_MAX_TOKENS", options.get("num_predict", 1024)))
+    result["chat_template_kwargs"] = {"enable_thinking": False}
     return result
 
 
