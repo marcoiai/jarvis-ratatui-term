@@ -12,6 +12,17 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 
+def upstream_error_detail(error):
+    """Preserve bounded MLX error details instead of hiding them behind HTTP 502."""
+    try:
+        raw = error.read(8192).decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+        detail = payload.get("error", raw) if isinstance(payload, dict) else raw
+    except (OSError, ValueError, TypeError):
+        detail = error.reason or "unknown upstream error"
+    return str(detail).replace("\\n", " ")[:1000]
+
+
 def messages_for_mlx(messages):
     output, pending = [], []
     call_index = 0
@@ -111,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
         except (KeyError, TypeError, ValueError) as e:
             self.send_json(400, {"error": str(e)})
         except HTTPError as e:
-            self.send_json(502, {"error": f"MLX returned HTTP {e.code}"})
+            self.send_json(502, {"error": f"MLX returned HTTP {e.code}: {upstream_error_detail(e)}"})
         except (URLError, TimeoutError, OSError) as e:
             self.send_json(502, {"error": f"MLX unavailable: {e}"})
 
