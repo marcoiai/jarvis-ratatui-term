@@ -12,11 +12,38 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 
+def upstream_error_detail(error):
+    """Preserve bounded MLX error details instead of hiding them behind HTTP 502."""
+    try:
+        raw = error.read(8192).decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+        detail = payload.get("error", raw) if isinstance(payload, dict) else raw
+    except (OSError, ValueError, TypeError):
+        detail = error.reason or "unknown upstream error"
+    return str(detail).replace("\\n", " ")[:1000]
+
+
 def messages_for_mlx(messages):
+    # Qwen3.5's MLX chat template requires a single system message at index 0.
+    # DUDE may inject additional system instructions after evidence bootstrap.
+    # Consolidate them without rearranging user, assistant, or tool turns.
+    system_parts = []
+    for entry in messages:
+        if entry.get("role") == "system":
+            content = entry.get("content")
+            if content:
+                if not isinstance(content, str):
+                    raise ValueError("system message content must be text")
+                system_parts.append(content)
+
     output, pending = [], []
+    if system_parts:
+        output.append({"role": "system", "content": "\n\n".join(system_parts)})
     call_index = 0
     for entry in messages:
         role = entry.get("role")
+        if role == "system":
+            continue
         if role == "assistant" and entry.get("tool_calls"):
             calls = []
             for call in entry["tool_calls"]:
@@ -50,6 +77,7 @@ def to_mlx(body):
     if "temperature" in options:
         result["temperature"] = options["temperature"]
     result["max_tokens"] = int(os.getenv("MLX_MAX_TOKENS", options.get("num_predict", 1024)))
+    result["chat_template_kwargs"] = {"enable_thinking": False}
     return result
 
 
@@ -110,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
         except (KeyError, TypeError, ValueError) as e:
             self.send_json(400, {"error": str(e)})
         except HTTPError as e:
-            self.send_json(502, {"error": f"MLX returned HTTP {e.code}"})
+            self.send_json(502, {"error": f"MLX returned HTTP {e.code}: {upstream_error_detail(e)}"})
         except (URLError, TimeoutError, OSError) as e:
             self.send_json(502, {"error": f"MLX unavailable: {e}"})
 
